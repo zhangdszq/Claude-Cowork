@@ -5,6 +5,9 @@ import { app } from "electron";
 export interface UserSettings {
   anthropicBaseUrl?: string;
   anthropicAuthToken?: string;
+  // Proxy settings
+  proxyEnabled?: boolean;
+  proxyUrl?: string;  // e.g., http://127.0.0.1:7890 or socks5://127.0.0.1:1080
 }
 
 const SETTINGS_FILE = join(app.getPath("userData"), "user-settings.json");

@@ -84,6 +84,16 @@ function getEnhancedEnv(): Record<string, string | undefined> {
     claudeEnv.ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL;
   }
 
+  // Proxy settings - apply to HTTP_PROXY, HTTPS_PROXY, ALL_PROXY
+  if (process.env.PROXY_URL) {
+    claudeEnv.HTTP_PROXY = process.env.PROXY_URL;
+    claudeEnv.HTTPS_PROXY = process.env.PROXY_URL;
+    claudeEnv.ALL_PROXY = process.env.PROXY_URL;
+    claudeEnv.http_proxy = process.env.PROXY_URL;
+    claudeEnv.https_proxy = process.env.PROXY_URL;
+    claudeEnv.all_proxy = process.env.PROXY_URL;
+  }
+
   return {
     ...process.env,
     ...claudeEnv,

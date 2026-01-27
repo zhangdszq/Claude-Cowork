@@ -5,7 +5,6 @@ import { spawn, type ChildProcess } from 'child_process';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { app } from 'electron';
-import { homedir } from 'os';
 
 let sidecarProcess: ChildProcess | null = null;
 let apiPort = 2620;
@@ -124,21 +123,26 @@ export async function startSidecar(): Promise<boolean> {
     }
   }
 
-  // Load user settings for API config
+  // Load user settings for API config and proxy
   try {
-    const settingsPath = join(homedir(), '.agent-cowork', 'settings.json');
-    if (existsSync(settingsPath)) {
-      const { readFileSync } = await import('fs');
-      const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
-      if (settings.apiToken) {
-        env.ANTHROPIC_API_KEY = settings.apiToken;
-      }
-      if (settings.baseUrl) {
-        env.ANTHROPIC_BASE_URL = settings.baseUrl;
-      }
-      if (settings.model) {
-        env.ANTHROPIC_MODEL = settings.model;
-      }
+    const { loadUserSettings } = await import('./user-settings.js');
+    const settings = loadUserSettings();
+    
+    if (settings.anthropicAuthToken) {
+      env.ANTHROPIC_API_KEY = settings.anthropicAuthToken;
+    }
+    if (settings.anthropicBaseUrl) {
+      env.ANTHROPIC_BASE_URL = settings.anthropicBaseUrl;
+    }
+    // Proxy settings
+    if (settings.proxyEnabled && settings.proxyUrl) {
+      env.PROXY_URL = settings.proxyUrl;
+      env.HTTP_PROXY = settings.proxyUrl;
+      env.HTTPS_PROXY = settings.proxyUrl;
+      env.ALL_PROXY = settings.proxyUrl;
+      env.http_proxy = settings.proxyUrl;
+      env.https_proxy = settings.proxyUrl;
+      env.all_proxy = settings.proxyUrl;
     }
   } catch (error) {
     console.error('Failed to load user settings:', error);
