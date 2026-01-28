@@ -16,7 +16,7 @@ import { SchedulerModal } from "./components/SchedulerModal";
 import MDContent from "./render/markdown";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 
-const ONBOARDING_COMPLETE_KEY = "agent-cowork-onboarding-complete";
+const ONBOARDING_COMPLETE_KEY = "vk-cowork-onboarding-complete";
 
 // 按 session 存储的 partialMessage 状态
 type SessionPartialState = {
@@ -364,7 +364,7 @@ function App() {
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
           <div className="w-24" /> {/* Spacer for balance */}
-          <span className="text-sm font-medium text-ink-700">{activeSession?.title || "Agent Cowork"}</span>
+          <span className="text-sm font-medium text-ink-700">{activeSession?.title || "VK Cowork"}</span>
           <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             <button
               onClick={() => setShowSystemInfo(!showSystemInfo)}

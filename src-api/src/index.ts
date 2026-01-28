@@ -27,7 +27,7 @@ app.route('/session', sessionRoutes);
 // Root endpoint
 app.get('/', (c) => {
   return c.json({
-    name: 'Agent Cowork API',
+    name: 'VK Cowork API',
     version: '0.0.2',
     endpoints: {
       health: '/health',
@@ -78,10 +78,10 @@ process.on('SIGINT', () => cleanup());
 
 // Initialize and start server
 async function start() {
-  console.log(`🚀 Agent Cowork API starting...`);
+  console.log(`🚀 VK Cowork API starting...`);
 
   // Initialize session store with data directory from env or default
-  const dataDir = process.env.DATA_DIR || process.env.HOME + '/.agent-cowork';
+  const dataDir = process.env.DATA_DIR || process.env.HOME + '/.vk-cowork';
   await initSessionStore(dataDir);
 
   console.log(`🚀 Server starting on http://localhost:${port}`);

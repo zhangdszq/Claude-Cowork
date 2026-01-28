@@ -1,10 +1,10 @@
 
 <div align="center">
 
-# Open Claude Cowork
+# VK Cowork
 
-[![Version](https://img.shields.io/badge/version-0.0.2-blue.svg)](https://github.com/DevAgentForge/Claude-Cowork/releases)
-[![Platform](https://img.shields.io/badge/platform-%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/DevAgentForge/Claude-Cowork/releases)
+[![Version](https://img.shields.io/badge/version-0.0.2-blue.svg)](https://github.com/DevAgentForge/VK-Cowork/releases)
+[![Platform](https://img.shields.io/badge/platform-%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/DevAgentForge/VK-Cowork/releases)
 
 [英文](README.md)
 
@@ -15,7 +15,7 @@
 [![MiniMax](assets/partners/minimax_banner.jpg)](https://platform.minimaxi.com/subscribe/coding-plan?code=6uFnRx7O0W&source=link)
 
 MiniMax-M2.1 是一款开源的 SOTA（当前最先进）模型，在编程能力、数字环境操作以及处理长流程、多步骤任务方面表现出色。
-通过 开源的 Claude Cowork 替代方案，M2.1 朝着我们“通用生产力 AI”的长期愿景迈出了坚实一步，让先进的 AI 能力真正触达每一个人。
+通过 VK Cowork，M2.1 朝着我们“通用生产力 AI”的长期愿景迈出了坚实一步，让先进的 AI 能力真正触达每一个人。
 
 [点击](https://platform.minimaxi.com/subscribe/coding-plan?code=6uFnRx7O0W&source=link)即可享受 MiniMax 编程计划专属 12% 折扣
 
@@ -37,7 +37,7 @@ MiniMax-M2.1 是一款开源的 SOTA（当前最先进）模型，在编程能�
 
 ---
 
-## ✨ 为什么选择 Claude Cowork？
+## ✨ 为什么选择 VK Cowork？
 
 Claude Code 很强大 — 但它**只能在终端中运行**。
 
@@ -46,7 +46,7 @@ Claude Code 很强大 — 但它**只能在终端中运行**。
 - ❌ 难以追踪多个会话
 - ❌ 查看工具输出很不方便
 
-**Agent Cowork 解决了这些问题：**
+**VK Cowork 解决了这些问题：**
 
 - 🖥️ 作为**原生桌面应用**运行
 - 🤖 成为你的 **AI 协作伙伴**，处理任何任务
@@ -54,7 +54,7 @@ Claude Code 很强大 — 但它**只能在终端中运行**。
 - 🧠 与 Claude Code **100% 兼容**
 
 如果 Claude Code 在你的机器上能用 —  
-**Agent Cowork 也能用。**
+**VK Cowork 也能用。**
 
 ---
 
@@ -65,7 +65,7 @@ Claude Code 很强大 — 但它**只能在终端中运行**。
 ### 方式一：下载安装包
 
 
-👉 [前往 Releases 下载](https://github.com/DevAgentForge/agent-cowork/releases)
+👉 [前往 Releases 下载](https://github.com/DevAgentForge/VK-Cowork/releases)
 
 ---
 
@@ -78,8 +78,8 @@ Claude Code 很强大 — 但它**只能在终端中运行**。
 
 ```bash
 # 克隆仓库
-git clone https://github.com/DevAgentForge/agent-cowork.git
-cd agent-cowork
+git clone https://github.com/DevAgentForge/VK-Cowork.git
+cd VK-Cowork
 
 # 安装依赖
 bun install
@@ -99,7 +99,7 @@ bun run dist:linux  # Linux
 
 ### 🤖 AI 协作伙伴 — 不只是 GUI
 
-Agent Cowork 是你的 AI 协作伙伴，可以：
+VK Cowork 是你的 AI 协作伙伴，可以：
 
 * **编写和编辑代码** — 支持任何编程语言
 * **管理文件** — 创建、移动、整理
@@ -138,7 +138,7 @@ Agent Cowork 是你的 AI 协作伙伴，可以：
 
 ## 🔁 与 Claude Code 完全兼容
 
-Agent Cowork **与 Claude Code 共享配置**。
+VK Cowork **与 Claude Code 共享配置**。
 
 直接复用：
 

@@ -1,10 +1,10 @@
 
 <div align="center">
 
-# Open Claude Cowork
+# VK Cowork
 
-[![Version](https://img.shields.io/badge/version-0.0.2-blue.svg)](https://github.com/DevAgentForge/Claude-Cowork/releases)
-[![Platform](https://img.shields.io/badge/platform-%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/DevAgentForge/Claude-Cowork/releases)
+[![Version](https://img.shields.io/badge/version-0.0.2-blue.svg)](https://github.com/DevAgentForge/VK-Cowork/releases)
+[![Platform](https://img.shields.io/badge/platform-%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/DevAgentForge/VK-Cowork/releases)
 
 [简体中文](README_ZH.md)
 
@@ -15,13 +15,13 @@
 [![MiniMax](assets/partners/minimax_banner.jpg)](https://platform.minimax.io/subscribe/coding-plan?code=5q2B2ljfdw&source=link)
 
 MiniMax-M2.1 is an open-source SOTA model that excels at coding, navigating digital environments, and handling long, multi-step tasks.
-With Open Source Claude Cowork, M2.1 takes a concrete step toward our long-term vision of general-purpose productivity, making advanced AI capabilities accessible to everyone. 
+With VK Cowork, M2.1 takes a concrete step toward our long-term vision of general-purpose productivity, making advanced AI capabilities accessible to everyone. 
 
 [Click ](https://platform.minimax.io/subscribe/coding-plan?code=5q2B2ljfdw&source=link) to get an exclusive 12% off the MiniMax Coding Plan
 
 ---
 
-# About Open Claude Cowork
+# About VK Cowork
 
 A **desktop AI assistant** that helps you with **programming, file management, and any task you can describe**.
 
@@ -39,7 +39,7 @@ https://github.com/user-attachments/assets/8ce58c8b-4024-4c01-82ee-f8d8ed6d4bba
 
 ---
 
-## ✨ Why Claude Cowork?
+## ✨ Why VK Cowork?
 
 Claude Code is powerful — but it **only runs in the terminal**.
 
@@ -48,7 +48,7 @@ That means:
 - ❌ Hard to track multiple sessions
 - ❌ Tool outputs are inconvenient to inspect
 
-**Agent Cowork solves these problems:**
+**VK Cowork solves these problems:**
 
 - 🖥️ Runs as a **native desktop application**
 - 🤖 Acts as your **AI collaboration partner** for any task
@@ -56,17 +56,17 @@ That means:
 - 🧠 **100% compatible** with Claude Code
 
 If Claude Code works on your machine —  
-**Agent Cowork works too.**
+**VK Cowork works too.**
 
 ---
 
 ## 🚀 Quick Start
 
-Before using Agent Cowork, make sure Claude Code is installed and properly configured.
+Before using VK Cowork, make sure Claude Code is installed and properly configured.
 
 ### Option 1: Download a Release
 
-👉 [Go to Releases](https://github.com/DevAgentForge/agent-cowork/releases)
+👉 [Go to Releases](https://github.com/DevAgentForge/VK-Cowork/releases)
 
 ---
 
@@ -79,8 +79,8 @@ Before using Agent Cowork, make sure Claude Code is installed and properly confi
 
 bash
 # Clone the repository
-git clone https://github.com/DevAgentForge/agent-cowork.git
-cd agent-cowork
+git clone https://github.com/DevAgentForge/VK-Cowork.git
+cd VK-Cowork
 
 # Install dependencies
 bun install
@@ -100,7 +100,7 @@ bun run dist:linux  # Linux
 
 ### 🤖 AI Collaboration Partner — Not Just a GUI
 
-Agent Cowork is your AI partner that can:
+VK Cowork is your AI partner that can:
 
 * **Write and edit code** — in any programming language
 * **Manage files** — create, move, and organize
@@ -139,7 +139,7 @@ Agent Cowork is your AI partner that can:
 
 ## 🔁 Fully Compatible with Claude Code
 
-Agent Cowork **shares configuration with Claude Code**.
+VK Cowork **shares configuration with Claude Code**.
 
 It directly reuses:
 

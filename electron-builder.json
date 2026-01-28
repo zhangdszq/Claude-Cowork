@@ -1,6 +1,6 @@
 {
     "appId": "com.vipkid.agentcowork",
-    "productName": "Agent Cowork",
+    "productName": "VK Cowork",
     "files": [
         "dist-electron",
         "dist-react"

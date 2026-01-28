@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Agent Cowork CLI Bundle Script
+# VK Cowork CLI Bundle Script
 # Bundles Claude Code CLI with Node.js runtime for isolated execution
 
 set -e
@@ -79,7 +79,7 @@ else
 fi
 
 # Cache directory
-CACHE_DIR="$HOME/.agent-cowork/cache"
+CACHE_DIR="$HOME/.vk-cowork/cache"
 CACHED_NODE="$CACHE_DIR/${NODE_FILENAME}/node${NODE_EXT}"
 mkdir -p "$CACHE_DIR"
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Agent Cowork Build Script
+# VK Cowork Build Script
 # Builds API sidecar, CLI bundle, and packages the app
 
 set -e
@@ -44,7 +44,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help|help)
-      echo "Agent Cowork Build Script"
+      echo "VK Cowork Build Script"
       echo ""
       echo "Usage: ./scripts/build.sh [platform] [options]"
       echo ""
@@ -66,7 +66,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-log_info "Building Agent Cowork for $BUILD_PLATFORM"
+log_info "Building VK Cowork for $BUILD_PLATFORM"
 
 # Determine target triple
 case "$BUILD_PLATFORM" in
