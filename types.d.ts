@@ -13,6 +13,35 @@ type StaticData = {
 type UserSettings = {
     anthropicBaseUrl?: string;
     anthropicAuthToken?: string;
+    proxyEnabled?: boolean;
+    proxyUrl?: string;
+}
+
+type ScheduledTask = {
+    id: string;
+    name: string;
+    enabled: boolean;
+    prompt: string;
+    cwd?: string;
+    skillPath?: string;
+    scheduleType: "once" | "interval";
+    scheduledTime?: string;
+    intervalValue?: number;
+    intervalUnit?: "minutes" | "hours" | "days" | "weeks";
+    lastRun?: string;
+    nextRun?: string;
+    createdAt: string;
+    updatedAt: string;
+}
+
+type ScheduledTaskInput = Omit<ScheduledTask, "id" | "createdAt" | "updatedAt">
+
+type SchedulerRunTaskPayload = {
+    taskId: string;
+    name: string;
+    prompt: string;
+    cwd?: string;
+    skillPath?: string;
 }
 
 type EnvironmentCheck = {
@@ -92,6 +121,11 @@ type EventPayloadMapping = {
     "delete-mcp-server": SaveMcpResult;
     "read-skill-content": string | null;
     "is-sidecar-running": boolean;
+    // Scheduler
+    "get-scheduled-tasks": ScheduledTask[];
+    "add-scheduled-task": ScheduledTask;
+    "update-scheduled-task": ScheduledTask | null;
+    "delete-scheduled-task": boolean;
 }
 
 interface Window {
@@ -124,5 +158,11 @@ interface Window {
         saveMcpServer: (server: McpServer) => Promise<SaveMcpResult>;
         deleteMcpServer: (name: string) => Promise<SaveMcpResult>;
         readSkillContent: (skillPath: string) => Promise<string | null>;
+        // Scheduler
+        getScheduledTasks: () => Promise<ScheduledTask[]>;
+        addScheduledTask: (task: ScheduledTaskInput) => Promise<ScheduledTask>;
+        updateScheduledTask: (id: string, updates: Partial<ScheduledTask>) => Promise<ScheduledTask | null>;
+        deleteScheduledTask: (id: string) => Promise<boolean>;
+        onSchedulerRunTask: (callback: (task: SchedulerRunTaskPayload) => void) => UnsubscribeFunction;
     }
 }

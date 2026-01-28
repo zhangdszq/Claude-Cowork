@@ -223,13 +223,40 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
     sendEvent({ type: "session.stop", payload: { sessionId: activeSessionId } });
   }, [activeSessionId, sendEvent]);
 
-  const handleStartFromModal = useCallback(() => {
-    if (!cwd.trim()) {
+  // handleStartFromModal can be called with optional params (for scheduled tasks)
+  const handleStartFromModal = useCallback((params?: { prompt?: string; cwd?: string; title?: string }) => {
+    const effectiveCwd = params?.cwd || cwd.trim();
+    const effectivePrompt = params?.prompt || prompt.trim();
+    const effectiveTitle = params?.title;
+    
+    if (!effectiveCwd) {
       setGlobalError("Working Directory is required to start a session.");
       return;
     }
+    
+    if (!effectivePrompt) {
+      setGlobalError("Prompt is required to start a session.");
+      return;
+    }
+    
+    // If params provided, directly start session (for scheduled tasks)
+    if (params?.prompt) {
+      setPendingStart(true);
+      sendEvent({
+        type: "session.start",
+        payload: { 
+          title: effectiveTitle || "定时任务", 
+          prompt: effectivePrompt, 
+          cwd: effectiveCwd, 
+          allowedTools: DEFAULT_ALLOWED_TOOLS 
+        }
+      });
+      return;
+    }
+    
+    // Otherwise use normal flow
     handleSend();
-  }, [cwd, handleSend, setGlobalError]);
+  }, [cwd, prompt, handleSend, sendEvent, setGlobalError, setPendingStart]);
 
   return { 
     prompt, 

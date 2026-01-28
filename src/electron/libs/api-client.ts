@@ -78,6 +78,18 @@ export async function deleteSessionApi(sessionId: string): Promise<boolean> {
 
 export type StreamCallback = (event: ServerEvent) => void;
 
+// Track active streams for cancellation
+const activeStreams = new Map<string, AbortController>();
+
+export function cancelStream(sessionId: string): void {
+  const controller = activeStreams.get(sessionId);
+  if (controller) {
+    console.log('[API Client] Cancelling stream for session:', sessionId);
+    controller.abort();
+    activeStreams.delete(sessionId);
+  }
+}
+
 export async function startSession(
   options: {
     cwd?: string;
@@ -91,22 +103,35 @@ export async function startSession(
   await ensureSidecar();
 
   const url = `${getApiBaseUrl()}/agent/start`;
+  const abortController = new AbortController();
   
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(options),
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || 'Failed to start session');
+  // Track this stream if we have an external ID
+  if (options.externalSessionId) {
+    activeStreams.set(options.externalSessionId, abortController);
   }
+  
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(options),
+      signal: abortController.signal,
+    });
 
-  // Handle SSE stream
-  await handleSSEStream(response, onEvent);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to start session');
+    }
+
+    // Handle SSE stream
+    await handleSSEStream(response, onEvent, abortController.signal);
+  } finally {
+    if (options.externalSessionId) {
+      activeStreams.delete(options.externalSessionId);
+    }
+  }
 }
 
 export async function continueSession(
@@ -118,31 +143,48 @@ export async function continueSession(
   await ensureSidecar();
 
   const url = `${getApiBaseUrl()}/agent/continue`;
+  const abortController = new AbortController();
   
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      sessionId: claudeSessionId,  // This is the claudeSessionId for resuming
-      prompt,
-      cwd: options?.cwd,
-      title: options?.title,
-      externalSessionId: options?.externalSessionId,
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || 'Failed to continue session');
+  // Track this stream if we have an external ID
+  if (options?.externalSessionId) {
+    activeStreams.set(options.externalSessionId, abortController);
   }
+  
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        sessionId: claudeSessionId,  // This is the claudeSessionId for resuming
+        prompt,
+        cwd: options?.cwd,
+        title: options?.title,
+        externalSessionId: options?.externalSessionId,
+      }),
+      signal: abortController.signal,
+    });
 
-  // Handle SSE stream
-  await handleSSEStream(response, onEvent);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to continue session');
+    }
+
+    // Handle SSE stream
+    await handleSSEStream(response, onEvent, abortController.signal);
+  } finally {
+    if (options?.externalSessionId) {
+      activeStreams.delete(options.externalSessionId);
+    }
+  }
 }
 
 export async function stopSession(sessionId: string): Promise<void> {
+  // First cancel the local SSE stream
+  cancelStream(sessionId);
+  
+  // Then tell sidecar to stop
   await apiFetch('/agent/stop', {
     method: 'POST',
     body: JSON.stringify({ sessionId }),
@@ -163,7 +205,8 @@ export async function sendPermissionResponse(
 // SSE stream handler
 async function handleSSEStream(
   response: Response,
-  onEvent: StreamCallback
+  onEvent: StreamCallback,
+  signal?: AbortSignal
 ): Promise<void> {
   const reader = response.body?.getReader();
   if (!reader) {
@@ -176,8 +219,21 @@ async function handleSSEStream(
 
   console.log('[API Client] Starting SSE stream processing');
 
+  // Handle abort signal
+  const abortHandler = () => {
+    console.log('[API Client] Stream aborted, cancelling reader');
+    reader.cancel().catch(() => {});
+  };
+  signal?.addEventListener('abort', abortHandler);
+
   try {
     while (true) {
+      // Check if aborted
+      if (signal?.aborted) {
+        console.log('[API Client] Stream aborted, breaking loop');
+        break;
+      }
+
       const { done, value } = await reader.read();
       
       if (done) {
@@ -207,10 +263,20 @@ async function handleSSEStream(
       }
     }
   } catch (error) {
+    // Ignore abort errors
+    if ((error as Error).name === 'AbortError') {
+      console.log('[API Client] Stream aborted');
+      return;
+    }
     console.error('[API Client] SSE stream error:', error);
     throw error;
   } finally {
+    signal?.removeEventListener('abort', abortHandler);
     console.log('[API Client] Releasing reader lock');
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {
+      // Reader may already be released
+    }
   }
 }

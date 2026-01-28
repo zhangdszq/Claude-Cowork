@@ -12,6 +12,7 @@ import { McpSkillModal } from "./components/McpSkillModal";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { DecisionPanel } from "./components/DecisionPanel";
 import { ChapterSelector, parseChapters, isChapterSelectionText } from "./components/ChapterSelector";
+import { SchedulerModal } from "./components/SchedulerModal";
 import MDContent from "./render/markdown";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 
@@ -81,8 +82,27 @@ function App() {
     });
   }, []);
 
+  // Clear partial message for a session
+  const clearPartialMessage = useCallback((sessionId: string) => {
+    partialMessagesRef.current.delete(sessionId);
+    setPartialMessages(prev => {
+      const next = new Map(prev);
+      next.delete(sessionId);
+      return next;
+    });
+  }, []);
+
   // Handle partial messages from stream events - 按 session 隔离
   const handlePartialMessages = useCallback((partialEvent: ServerEvent) => {
+    // Clear partial message when session stops (status changes to non-running)
+    if (partialEvent.type === "session.status") {
+      const { sessionId, status } = partialEvent.payload;
+      if (status !== "running") {
+        clearPartialMessage(sessionId);
+      }
+      return;
+    }
+
     if (partialEvent.type !== "stream.message" || partialEvent.payload.message.type !== "stream_event") return;
 
     const sessionId = partialEvent.payload.sessionId;
@@ -107,15 +127,10 @@ function App() {
       updatePartialMessage(sessionId, finalContent, false);
       // 延迟清理
       setTimeout(() => {
-        partialMessagesRef.current.delete(sessionId);
-        setPartialMessages(prev => {
-          const next = new Map(prev);
-          next.delete(sessionId);
-          return next;
-        });
+        clearPartialMessage(sessionId);
       }, 500);
     }
-  }, [updatePartialMessage]);
+  }, [updatePartialMessage, clearPartialMessage]);
 
   // Combined event handler
   const onEvent = useCallback((event: ServerEvent) => {
@@ -126,16 +141,38 @@ function App() {
   const { connected, sendEvent } = useIPC(onEvent);
   const { handleStartFromModal } = usePromptActions(sendEvent);
 
+  // Listen for scheduler task execution events
+  useEffect(() => {
+    const unsubscribe = window.electron.onSchedulerRunTask((task) => {
+      console.log("[Scheduler] Running task:", task);
+      // Start a new session with the scheduled task
+      // Use task.cwd, or current cwd state, or fallback to a default
+      const effectiveCwd = task.cwd || cwd || "/Users";
+      handleStartFromModal({
+        prompt: task.prompt,
+        cwd: effectiveCwd,
+        title: `定时任务: ${task.name}`,
+      });
+    });
+    return unsubscribe;
+  }, [handleStartFromModal, cwd]);
+
   const activeSession = activeSessionId ? sessions[activeSessionId] : undefined;
   const messages = activeSession?.messages ?? [];
   const permissionRequests = activeSession?.permissionRequests ?? [];
   const isRunning = activeSession?.status === "running";
 
   // Check if the last assistant message contains chapter selection prompt
+  // Only show if user hasn't replied yet
   const chapterSelectionInfo = useMemo(() => {
     if (isRunning) return null; // Don't show while running
+    if (messages.length === 0) return null;
     
-    // Find last assistant message with text content
+    // Find the last assistant message with chapter selection
+    let chapterMsgIndex = -1;
+    let chapterText = '';
+    let chapters: Array<{ id: string; number: string; time: string; title: string }> = [];
+    
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg && 'type' in msg && msg.type === 'assistant') {
@@ -145,21 +182,33 @@ function App() {
         );
         if (textContent && 'text' in textContent) {
           const text = textContent.text as string;
-          // Debug: log the last assistant message text
-          console.log('[ChapterSelector] Checking assistant message:', text.substring(0, 500));
-          console.log('[ChapterSelector] isChapterSelectionText:', isChapterSelectionText(text));
           
           if (isChapterSelectionText(text)) {
-            const chapters = parseChapters(text);
-            console.log('[ChapterSelector] Parsed chapters:', chapters);
-            if (chapters.length > 0) {
-              return { text, chapters };
+            const parsedChapters = parseChapters(text);
+            if (parsedChapters.length > 0) {
+              chapterMsgIndex = i;
+              chapterText = text;
+              chapters = parsedChapters;
+              break;
             }
           }
         }
       }
     }
-    return null;
+    
+    // If no chapter selection message found, return null
+    if (chapterMsgIndex === -1) return null;
+    
+    // Check if there's a user reply after the chapter selection message
+    for (let i = chapterMsgIndex + 1; i < messages.length; i++) {
+      const msg = messages[i];
+      if (msg && 'type' in msg && msg.type === 'user_prompt') {
+        // User has already replied, don't show selector
+        return null;
+      }
+    }
+    
+    return { text: chapterText, chapters };
   }, [messages, isRunning]);
 
   // Handle chapter selection
@@ -273,6 +322,9 @@ function App() {
   const [mcpSkillModalOpen, setMcpSkillModalOpen] = useState(false);
   const [mcpSkillInitialTab, setMcpSkillInitialTab] = useState<"mcp" | "skill">("mcp");
 
+  // Scheduler modal state
+  const [schedulerModalOpen, setSchedulerModalOpen] = useState(false);
+
   const handleOpenMcp = useCallback(() => {
     setMcpSkillInitialTab("mcp");
     setMcpSkillModalOpen(true);
@@ -281,6 +333,10 @@ function App() {
   const handleOpenSkill = useCallback(() => {
     setMcpSkillInitialTab("skill");
     setMcpSkillModalOpen(true);
+  }, []);
+
+  const handleOpenScheduler = useCallback(() => {
+    setSchedulerModalOpen(true);
   }, []);
 
   const handlePermissionResult = useCallback((toolUseId: string, result: PermissionResult) => {
@@ -346,6 +402,17 @@ function App() {
               </svg>
               SKILL
             </button>
+            <button
+              onClick={handleOpenScheduler}
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
+              title="定时任务"
+            >
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 6v6l4 2" />
+              </svg>
+              定时
+            </button>
           </div>
         </div>
 
@@ -376,7 +443,31 @@ function App() {
               })
             )}
 
-            {/* Partial message display with skeleton loading - only show when streaming is active */}
+            {/* Loading skeleton - show when running but no response yet */}
+            {isRunning && !showPartialMessage && (
+              <div className="mt-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
+                  </div>
+                  <span className="text-xs text-muted">思考中...</span>
+                </div>
+                <div className="flex flex-col gap-2 px-1">
+                  <div className="relative h-3 w-2/12 overflow-hidden rounded-full bg-ink-900/10">
+                    <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-ink-900/30 to-transparent animate-shimmer" />
+                  </div>
+                  <div className="relative h-3 w-full overflow-hidden rounded-full bg-ink-900/10">
+                    <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-ink-900/30 to-transparent animate-shimmer" />
+                  </div>
+                  <div className="relative h-3 w-3/4 overflow-hidden rounded-full bg-ink-900/10">
+                    <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-ink-900/30 to-transparent animate-shimmer" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Partial message display with skeleton loading - show when streaming is active */}
             {showPartialMessage && (
               <div className="partial-message">
                 <MDContent text={partialMessage} />
@@ -457,6 +548,11 @@ function App() {
         open={mcpSkillModalOpen}
         onOpenChange={setMcpSkillModalOpen}
         initialTab={mcpSkillInitialTab}
+      />
+
+      <SchedulerModal
+        open={schedulerModalOpen}
+        onOpenChange={setSchedulerModalOpen}
       />
     </div>
   );

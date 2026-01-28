@@ -9,6 +9,16 @@ import { loadUserSettings, saveUserSettings, type UserSettings } from "./libs/us
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { runEnvironmentChecks, validateApiConfig } from "./libs/env-check.js";
 import { startSidecar, stopSidecar, isSidecarAvailable, isSidecarRunning } from "./libs/sidecar.js";
+import { 
+  loadScheduledTasks, 
+  addScheduledTask, 
+  updateScheduledTask, 
+  deleteScheduledTask,
+  startScheduler,
+  stopScheduler,
+  setSchedulerWindow,
+  type ScheduledTask
+} from "./libs/scheduler.js";
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
@@ -44,6 +54,10 @@ app.on("ready", async () => {
     else mainWindow.loadFile(getUIPath());
 
     pollResources(mainWindow);
+
+    // Initialize scheduler
+    setSchedulerWindow(mainWindow);
+    startScheduler();
 
     ipcMainHandle("getStaticData", () => {
         return getStaticData();
@@ -90,6 +104,23 @@ app.on("ready", async () => {
         saveUserSettings(settings);
         reloadClaudeSettings();
         return true;
+    });
+
+    // Scheduler handlers
+    ipcMainHandle("get-scheduled-tasks", () => {
+        return loadScheduledTasks();
+    });
+
+    ipcMainHandle("add-scheduled-task", (_: any, task: Omit<ScheduledTask, "id" | "createdAt" | "updatedAt">) => {
+        return addScheduledTask(task);
+    });
+
+    ipcMainHandle("update-scheduled-task", (_: any, id: string, updates: Partial<ScheduledTask>) => {
+        return updateScheduledTask(id, updates);
+    });
+
+    ipcMainHandle("delete-scheduled-task", (_: any, id: string) => {
+        return deleteScheduledTask(id);
     });
 
     // Handle environment checks

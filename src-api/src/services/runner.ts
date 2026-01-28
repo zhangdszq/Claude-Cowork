@@ -113,7 +113,8 @@ export function stopSession(sessionId: string): boolean {
   if (controller) {
     console.log('[Runner] Found controller, aborting...');
     controller.abort();
-    activeControllers.delete(sessionId);
+    // Don't delete here - let runClaude's finally block handle cleanup
+    // This ensures proper cleanup order
     return true;
   }
   
@@ -196,12 +197,24 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
 
     // Process messages
     for await (const message of q) {
+      // Check if aborted before processing each message
+      if (abortController.signal.aborted) {
+        console.log('[Runner] Abort detected, stopping message processing');
+        break;
+      }
+
       console.log('[Runner] Received message:', message.type, 'subtype' in message ? (message as any).subtype : '');
       
       // Yield any queued permission requests first
       while (permissionRequestQueue.length > 0) {
         const permReq = permissionRequestQueue.shift();
         if (permReq) yield permReq;
+      }
+
+      // Check abort again after yielding permission requests
+      if (abortController.signal.aborted) {
+        console.log('[Runner] Abort detected after permission queue, stopping');
+        break;
       }
 
       // Extract session_id from system init message
@@ -213,6 +226,12 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
         }
       }
 
+      // Check abort before yielding message
+      if (abortController.signal.aborted) {
+        console.log('[Runner] Abort detected before yielding message, stopping');
+        break;
+      }
+
       // Record message
       recordMessage(session.id, message);
 
@@ -221,6 +240,12 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
         type: 'stream.message',
         payload: { sessionId: session.id, message },
       };
+
+      // Check abort after yielding
+      if (abortController.signal.aborted) {
+        console.log('[Runner] Abort detected after yielding message, stopping');
+        break;
+      }
 
       // Check for result to update session status
       if (message.type === 'result') {
@@ -231,6 +256,17 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
           payload: { sessionId: session.id, status, title: session.title },
         };
       }
+    }
+
+    // Check if aborted before marking as completed
+    if (abortController.signal.aborted) {
+      console.log('[Runner] Session aborted during processing');
+      updateSession(session.id, { status: 'idle' });
+      yield {
+        type: 'session.status',
+        payload: { sessionId: session.id, status: 'idle', title: session.title },
+      };
+      return;
     }
 
     // Query completed normally
@@ -244,9 +280,18 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
   } catch (error) {
     console.error('[Runner] Error:', error);
     
-    if ((error as Error).name === 'AbortError') {
-      // Session was aborted, don't treat as error
+    if ((error as Error).name === 'AbortError' || abortController.signal.aborted) {
+      // Session was aborted, send idle status
       console.log('[Runner] Session aborted');
+      updateSession(session.id, { status: 'idle' });
+      yield {
+        type: 'session.status',
+        payload: {
+          sessionId: session.id,
+          status: 'idle',
+          title: session.title,
+        },
+      };
       return;
     }
     
@@ -262,6 +307,11 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
     };
   } finally {
     console.log('[Runner] Finished, cleaning up:', trackingId);
+  
+    // If aborted, ensure status is set to idle
+    if (abortController.signal.aborted) {
+      updateSession(session.id, { status: 'idle' });
+    }
   
     // Clean up controller
     activeControllers.delete(trackingId);

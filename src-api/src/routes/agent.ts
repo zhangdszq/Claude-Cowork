@@ -216,11 +216,15 @@ agent.post('/stop', async (c) => {
     return c.json({ error: 'Session not found' }, 404);
   }
 
-  stopSession(session.id);
+  // Use externalId for stopping if available (matches controller tracking key)
+  const trackingId = session.externalId || session.id;
+  const stopped = stopSession(trackingId);
+  console.log('[Agent] Stop request for session:', session.id, 'trackingId:', trackingId, 'stopped:', stopped);
+  
   updateSession(session.id, { status: 'idle' });
 
   return c.json({
-    stopped: true,
+    stopped,
     sessionId: session.id,
     status: 'idle',
   });

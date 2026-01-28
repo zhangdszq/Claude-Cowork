@@ -68,7 +68,21 @@ electron.contextBridge.exposeInMainWorld("electron", {
     deleteMcpServer: (name: string) => 
         ipcInvoke("delete-mcp-server", name),
     readSkillContent: (skillPath: string) => 
-        ipcInvoke("read-skill-content", skillPath)
+        ipcInvoke("read-skill-content", skillPath),
+    // Scheduler
+    getScheduledTasks: () => 
+        ipcInvoke("get-scheduled-tasks"),
+    addScheduledTask: (task: any) => 
+        ipcInvoke("add-scheduled-task", task),
+    updateScheduledTask: (id: string, updates: any) => 
+        ipcInvoke("update-scheduled-task", id, updates),
+    deleteScheduledTask: (id: string) => 
+        ipcInvoke("delete-scheduled-task", id),
+    onSchedulerRunTask: (callback: (task: any) => void) => {
+        const cb = (_: Electron.IpcRendererEvent, task: any) => callback(task);
+        electron.ipcRenderer.on("scheduler:run-task", cb);
+        return () => electron.ipcRenderer.off("scheduler:run-task", cb);
+    }
 } satisfies Window['electron'])
 
 function ipcInvoke<Key extends keyof EventPayloadMapping>(key: Key, ...args: any[]): Promise<EventPayloadMapping[Key]> {
