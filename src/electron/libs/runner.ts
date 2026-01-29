@@ -9,6 +9,7 @@ import { claudeCodeEnv } from "./claude-settings.js";
 import { app } from "electron";
 import { join } from "path";
 import { homedir } from "os";
+import { existsSync } from "fs";
 
 export type RunnerOptions = {
   prompt: string;
@@ -27,9 +28,10 @@ const DEFAULT_CWD = process.cwd();
 // Get Claude Code CLI path for packaged app
 function getClaudeCodePath(): string | undefined {
   if (app.isPackaged) {
-    // Check for bundled CLI first
-    const bundledCliPath = join(process.resourcesPath, 'cli-bundle', 'claude');
-    const { existsSync } = require('fs');
+    // Check for bundled CLI first (Windows uses .cmd, others use no extension)
+    const isWindows = process.platform === 'win32';
+    const cliName = isWindows ? 'claude.cmd' : 'claude';
+    const bundledCliPath = join(process.resourcesPath, 'cli-bundle', cliName);
     if (existsSync(bundledCliPath)) {
       return bundledCliPath;
     }
@@ -45,7 +47,14 @@ function getClaudeCodePath(): string | undefined {
 // Build enhanced PATH for packaged environment
 function getEnhancedEnv(): Record<string, string | undefined> {
   const home = homedir();
-  const additionalPaths = [
+  const isWindows = process.platform === 'win32';
+  const pathSeparator = isWindows ? ';' : ':';
+  
+  const additionalPaths = isWindows ? [
+    `${home}\\.bun\\bin`,
+    `${home}\\AppData\\Roaming\\npm`,
+    `${home}\\.volta\\bin`,
+  ] : [
     '/usr/local/bin',
     '/opt/homebrew/bin',
     `${home}/.bun/bin`,
@@ -59,7 +68,7 @@ function getEnhancedEnv(): Record<string, string | undefined> {
   ];
 
   const currentPath = process.env.PATH || '';
-  const newPath = [...additionalPaths, currentPath].join(':');
+  const newPath = [...additionalPaths, currentPath].join(pathSeparator);
 
   return {
     ...process.env,

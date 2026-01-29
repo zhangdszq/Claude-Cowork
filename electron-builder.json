@@ -9,6 +9,7 @@
         "dist-electron/preload.cjs"
     ],
     "asarUnpack": [],
+    "afterPack": "./scripts/afterPack.cjs",
     "icon": "./claude-color.png",
     "mac": {
         "target": "dmg",
@@ -44,8 +45,14 @@
     },
     "win": {
         "target": [
+            "nsis",
             "portable"
         ],
+        "icon": "./claude-color.png",
+        "signtoolOptions": {
+            "signingHashAlgorithms": ["sha256"],
+            "sign": "./scripts/sign-windows.cjs"
+        },
         "extraResources": [
             {
                 "from": "src-api/dist/agent-api-x86_64-pc-windows-msvc.exe",
@@ -53,8 +60,17 @@
             },
             {
                 "from": "cli-bundle",
-                "to": "cli-bundle"
+                "to": "cli-bundle",
+                "filter": ["**/*", "!.git"]
             }
         ]
+    },
+    "nsis": {
+        "oneClick": false,
+        "perMachine": false,
+        "allowToChangeInstallationDirectory": true,
+        "deleteAppDataOnUninstall": false,
+        "createDesktopShortcut": true,
+        "createStartMenuShortcut": true
     }
 }

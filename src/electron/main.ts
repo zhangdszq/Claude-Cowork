@@ -25,16 +25,27 @@ import { homedir } from "os";
 
 app.on("ready", async () => {
     // Start the API sidecar if available
-    if (isSidecarAvailable()) {
-        console.log("Starting API sidecar...");
-        const started = await startSidecar();
-        if (started) {
-            console.log("API sidecar started successfully");
-        } else {
-            console.warn("Failed to start API sidecar, running in fallback mode");
+    console.log("[Main] App ready, checking sidecar...");
+    console.log("[Main] app.isPackaged:", app.isPackaged);
+    console.log("[Main] process.resourcesPath:", process.resourcesPath);
+    
+    const sidecarAvailable = isSidecarAvailable();
+    console.log("[Main] isSidecarAvailable:", sidecarAvailable);
+    
+    if (sidecarAvailable) {
+        console.log("[Main] Starting API sidecar...");
+        try {
+            const started = await startSidecar();
+            if (started) {
+                console.log("[Main] API sidecar started successfully");
+            } else {
+                console.warn("[Main] Failed to start API sidecar, running in fallback mode");
+            }
+        } catch (error) {
+            console.error("[Main] Error starting sidecar:", error);
         }
     } else {
-        console.log("API sidecar not found, running in fallback mode");
+        console.log("[Main] API sidecar not found, running in fallback mode");
     }
     const mainWindow = new BrowserWindow({
         width: 1200,

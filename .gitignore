@@ -35,3 +35,4 @@ src-api/target/
 *.sw?
 
 .env
+win-nsis/

@@ -6,6 +6,7 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "pkill -f vite 2>/dev/null; pkill -f electron 2>/dev/null; sleep 1; bun run dev:react & bun run dev:electron",
+    "dev-win": "pkill -f vite 2>/dev/null; pkill -f electron 2>/dev/null; sleep 1; concurrently \"bun run dev:react\" \"bun run dev:electron\"",
     "dev:react": "vite",
     "dev:electron": "bun run transpile:electron && cross-env NODE_ENV=development electron .",
     "dev:api": "cd src-api && npm run dev",
@@ -19,13 +20,13 @@
     "build:cli:mac-arm": "./scripts/bundle-cli.sh mac-arm",
     "build:cli:mac-intel": "./scripts/bundle-cli.sh mac-intel",
     "build:cli:linux": "./scripts/bundle-cli.sh linux",
-    "build:cli:windows": "./scripts/bundle-cli.sh windows",
+    "build:cli:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/bundle-cli.ps1 windows",
     "lint": "eslint .",
     "preview": "vite preview",
     "transpile:electron": "tsc --project src/electron/tsconfig.json",
     "dist:mac": "bun run build:api:mac-arm && bun run build:cli:mac-arm && bun run transpile:electron && bun run build && electron-builder --mac --arm64",
     "dist:mac:quick": "bun run transpile:electron && bun run build && electron-builder --mac --arm64",
-    "dist:win": "bun run build:api:windows && bun run build:cli:windows && bun run transpile:electron && bun run build && electron-builder --win --x64",
+    "dist:win": "bun run build:api:windows && bun run build:cli:windows && bun run transpile:electron && bun run build && electron-builder --win --x64 && powershell -ExecutionPolicy Bypass -File ./scripts/post-pack-win.ps1",
     "dist:linux": "bun run build:api:linux && bun run build:cli:linux && bun run transpile:electron && bun run build && electron-builder --linux --x64"
   },
   "dependencies": {
@@ -56,6 +57,7 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",
+    "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
     "electron": "^39.2.7",
     "electron-builder": "^26.4.0",

@@ -35,11 +35,17 @@ function getClaudeCodePath(): string | undefined {
     return bundledPath;
   }
 
+  const isWindows = process.platform === 'win32';
+  
   // Check for system-installed Claude Code
-  const systemPaths = [
+  const systemPaths = isWindows ? [
+    join(homedir(), 'AppData\\Roaming\\npm\\claude.cmd'),
+    join(homedir(), '.bun\\bin\\claude.cmd'),
+  ] : [
     '/usr/local/bin/claude',
     '/opt/homebrew/bin/claude',
     join(homedir(), '.npm-global/bin/claude'),
+    join(homedir(), '.bun/bin/claude'),
   ];
 
   for (const p of systemPaths) {
@@ -54,7 +60,20 @@ function getClaudeCodePath(): string | undefined {
 // Build enhanced environment
 function getEnhancedEnv(): Record<string, string | undefined> {
   const home = homedir();
-  const additionalPaths = [
+  const isWindows = process.platform === 'win32';
+  const pathSeparator = isWindows ? ';' : ':';
+  
+  // Get cli-bundle directory from CLAUDE_CLI_PATH
+  const cliPath = process.env.CLAUDE_CLI_PATH;
+  const cliBundleDir = cliPath ? join(cliPath, '..') : '';
+  
+  const additionalPaths = isWindows ? [
+    cliBundleDir, // Add cli-bundle dir first so its node.exe is found
+    `${home}\\.bun\\bin`,
+    `${home}\\AppData\\Roaming\\npm`,
+    `${home}\\.volta\\bin`,
+  ].filter(Boolean) : [
+    cliBundleDir, // Add cli-bundle dir first so its node is found
     '/usr/local/bin',
     '/opt/homebrew/bin',
     `${home}/.bun/bin`,
@@ -65,10 +84,10 @@ function getEnhancedEnv(): Record<string, string | undefined> {
     `${home}/.fnm/aliases/default/bin`,
     '/usr/bin',
     '/bin',
-  ];
+  ].filter(Boolean);
 
   const currentPath = process.env.PATH || '';
-  const newPath = [...additionalPaths, currentPath].join(':');
+  const newPath = [...additionalPaths, currentPath].join(pathSeparator);
 
   // Load Claude-specific env vars
   const claudeEnv: Record<string, string | undefined> = {};

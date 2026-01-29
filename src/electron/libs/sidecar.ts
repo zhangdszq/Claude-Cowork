@@ -70,13 +70,22 @@ function getCliBundlePath(): string {
 
 // Check if sidecar is available
 export function isSidecarAvailable(): boolean {
+  console.log('[Sidecar] Checking availability...');
+  console.log('[Sidecar] isDev:', isDev());
+  console.log('[Sidecar] shouldRunFromSource:', shouldRunFromSource());
+  
   // In dev mode, check for bundle.cjs
   if (shouldRunFromSource()) {
-    return existsSync(getBundlePath());
+    const bundlePath = getBundlePath();
+    const exists = existsSync(bundlePath);
+    console.log('[Sidecar] Bundle path:', bundlePath, 'exists:', exists);
+    return exists;
   }
   // Otherwise check for binary
   const sidecarPath = getSidecarPath();
-  return existsSync(sidecarPath);
+  const exists = existsSync(sidecarPath);
+  console.log('[Sidecar] Binary path:', sidecarPath, 'exists:', exists);
+  return exists;
 }
 
 // Start the sidecar process
@@ -117,9 +126,13 @@ export async function startSidecar(): Promise<boolean> {
   // Add CLI bundle path if available
   const cliBundlePath = getCliBundlePath();
   if (existsSync(cliBundlePath)) {
-    const cliPath = join(cliBundlePath, process.platform === 'win32' ? 'claude.cmd' : 'claude');
+    // Use .mjs file so SDK will use node to execute it (works on all platforms)
+    const cliPath = join(cliBundlePath, 'claude.mjs');
     if (existsSync(cliPath)) {
       env.CLAUDE_CLI_PATH = cliPath;
+      // Add cli-bundle to PATH so node.exe can be found
+      const pathSeparator = process.platform === 'win32' ? ';' : ':';
+      env.PATH = cliBundlePath + pathSeparator + (env.PATH || '');
     }
   }
 

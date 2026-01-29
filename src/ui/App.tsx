@@ -171,7 +171,7 @@ function App() {
     // Find the last assistant message with chapter selection
     let chapterMsgIndex = -1;
     let chapterText = '';
-    let chapters: Array<{ id: string; number: string; time: string; title: string }> = [];
+    let chapters: Array<{ id: string; time: string; title: string }> = [];
     
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
