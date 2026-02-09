@@ -6,7 +6,8 @@ import {
   recordMessage,
   resolvePendingPermission,
 } from '../services/session.js';
-import { runClaude, stopSession, type ServerEvent } from '../services/runner.js';
+import { runClaude, runCodex, stopSession, type ServerEvent } from '../services/runner.js';
+import type { AgentProvider } from '../types.js';
 
 const agent = new Hono();
 
@@ -56,6 +57,8 @@ agent.post('/start', async (c) => {
     allowedTools?: string;
     prompt: string;
     externalSessionId?: string;
+    provider?: AgentProvider;
+    model?: string;
   }>();
 
   if (!body.prompt) {
@@ -66,6 +69,8 @@ agent.post('/start', async (c) => {
     return c.json({ error: 'title is required' }, 400);
   }
 
+  const provider: AgentProvider = body.provider ?? 'claude';
+
   // Create session with external ID if provided
   const session = createSession({
     cwd: body.cwd,
@@ -74,6 +79,8 @@ agent.post('/start', async (c) => {
     prompt: body.prompt,
     externalId: body.externalSessionId,
   });
+  session.provider = provider;
+  session.model = body.model;
 
   // Update session status
   updateSession(session.id, {
@@ -109,14 +116,21 @@ agent.post('/start', async (c) => {
       prompt: body.prompt,
     });
 
-    // Run Claude and yield events
-    yield* runClaude({
+    // Dispatch to correct runner based on provider
+    const runnerOpts = {
       prompt: body.prompt,
       session,
-      onSessionUpdate: (updates) => {
+      model: body.model,
+      onSessionUpdate: (updates: Partial<typeof session>) => {
         updateSession(session.id, updates);
       },
-    });
+    };
+
+    if (provider === 'codex') {
+      yield* runCodex(runnerOpts);
+    } else {
+      yield* runClaude(runnerOpts);
+    }
   }
 
   const readable = createSSEStream(session.id, eventGenerator());
@@ -131,6 +145,8 @@ agent.post('/continue', async (c) => {
     cwd?: string;
     title?: string;
     externalSessionId?: string;
+    provider?: AgentProvider;
+    model?: string;
   }>();
 
   if (!body.sessionId) {
@@ -141,6 +157,8 @@ agent.post('/continue', async (c) => {
     return c.json({ error: 'prompt is required' }, 400);
   }
 
+  const continueProvider: AgentProvider = body.provider ?? 'claude';
+
   // Create a temporary session for this query with external ID
   const tempSession = createSession({
     cwd: body.cwd,
@@ -148,6 +166,8 @@ agent.post('/continue', async (c) => {
     prompt: body.prompt,
     externalId: body.externalSessionId,
   });
+  tempSession.provider = continueProvider;
+  tempSession.model = body.model;
 
   // Set the claudeSessionId for resuming
   tempSession.claudeSessionId = body.sessionId;
@@ -186,15 +206,22 @@ agent.post('/continue', async (c) => {
       prompt: body.prompt,
     });
 
-    // Run Claude and yield events
-    yield* runClaude({
+    // Dispatch to correct runner based on provider
+    const runnerOpts = {
       prompt: body.prompt,
       session: tempSession,
       resumeSessionId: body.sessionId,
-      onSessionUpdate: (updates) => {
+      model: body.model,
+      onSessionUpdate: (updates: Partial<typeof tempSession>) => {
         updateSession(tempSession.id, updates);
       },
-    });
+    };
+
+    if (continueProvider === 'codex') {
+      yield* runCodex(runnerOpts);
+    } else {
+      yield* runClaude(runnerOpts);
+    }
   }
 
   const readable = createSSEStream(tempSession.id, eventGenerator());

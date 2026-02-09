@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useAppStore } from "../store/useAppStore";
 
 interface StartSessionModalProps {
   cwd: string;
@@ -20,6 +21,8 @@ export function StartSessionModal({
   onClose
 }: StartSessionModalProps) {
   const [recentCwds, setRecentCwds] = useState<string[]>([]);
+  const provider = useAppStore((s) => s.provider);
+  const setProvider = useAppStore((s) => s.setProvider);
 
   useEffect(() => {
     window.electron.getRecentCwds().then(setRecentCwds).catch(console.error);
@@ -80,6 +83,45 @@ export function StartSessionModal({
               </div>
             )}
           </label>
+          {/* Provider selector */}
+          <div className="grid gap-1.5">
+            <span className="text-xs font-medium text-muted">Provider</span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setProvider("claude")}
+                className={`flex-1 flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition-colors ${
+                  provider === "claude"
+                    ? "border-accent bg-accent/10 text-accent"
+                    : "border-ink-900/10 bg-surface-secondary text-muted hover:border-ink-900/20 hover:text-ink-700"
+                }`}
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M12 1v6m0 6v10" />
+                </svg>
+                Claude
+              </button>
+              <button
+                type="button"
+                onClick={() => setProvider("codex")}
+                className={`flex-1 flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition-colors ${
+                  provider === "codex"
+                    ? "border-emerald-500 bg-emerald-500/10 text-emerald-700"
+                    : "border-ink-900/10 bg-surface-secondary text-muted hover:border-ink-900/20 hover:text-ink-700"
+                }`}
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                  <path d="M2 17l10 5 10-5" />
+                  <path d="M2 12l10 5 10-5" />
+                </svg>
+                Codex
+                <span className="text-[10px] font-normal opacity-60">gpt-5.3</span>
+              </button>
+            </div>
+          </div>
+
           <label className="grid gap-1.5">
             <span className="text-xs font-medium text-muted">Prompt</span>
             <textarea

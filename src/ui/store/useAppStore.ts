@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ServerEvent, SessionStatus, StreamMessage } from "../types";
+import type { ServerEvent, SessionStatus, StreamMessage, AgentProvider } from "../types";
 
 export type PermissionRequest = {
   toolUseId: string;
@@ -12,6 +12,7 @@ export type SessionView = {
   title: string;
   status: SessionStatus;
   cwd?: string;
+  provider?: AgentProvider;
   messages: StreamMessage[];
   permissionRequests: PermissionRequest[];
   lastPrompt?: string;
@@ -31,6 +32,8 @@ interface AppState {
   showStartModal: boolean;
   historyRequested: Set<string>;
   showSystemInfo: boolean;  // Toggle for showing System Init and Session Result
+  provider: AgentProvider;  // Current agent provider selection
+  codexModel: string;       // Codex model to use
 
   setPrompt: (prompt: string) => void;
   setCwd: (cwd: string) => void;
@@ -43,6 +46,8 @@ interface AppState {
   handleServerEvent: (event: ServerEvent) => void;
   addLocalMessage: (sessionId: string, message: StreamMessage) => void;
   setShowSystemInfo: (show: boolean) => void;
+  setProvider: (provider: AgentProvider) => void;
+  setCodexModel: (model: string) => void;
 }
 
 function createSession(id: string): SessionView {
@@ -60,6 +65,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   showStartModal: false,
   historyRequested: new Set(),
   showSystemInfo: false,  // Default to hidden
+  provider: "claude",
+  codexModel: "gpt-5.3-codex",
 
   setPrompt: (prompt) => set({ prompt }),
   setCwd: (cwd) => set({ cwd }),
@@ -68,6 +75,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setShowStartModal: (showStartModal) => set({ showStartModal }),
   setActiveSessionId: (id) => set({ activeSessionId: id }),
   setShowSystemInfo: (showSystemInfo) => set({ showSystemInfo }),
+  setProvider: (provider) => set({ provider }),
+  setCodexModel: (codexModel) => set({ codexModel }),
 
   markHistoryRequested: (sessionId) => {
     set((state) => {
@@ -106,6 +115,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             status: session.status,
             title: session.title,
             cwd: session.cwd,
+            provider: session.provider,
             createdAt: session.createdAt,
             updatedAt: session.updatedAt
           };
@@ -174,7 +184,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       case "session.status": {
-        const { sessionId, status, title, cwd } = event.payload;
+        const { sessionId, status, title, cwd, provider: sessionProvider } = event.payload;
         set((state) => {
           const existing = state.sessions[sessionId] ?? createSession(sessionId);
           return {
@@ -185,6 +195,7 @@ export const useAppStore = create<AppState>((set, get) => ({
                 status,
                 title: title ?? existing.title,
                 cwd: cwd ?? existing.cwd,
+                provider: sessionProvider ?? existing.provider,
                 updatedAt: Date.now()
               }
             }

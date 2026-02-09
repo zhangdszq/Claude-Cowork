@@ -254,6 +254,16 @@ function App() {
   const partialMessage = currentPartialState?.content ?? "";
   const showPartialMessage = currentPartialState?.isVisible ?? false;
 
+  // Auto-detect provider: prefer codex if authorized
+  const setProvider = useAppStore((s) => s.setProvider);
+  useEffect(() => {
+    window.electron.openaiAuthStatus().then((status) => {
+      if (status.loggedIn) {
+        setProvider("codex");
+      }
+    }).catch(() => {});
+  }, [setProvider]);
+
   useEffect(() => {
     if (connected) sendEvent({ type: "session.list" });
   }, [connected, sendEvent]);

@@ -11,6 +11,8 @@ export type PendingPermission = {
   resolve: (result: { behavior: 'allow' | 'deny'; updatedInput?: unknown; message?: string }) => void;
 };
 
+export type AgentProvider = 'claude' | 'codex';
+
 export type Session = {
   id: string;
   externalId?: string;
@@ -20,6 +22,8 @@ export type Session = {
   cwd?: string;
   allowedTools?: string;
   lastPrompt?: string;
+  provider?: AgentProvider;
+  model?: string;
   pendingPermissions: Map<string, PendingPermission>;
   abortController?: AbortController;
   createdAt: number;

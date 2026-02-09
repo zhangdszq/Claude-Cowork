@@ -10,11 +10,30 @@ type StaticData = {
     totalMemoryGB: number;
 }
 
+type OpenAITokens = {
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: number;
+}
+
+type OpenAIAuthStatus = {
+    loggedIn: boolean;
+    email?: string;
+    expiresAt?: number;
+}
+
+type OpenAILoginResult = {
+    success: boolean;
+    email?: string;
+    error?: string;
+}
+
 type UserSettings = {
     anthropicBaseUrl?: string;
     anthropicAuthToken?: string;
     proxyEnabled?: boolean;
     proxyUrl?: string;
+    openaiTokens?: OpenAITokens;
 }
 
 type ScheduledTask = {
@@ -121,6 +140,10 @@ type EventPayloadMapping = {
     "delete-mcp-server": SaveMcpResult;
     "read-skill-content": string | null;
     "is-sidecar-running": boolean;
+    // OpenAI Codex OAuth
+    "openai-login": OpenAILoginResult;
+    "openai-logout": { success: boolean };
+    "openai-auth-status": OpenAIAuthStatus;
     // Scheduler
     "get-scheduled-tasks": ScheduledTask[];
     "add-scheduled-task": ScheduledTask;
@@ -158,6 +181,10 @@ interface Window {
         saveMcpServer: (server: McpServer) => Promise<SaveMcpResult>;
         deleteMcpServer: (name: string) => Promise<SaveMcpResult>;
         readSkillContent: (skillPath: string) => Promise<string | null>;
+        // OpenAI Codex OAuth
+        openaiLogin: () => Promise<OpenAILoginResult>;
+        openaiLogout: () => Promise<{ success: boolean }>;
+        openaiAuthStatus: () => Promise<OpenAIAuthStatus>;
         // Scheduler
         getScheduledTasks: () => Promise<ScheduledTask[]>;
         addScheduledTask: (task: ScheduledTaskInput) => Promise<ScheduledTask>;

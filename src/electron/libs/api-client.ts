@@ -97,6 +97,8 @@ export async function startSession(
     allowedTools?: string;
     prompt: string;
     externalSessionId?: string;  // Pass Electron's session ID for stop tracking
+    provider?: string;
+    model?: string;
   },
   onEvent: StreamCallback
 ): Promise<void> {
@@ -138,7 +140,7 @@ export async function continueSession(
   claudeSessionId: string,
   prompt: string,
   onEvent: StreamCallback,
-  options?: { cwd?: string; title?: string; externalSessionId?: string }
+  options?: { cwd?: string; title?: string; externalSessionId?: string; provider?: string; model?: string }
 ): Promise<void> {
   await ensureEmbeddedApi();
 
@@ -162,6 +164,8 @@ export async function continueSession(
         cwd: options?.cwd,
         title: options?.title,
         externalSessionId: options?.externalSessionId,
+        provider: options?.provider,
+        model: options?.model,
       }),
       signal: abortController.signal,
     });

@@ -8,7 +8,9 @@
     "extraResources": [
         "dist-electron/preload.cjs"
     ],
-    "asarUnpack": [],
+    "asarUnpack": [
+        "node_modules/@openai/codex-sdk/vendor/**/*"
+    ],
     "icon": "./claude-color.png",
     "mac": {
         "target": "dmg",

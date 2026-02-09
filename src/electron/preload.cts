@@ -69,6 +69,13 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("delete-mcp-server", name),
     readSkillContent: (skillPath: string) => 
         ipcInvoke("read-skill-content", skillPath),
+    // OpenAI Codex OAuth
+    openaiLogin: () => 
+        ipcInvoke("openai-login"),
+    openaiLogout: () => 
+        ipcInvoke("openai-logout"),
+    openaiAuthStatus: () => 
+        ipcInvoke("openai-auth-status"),
     // Scheduler
     getScheduledTasks: () => 
         ipcInvoke("get-scheduled-tasks"),

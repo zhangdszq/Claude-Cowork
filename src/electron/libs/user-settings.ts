@@ -2,12 +2,21 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { app } from "electron";
 
+export interface OpenAITokens {
+  accessToken: string;
+  refreshToken: string;
+  idToken?: string;  // raw JWT from OpenID Connect
+  expiresAt: number; // timestamp in ms
+}
+
 export interface UserSettings {
   anthropicBaseUrl?: string;
   anthropicAuthToken?: string;
   // Proxy settings
   proxyEnabled?: boolean;
   proxyUrl?: string;  // e.g., http://127.0.0.1:7890 or socks5://127.0.0.1:1080
+  // OpenAI Codex OAuth tokens
+  openaiTokens?: OpenAITokens;
 }
 
 const SETTINGS_FILE = join(app.getPath("userData"), "user-settings.json");

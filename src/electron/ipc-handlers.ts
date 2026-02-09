@@ -6,6 +6,7 @@ import { BrowserWindow } from 'electron';
 import type { ClientEvent, ServerEvent } from './types.js';
 import { SessionStore } from './libs/session-store.js';
 import { runClaude, type RunnerHandle } from './libs/runner.js';
+import { runCodex } from './libs/codex-runner.js';
 import { isEmbeddedApiRunning } from './api/server.js';
 import {
   startSession as apiStartSession,
@@ -107,11 +108,14 @@ export async function handleClientEvent(event: ClientEvent) {
   }
 
   if (event.type === 'session.start') {
+    const provider = event.payload.provider ?? 'claude';
     const session = sessions.createSession({
       cwd: event.payload.cwd,
       title: event.payload.title,
       allowedTools: event.payload.allowedTools,
       prompt: event.payload.prompt,
+      provider,
+      model: event.payload.model,
     });
 
     sessions.updateSession(session.id, {
@@ -126,11 +130,12 @@ export async function handleClientEvent(event: ClientEvent) {
         status: 'running',
         title: session.title,
         cwd: session.cwd,
+        provider,
       },
     });
 
     if (useEmbeddedApi()) {
-      // Use sidecar API - it will emit user_prompt
+      // Use sidecar API for both Claude and Codex — supports multi-instance
       activeSessions.add(session.id);
       try {
         await apiStartSession(
@@ -139,7 +144,9 @@ export async function handleClientEvent(event: ClientEvent) {
             title: event.payload.title,
             allowedTools: event.payload.allowedTools,
             prompt: event.payload.prompt,
-            externalSessionId: session.id,  // Pass our ID for stop tracking
+            externalSessionId: session.id,
+            provider,
+            model: event.payload.model,
           },
           (apiEvent) => {
             // Map API session ID to local session ID
@@ -147,7 +154,7 @@ export async function handleClientEvent(event: ClientEvent) {
               (apiEvent.payload as any).sessionId = session.id;
             }
             
-            // Capture claudeSessionId from init message
+            // Capture claudeSessionId/threadId from init message
             if (apiEvent.type === 'stream.message') {
               const msg = (apiEvent.payload as any).message;
               if (msg?.type === 'system' && msg?.subtype === 'init' && msg?.session_id) {
@@ -174,38 +181,54 @@ export async function handleClientEvent(event: ClientEvent) {
         activeSessions.delete(session.id);
       }
     } else {
-      // Use direct SDK (fallback) - emit user_prompt locally
+      // Fallback: direct SDK when sidecar is unavailable
       emit({
         type: 'stream.user_prompt',
         payload: { sessionId: session.id, prompt: event.payload.prompt },
       });
 
-      runClaude({
-        prompt: event.payload.prompt,
-        session,
-        resumeSessionId: session.claudeSessionId,
-        onEvent: emit,
-        onSessionUpdate: (updates) => {
-          sessions.updateSession(session.id, updates);
-        },
-      })
-        .then((handle) => {
-          runnerHandles.set(session.id, handle);
-          sessions.setAbortController(session.id, undefined);
+      if (provider === 'codex') {
+        runCodex({
+          prompt: event.payload.prompt,
+          session,
+          model: event.payload.model,
+          onEvent: emit,
+          onSessionUpdate: (updates) => {
+            sessions.updateSession(session.id, updates);
+          },
         })
-        .catch((error) => {
-          sessions.updateSession(session.id, { status: 'error' });
-          emit({
-            type: 'session.status',
-            payload: {
-              sessionId: session.id,
-              status: 'error',
-              title: session.title,
-              cwd: session.cwd,
-              error: String(error),
-            },
+          .then((handle) => {
+            runnerHandles.set(session.id, handle);
+          })
+          .catch((error) => {
+            sessions.updateSession(session.id, { status: 'error' });
+            emit({
+              type: 'session.status',
+              payload: { sessionId: session.id, status: 'error', title: session.title, cwd: session.cwd, error: String(error) },
+            });
           });
-        });
+      } else {
+        runClaude({
+          prompt: event.payload.prompt,
+          session,
+          resumeSessionId: session.claudeSessionId,
+          onEvent: emit,
+          onSessionUpdate: (updates) => {
+            sessions.updateSession(session.id, updates);
+          },
+        })
+          .then((handle) => {
+            runnerHandles.set(session.id, handle);
+            sessions.setAbortController(session.id, undefined);
+          })
+          .catch((error) => {
+            sessions.updateSession(session.id, { status: 'error' });
+            emit({
+              type: 'session.status',
+              payload: { sessionId: session.id, status: 'error', title: session.title, cwd: session.cwd, error: String(error) },
+            });
+          });
+      }
     }
 
     return;
@@ -244,8 +267,10 @@ export async function handleClientEvent(event: ClientEvent) {
       },
     });
 
+    const sessionProvider = session.provider ?? 'claude';
+
     if (useEmbeddedApi()) {
-      // Use sidecar API - it will emit user_prompt
+      // Use sidecar API for both Claude and Codex — supports multi-instance
       activeSessions.add(session.id);
       try {
         await apiContinueSession(
@@ -257,7 +282,13 @@ export async function handleClientEvent(event: ClientEvent) {
             }
             emit(apiEvent);
           },
-          { cwd: session.cwd, title: session.title, externalSessionId: session.id }
+          {
+            cwd: session.cwd,
+            title: session.title,
+            externalSessionId: session.id,
+            provider: sessionProvider,
+            model: session.model,
+          }
         );
       } catch (error) {
         sessions.updateSession(session.id, { status: 'error' });
@@ -275,37 +306,53 @@ export async function handleClientEvent(event: ClientEvent) {
         activeSessions.delete(session.id);
       }
     } else {
-      // Use direct SDK (fallback) - emit user_prompt locally
+      // Fallback: direct SDK when sidecar is unavailable
       emit({
         type: 'stream.user_prompt',
         payload: { sessionId: session.id, prompt: event.payload.prompt },
       });
 
-      runClaude({
-        prompt: event.payload.prompt,
-        session,
-        resumeSessionId: session.claudeSessionId,
-        onEvent: emit,
-        onSessionUpdate: (updates) => {
-          sessions.updateSession(session.id, updates);
-        },
-      })
-        .then((handle) => {
-          runnerHandles.set(session.id, handle);
+      if (sessionProvider === 'codex') {
+        runCodex({
+          prompt: event.payload.prompt,
+          session,
+          model: session.model,
+          onEvent: emit,
+          onSessionUpdate: (updates) => {
+            sessions.updateSession(session.id, updates);
+          },
         })
-        .catch((error) => {
-          sessions.updateSession(session.id, { status: 'error' });
-          emit({
-            type: 'session.status',
-            payload: {
-              sessionId: session.id,
-              status: 'error',
-              title: session.title,
-              cwd: session.cwd,
-              error: String(error),
-            },
+          .then((handle) => {
+            runnerHandles.set(session.id, handle);
+          })
+          .catch((error) => {
+            sessions.updateSession(session.id, { status: 'error' });
+            emit({
+              type: 'session.status',
+              payload: { sessionId: session.id, status: 'error', title: session.title, cwd: session.cwd, error: String(error) },
+            });
           });
-        });
+      } else {
+        runClaude({
+          prompt: event.payload.prompt,
+          session,
+          resumeSessionId: session.claudeSessionId,
+          onEvent: emit,
+          onSessionUpdate: (updates) => {
+            sessions.updateSession(session.id, updates);
+          },
+        })
+          .then((handle) => {
+            runnerHandles.set(session.id, handle);
+          })
+          .catch((error) => {
+            sessions.updateSession(session.id, { status: 'error' });
+            emit({
+              type: 'session.status',
+              payload: { sessionId: session.id, status: 'error', title: session.title, cwd: session.cwd, error: String(error) },
+            });
+          });
+      }
     }
 
     return;

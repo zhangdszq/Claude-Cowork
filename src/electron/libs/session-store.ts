@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import type { SessionStatus, StreamMessage } from "../types.js";
+import type { SessionStatus, StreamMessage, AgentProvider } from "../types.js";
 
 export type PendingPermission = {
   toolUseId: string;
@@ -16,6 +16,8 @@ export type Session = {
   cwd?: string;
   allowedTools?: string;
   lastPrompt?: string;
+  provider?: AgentProvider;
+  model?: string;
   pendingPermissions: Map<string, PendingPermission>;
   abortController?: AbortController;
 };
@@ -28,6 +30,8 @@ export type StoredSession = {
   allowedTools?: string;
   lastPrompt?: string;
   claudeSessionId?: string;
+  provider?: AgentProvider;
+  model?: string;
   createdAt: number;
   updatedAt: number;
 };
@@ -47,7 +51,7 @@ export class SessionStore {
     this.loadSessions();
   }
 
-  createSession(options: { cwd?: string; allowedTools?: string; prompt?: string; title: string }): Session {
+  createSession(options: { cwd?: string; allowedTools?: string; prompt?: string; title: string; provider?: AgentProvider; model?: string }): Session {
     const id = crypto.randomUUID();
     const now = Date.now();
     const session: Session = {
@@ -57,14 +61,16 @@ export class SessionStore {
       cwd: options.cwd,
       allowedTools: options.allowedTools,
       lastPrompt: options.prompt,
+      provider: options.provider ?? "claude",
+      model: options.model,
       pendingPermissions: new Map()
     };
     this.sessions.set(id, session);
     this.db
       .prepare(
         `insert into sessions
-          (id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          (id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -74,6 +80,8 @@ export class SessionStore {
         session.cwd ?? null,
         session.allowedTools ?? null,
         session.lastPrompt ?? null,
+        session.provider ?? "claude",
+        session.model ?? null,
         now,
         now
       );
@@ -87,7 +95,7 @@ export class SessionStore {
   listSessions(): StoredSession[] {
     const rows = this.db
       .prepare(
-        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, created_at, updated_at
+        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, created_at, updated_at
          from sessions
          order by updated_at desc`
       )
@@ -100,6 +108,8 @@ export class SessionStore {
       allowedTools: row.allowed_tools ? String(row.allowed_tools) : undefined,
       lastPrompt: row.last_prompt ? String(row.last_prompt) : undefined,
       claudeSessionId: row.claude_session_id ? String(row.claude_session_id) : undefined,
+      provider: (row.provider as AgentProvider) ?? "claude",
+      model: row.model ? String(row.model) : undefined,
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at)
     }));
@@ -122,7 +132,7 @@ export class SessionStore {
   getSessionHistory(id: string): SessionHistory | null {
     const sessionRow = this.db
       .prepare(
-        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, created_at, updated_at
+        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, created_at, updated_at
          from sessions
          where id = ?`
       )
@@ -145,6 +155,8 @@ export class SessionStore {
         allowedTools: sessionRow.allowed_tools ? String(sessionRow.allowed_tools) : undefined,
         lastPrompt: sessionRow.last_prompt ? String(sessionRow.last_prompt) : undefined,
         claudeSessionId: sessionRow.claude_session_id ? String(sessionRow.claude_session_id) : undefined,
+        provider: (sessionRow.provider as AgentProvider) ?? "claude",
+        model: sessionRow.model ? String(sessionRow.model) : undefined,
         createdAt: Number(sessionRow.created_at),
         updatedAt: Number(sessionRow.updated_at)
       },
@@ -194,7 +206,9 @@ export class SessionStore {
       status: "status",
       cwd: "cwd",
       allowedTools: "allowed_tools",
-      lastPrompt: "last_prompt"
+      lastPrompt: "last_prompt",
+      provider: "provider",
+      model: "model",
     } as const;
 
     for (const key of Object.keys(updates) as Array<keyof typeof updatable>) {
@@ -225,10 +239,15 @@ export class SessionStore {
         cwd text,
         allowed_tools text,
         last_prompt text,
+        provider text default 'claude',
+        model text,
         created_at integer not null,
         updated_at integer not null
       )`
     );
+    // Migration: add provider and model columns if they don't exist
+    try { this.db.exec(`alter table sessions add column provider text default 'claude'`); } catch { /* already exists */ }
+    try { this.db.exec(`alter table sessions add column model text`); } catch { /* already exists */ }
     this.db.exec(
       `create table if not exists messages (
         id text primary key,
@@ -244,7 +263,7 @@ export class SessionStore {
   private loadSessions(): void {
     const rows = this.db
       .prepare(
-        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt
+        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model
          from sessions`
       )
       .all();
@@ -257,6 +276,8 @@ export class SessionStore {
         cwd: row.cwd ? String(row.cwd) : undefined,
         allowedTools: row.allowed_tools ? String(row.allowed_tools) : undefined,
         lastPrompt: row.last_prompt ? String(row.last_prompt) : undefined,
+        provider: (row.provider as AgentProvider) ?? "claude",
+        model: row.model ? String(row.model) : undefined,
         pendingPermissions: new Map()
       };
       this.sessions.set(session.id, session);

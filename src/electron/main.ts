@@ -8,6 +8,7 @@ import "./libs/claude-settings.js";
 import { loadUserSettings, saveUserSettings, type UserSettings } from "./libs/user-settings.js";
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { runEnvironmentChecks, validateApiConfig } from "./libs/env-check.js";
+import { openAILogin, openAILogout, getOpenAIAuthStatus, ensureCodexAuthSync } from "./libs/openai-auth.js";
 import { startEmbeddedApi, stopEmbeddedApi, isEmbeddedApiRunning } from "./api/server.js";
 import { 
   loadScheduledTasks, 
@@ -24,6 +25,9 @@ import { join } from "path";
 import { homedir } from "os";
 
 app.on("ready", async () => {
+    // Ensure Codex auth.json is in sync with stored tokens
+    ensureCodexAuthSync();
+
     // Start the embedded API server
     console.log("Starting embedded API server...");
     const started = await startEmbeddedApi();
@@ -99,8 +103,11 @@ app.on("ready", async () => {
         return loadUserSettings();
     });
 
-    ipcMainHandle("save-user-settings", (_: any, settings: UserSettings) => {
-        saveUserSettings(settings);
+    ipcMainHandle("save-user-settings", (_: any, settings: Partial<UserSettings>) => {
+        // Merge with existing settings to preserve fields like openaiTokens
+        const existing = loadUserSettings();
+        const merged = { ...existing, ...settings };
+        saveUserSettings(merged);
         reloadClaudeSettings();
         return true;
     });
@@ -130,6 +137,20 @@ app.on("ready", async () => {
     // Handle API config validation
     ipcMainHandle("validate-api-config", async (_: any, baseUrl?: string, authToken?: string) => {
         return await validateApiConfig(baseUrl, authToken);
+    });
+
+    // OpenAI Codex OAuth handlers
+    ipcMainHandle("openai-login", async () => {
+        return await openAILogin(mainWindow);
+    });
+
+    ipcMainHandle("openai-logout", () => {
+        openAILogout();
+        return { success: true };
+    });
+
+    ipcMainHandle("openai-auth-status", () => {
+        return getOpenAIAuthStatus();
     });
 
     // Request folder access permission (macOS)

@@ -114,6 +114,8 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
   const setPrompt = useAppStore((state) => state.setPrompt);
   const setPendingStart = useAppStore((state) => state.setPendingStart);
   const setGlobalError = useAppStore((state) => state.setGlobalError);
+  const provider = useAppStore((state) => state.provider);
+  const codexModel = useAppStore((state) => state.codexModel);
 
   // Image attachment - only store path, Agent will use built-in analyze_image tool
   const [imagePath, setImagePath] = useState<string | null>(null);
@@ -193,7 +195,13 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
       setImagePath(null);
     }
 
-    if (!activeSessionId) {
+    // Determine if we need a new session:
+    // 1. No active session
+    // 2. Active session's provider differs from selected provider
+    const activeProvider = activeSession?.provider ?? "claude";
+    const needNewSession = !activeSessionId || (activeProvider !== provider);
+
+    if (needNewSession) {
       let title = "";
       try {
         setPendingStart(true);
@@ -206,7 +214,14 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
       }
       sendEvent({
         type: "session.start",
-        payload: { title, prompt: finalPrompt, cwd: cwd.trim() || undefined, allowedTools: DEFAULT_ALLOWED_TOOLS }
+        payload: {
+          title,
+          prompt: finalPrompt,
+          cwd: cwd.trim() || undefined,
+          allowedTools: DEFAULT_ALLOWED_TOOLS,
+          provider,
+          ...(provider === "codex" ? { model: codexModel } : {}),
+        }
       });
     } else {
       if (activeSession?.status === "running") {
@@ -216,7 +231,7 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
       sendEvent({ type: "session.continue", payload: { sessionId: activeSessionId, prompt: finalPrompt } });
     }
     setPrompt("");
-  }, [activeSession, activeSessionId, cwd, imagePath, prompt, sendEvent, setGlobalError, setPendingStart, setPrompt]);
+  }, [activeSession, activeSessionId, cwd, imagePath, prompt, provider, codexModel, sendEvent, setGlobalError, setPendingStart, setPrompt]);
 
   const handleStop = useCallback(() => {
     if (!activeSessionId) return;
@@ -248,7 +263,9 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
           title: effectiveTitle || "定时任务", 
           prompt: effectivePrompt, 
           cwd: effectiveCwd, 
-          allowedTools: DEFAULT_ALLOWED_TOOLS 
+          allowedTools: DEFAULT_ALLOWED_TOOLS,
+          provider,
+          ...(provider === "codex" ? { model: codexModel } : {}),
         }
       });
       return;
@@ -285,7 +302,7 @@ export function PromptInput({ sendEvent }: PromptInputProps) {
     handlePaste
   } = usePromptActions(sendEvent);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
-  
+
   // Skills state
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [showSkills, setShowSkills] = useState(false);
