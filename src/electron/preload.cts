@@ -77,6 +77,27 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("get-assistants-config"),
     saveAssistantsConfig: (config: AssistantsConfig) =>
         ipcInvoke("save-assistants-config", config),
+    // Bot config
+    getBotConfig: () =>
+        ipcInvoke("get-bot-config"),
+    saveBotConfig: (config: BotConfig) =>
+        ipcInvoke("save-bot-config", config),
+    testBotConnection: (platformConfig: BotPlatformConfig) =>
+        ipcInvoke("test-bot-connection", platformConfig),
+    // DingTalk bot lifecycle
+    startDingtalkBot: (input: StartDingtalkBotInput) =>
+        ipcInvoke("start-dingtalk-bot", input),
+    stopDingtalkBot: (assistantId: string) =>
+        ipcInvoke("stop-dingtalk-bot", assistantId),
+    getDingtalkBotStatus: (assistantId: string) =>
+        ipcInvoke("get-dingtalk-bot-status", assistantId),
+    onDingtalkBotStatus: (cb: (assistantId: string, status: DingtalkBotStatus, detail?: string) => void) => {
+        const handler = (_: Electron.IpcRendererEvent, payload: { assistantId: string; status: DingtalkBotStatus; detail?: string }) => {
+            cb(payload.assistantId, payload.status, payload.detail);
+        };
+        electron.ipcRenderer.on("dingtalk-bot-status", handler);
+        return () => electron.ipcRenderer.off("dingtalk-bot-status", handler);
+    },
     // OpenAI Codex OAuth
     openaiLogin: () => 
         ipcInvoke("openai-login"),

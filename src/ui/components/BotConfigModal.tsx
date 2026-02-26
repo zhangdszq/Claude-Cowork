@@ -1,0 +1,587 @@
+import { useEffect, useRef, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+
+interface BotConfigModalProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  assistantName: string;
+  provider?: "claude" | "codex";
+  model?: string;
+  defaultCwd?: string;
+  initialBots: Partial<Record<BotPlatformType, BotPlatformConfig>>;
+  onSave: (bots: Partial<Record<BotPlatformType, BotPlatformConfig>>) => void;
+}
+
+type PlatformId = BotPlatformType;
+
+interface PlatformMeta {
+  id: PlatformId;
+  name: string;
+  description: string;
+  icon: React.ReactNode;
+  color: string;
+}
+
+const PLATFORMS: PlatformMeta[] = [
+  {
+    id: "telegram",
+    name: "Telegram",
+    description: "通过 @BotFather 创建 Bot 并获取 Token",
+    color: "#2AABEE",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-full w-full" fill="currentColor">
+        <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.14 13.28l-2.99-.935c-.65-.204-.664-.65.136-.961l11.671-4.5c.543-.196 1.017.13.937.337z" />
+      </svg>
+    ),
+  },
+  {
+    id: "feishu",
+    name: "飞书",
+    description: "在飞书开放平台创建应用并获取凭证",
+    color: "#00B3F0",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-full w-full" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M12 3C7 3 3 7 3 12s4 9 9 9 9-4 9-9-4-9-9-9z" fill="currentColor" stroke="none" opacity="0.15"/>
+        <path d="M8 11l3 3 5-5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    ),
+  },
+  {
+    id: "wecom",
+    name: "企业微信",
+    description: "在企业微信管理后台创建自建应用",
+    color: "#2AA515",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-full w-full" fill="currentColor">
+        <path d="M16.5 9.5a4 4 0 1 0-8 0 4 4 0 0 0 8 0zm-4-2.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5zm-6 8c0-1.1.9-2 2-2h8a2 2 0 0 1 2 2v1H6.5v-1z" />
+      </svg>
+    ),
+  },
+  {
+    id: "discord",
+    name: "Discord",
+    description: "在 Discord Developer Portal 创建 Bot 应用",
+    color: "#5865F2",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-full w-full" fill="currentColor">
+        <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z" />
+      </svg>
+    ),
+  },
+  {
+    id: "dingtalk",
+    name: "钉钉",
+    description: "在钉钉开发者后台创建机器人应用",
+    color: "#1677FF",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-full w-full" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm3.5 6.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm-7 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM12 17c-2.21 0-4-1.34-4-3h8c0 1.66-1.79 3-4 3z" />
+      </svg>
+    ),
+  },
+];
+
+type FormState = {
+  telegram: { token: string; proxy: string };
+  feishu: { appId: string; appSecret: string; domain: "feishu" | "lark" };
+  wecom: { corpId: string; agentId: string; secret: string };
+  discord: { token: string };
+  dingtalk: { appKey: string; appSecret: string };
+};
+
+function buildDefaultForm(): FormState {
+  return {
+    telegram: { token: "", proxy: "" },
+    feishu: { appId: "", appSecret: "", domain: "feishu" },
+    wecom: { corpId: "", agentId: "", secret: "" },
+    discord: { token: "" },
+    dingtalk: { appKey: "", appSecret: "" },
+  };
+}
+
+function botsToForm(bots: Partial<Record<BotPlatformType, BotPlatformConfig>>): FormState {
+  const form = buildDefaultForm();
+  const t = bots.telegram;
+  if (t?.platform === "telegram") {
+    form.telegram = { token: t.token ?? "", proxy: t.proxy ?? "" };
+  }
+  const f = bots.feishu;
+  if (f?.platform === "feishu") {
+    form.feishu = { appId: f.appId ?? "", appSecret: f.appSecret ?? "", domain: f.domain ?? "feishu" };
+  }
+  const w = bots.wecom;
+  if (w?.platform === "wecom") {
+    form.wecom = { corpId: w.corpId ?? "", agentId: w.agentId ?? "", secret: w.secret ?? "" };
+  }
+  const d = bots.discord;
+  if (d?.platform === "discord") {
+    form.discord = { token: d.token ?? "" };
+  }
+  const dt = bots.dingtalk;
+  if (dt?.platform === "dingtalk") {
+    form.dingtalk = { appKey: dt.appKey ?? "", appSecret: dt.appSecret ?? "" };
+  }
+  return form;
+}
+
+function formToPlatformConfig(
+  platform: PlatformId,
+  form: FormState,
+  connected: boolean
+): BotPlatformConfig {
+  if (platform === "telegram") {
+    return { platform: "telegram", token: form.telegram.token, proxy: form.telegram.proxy || undefined, connected };
+  }
+  if (platform === "feishu") {
+    return { platform: "feishu", appId: form.feishu.appId, appSecret: form.feishu.appSecret, domain: form.feishu.domain, connected };
+  }
+  if (platform === "wecom") {
+    return { platform: "wecom", corpId: form.wecom.corpId, agentId: form.wecom.agentId, secret: form.wecom.secret, connected };
+  }
+  if (platform === "discord") {
+    return { platform: "discord", token: form.discord.token, connected };
+  }
+  return { platform: "dingtalk", appKey: form.dingtalk.appKey, appSecret: form.dingtalk.appSecret, connected };
+}
+
+const INPUT_CLASS =
+  "w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-3.5 py-2 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors";
+
+function FormField({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-muted">
+        {label}
+        {hint && <span className="font-normal text-muted-light ml-1">{hint}</span>}
+      </span>
+      {children}
+    </div>
+  );
+}
+
+// DingTalk-specific status indicator
+type DingtalkStatus = DingtalkBotStatus | null;
+
+export function BotConfigModal({
+  open,
+  onOpenChange,
+  assistantName,
+  assistantId,
+  provider,
+  model,
+  defaultCwd,
+  initialBots,
+  onSave,
+}: BotConfigModalProps & { assistantId: string }) {
+  const [selectedPlatform, setSelectedPlatform] = useState<PlatformId>("telegram");
+  const [bots, setBots] = useState<Partial<Record<BotPlatformType, BotPlatformConfig>>>(initialBots);
+  const [form, setForm] = useState<FormState>(buildDefaultForm());
+  const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [dingtalkStatus, setDingtalkStatus] = useState<DingtalkStatus>(null);
+  const unsubRef = useRef<(() => void) | null>(null);
+
+  // Load initial DingTalk status and subscribe to updates
+  useEffect(() => {
+    if (!open) return;
+    setBots(initialBots);
+    setForm(botsToForm(initialBots));
+    setTestResult(null);
+
+    // Get current DingTalk status
+    window.electron.getDingtalkBotStatus(assistantId).then((r) => {
+      setDingtalkStatus(r.status);
+    });
+
+    // Subscribe to live status updates
+    const unsub = window.electron.onDingtalkBotStatus((id, status, detail) => {
+      if (id !== assistantId) return;
+      setDingtalkStatus(status);
+      if (status === "error" && detail) {
+        setTestResult({ success: false, message: detail });
+      }
+      if (status === "connected") {
+        setTestResult({ success: true, message: "连接成功，机器人正在监听消息" });
+      }
+    });
+    unsubRef.current = unsub;
+    return () => {
+      unsub();
+      unsubRef.current = null;
+    };
+  }, [open, assistantId, initialBots]);
+
+  useEffect(() => {
+    setTestResult(null);
+  }, [selectedPlatform]);
+
+  const currentPlatformCfg = bots[selectedPlatform];
+  const isConnected = currentPlatformCfg?.connected ?? false;
+
+  // For DingTalk, use real-time status; for others, use config flag
+  const effectiveStatus =
+    selectedPlatform === "dingtalk"
+      ? dingtalkStatus ?? (isConnected ? "connected" : "disconnected")
+      : isConnected
+      ? "connected"
+      : "disconnected";
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const platformCfg = formToPlatformConfig(selectedPlatform, form, isConnected);
+      const nextBots = { ...bots, [selectedPlatform]: platformCfg };
+      setBots(nextBots);
+      onSave(nextBots);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const platformCfg = formToPlatformConfig(selectedPlatform, form, false);
+      const result = await window.electron.testBotConnection(platformCfg);
+      setTestResult(result);
+    } catch {
+      setTestResult({ success: false, message: "测试失败，请检查网络" });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleToggleConnect = async () => {
+    if (selectedPlatform === "dingtalk") {
+      if (effectiveStatus === "connected" || effectiveStatus === "connecting") {
+        // Disconnect
+        await window.electron.stopDingtalkBot(assistantId);
+        const platformCfg = formToPlatformConfig("dingtalk", form, false);
+        const nextBots = { ...bots, dingtalk: platformCfg };
+        setBots(nextBots);
+        onSave(nextBots);
+      } else {
+        // Connect
+        const { appKey, appSecret } = form.dingtalk;
+        if (!appKey || !appSecret) {
+          setTestResult({ success: false, message: "请先填写 AppKey 和 AppSecret" });
+          return;
+        }
+        setConnecting(true);
+        setTestResult(null);
+        try {
+          const result = await window.electron.startDingtalkBot({
+            appKey,
+            appSecret,
+            assistantId,
+            assistantName,
+            provider,
+            model,
+            defaultCwd,
+          });
+          if (result.status === "error") {
+            setTestResult({ success: false, message: result.detail ?? "连接失败" });
+          } else {
+            const platformCfg = formToPlatformConfig("dingtalk", form, true);
+            const nextBots = { ...bots, dingtalk: platformCfg };
+            setBots(nextBots);
+            onSave(nextBots);
+          }
+        } finally {
+          setConnecting(false);
+        }
+      }
+    } else {
+      const newConnected = !isConnected;
+      const platformCfg = formToPlatformConfig(selectedPlatform, form, newConnected);
+      const nextBots = { ...bots, [selectedPlatform]: platformCfg };
+      setBots(nextBots);
+      onSave(nextBots);
+    }
+  };
+
+  const updateTelegram = (u: Partial<FormState["telegram"]>) =>
+    setForm((f) => ({ ...f, telegram: { ...f.telegram, ...u } }));
+  const updateFeishu = (u: Partial<FormState["feishu"]>) =>
+    setForm((f) => ({ ...f, feishu: { ...f.feishu, ...u } }));
+  const updateWecom = (u: Partial<FormState["wecom"]>) =>
+    setForm((f) => ({ ...f, wecom: { ...f.wecom, ...u } }));
+  const updateDiscord = (u: Partial<FormState["discord"]>) =>
+    setForm((f) => ({ ...f, discord: { ...f.discord, ...u } }));
+  const updateDingtalk = (u: Partial<FormState["dingtalk"]>) =>
+    setForm((f) => ({ ...f, dingtalk: { ...f.dingtalk, ...u } }));
+
+  const connectedCount = Object.values(bots).filter((b) => b?.connected).length;
+
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-900/20 backdrop-blur-sm" />
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="fixed left-1/2 top-1/2 z-50 w-full max-w-3xl -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-ink-900/5 bg-surface shadow-elevated flex flex-col overflow-hidden"
+          style={{ height: "580px" }}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-5 py-4 border-b border-ink-900/6 flex-shrink-0">
+            <div className="flex items-center gap-2.5">
+              <Dialog.Title className="text-base font-semibold text-ink-800">
+                机器人对话
+              </Dialog.Title>
+              <span className="rounded-full bg-surface-secondary border border-ink-900/8 px-2 py-0.5 text-[11px] text-muted">
+                {assistantName}
+              </span>
+              {connectedCount > 0 && (
+                <span className="rounded-full bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-[11px] text-emerald-700">
+                  {connectedCount} 已连接
+                </span>
+              )}
+            </div>
+            <Dialog.Close asChild>
+              <button className="rounded-full p-1.5 text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors">
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </Dialog.Close>
+          </div>
+
+          <div className="flex flex-1 min-h-0">
+            {/* Left sidebar */}
+            <div className="w-[200px] flex-shrink-0 border-r border-ink-900/6 p-3 flex flex-col gap-0.5">
+              <p className="text-[10px] font-semibold text-muted uppercase tracking-wider px-2 pb-2">
+                平台
+              </p>
+              {PLATFORMS.map((platform) => {
+                const cfg = bots[platform.id];
+                const connected = cfg?.connected ?? false;
+                const isActive = selectedPlatform === platform.id;
+                return (
+                  <button
+                    key={platform.id}
+                    onClick={() => setSelectedPlatform(platform.id)}
+                    className={`flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors w-full ${
+                      isActive ? "bg-ink-900/8 text-ink-800" : "text-ink-700 hover:bg-surface-secondary"
+                    }`}
+                  >
+                    <div
+                      className="h-6 w-6 flex-shrink-0 rounded-lg flex items-center justify-center p-1"
+                      style={{ backgroundColor: platform.color + "1A", color: platform.color }}
+                    >
+                      {platform.icon}
+                    </div>
+                    <span className="text-sm font-medium leading-none flex-1">{platform.name}</span>
+                    {(platform.id === "dingtalk"
+                      ? dingtalkStatus === "connected"
+                      : connected) && (
+                      <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                    )}
+                    {platform.id === "dingtalk" && dingtalkStatus === "connecting" && (
+                      <div className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
+                    )}
+                    {platform.id === "dingtalk" && dingtalkStatus === "error" && (
+                      <div className="h-1.5 w-1.5 rounded-full bg-red-500 flex-shrink-0" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Right content */}
+            {PLATFORMS.map((platform) => {
+              if (platform.id !== selectedPlatform) return null;
+              return (
+                <div key={platform.id} className="flex-1 flex flex-col min-h-0 overflow-y-auto p-5">
+                  {/* Platform header */}
+                  <div className="flex items-center gap-3 pb-4 border-b border-ink-900/6">
+                    <div
+                      className="h-10 w-10 flex-shrink-0 rounded-xl flex items-center justify-center p-2"
+                      style={{ backgroundColor: platform.color + "1A", color: platform.color }}
+                    >
+                      {platform.icon}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold text-ink-800">{platform.name}</div>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <div className={`h-1.5 w-1.5 rounded-full ${
+                          effectiveStatus === "connected" ? "bg-emerald-500" :
+                          effectiveStatus === "connecting" ? "bg-amber-400 animate-pulse" :
+                          effectiveStatus === "error" ? "bg-red-500" :
+                          "bg-ink-900/20"
+                        }`} />
+                        <span className="text-[11px] text-muted">
+                          {effectiveStatus === "connected" ? "已连接" :
+                           effectiveStatus === "connecting" ? "连接中…" :
+                           effectiveStatus === "error" ? "连接失败" : "未连接"}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleToggleConnect}
+                      disabled={connecting || effectiveStatus === "connecting"}
+                      className={`relative inline-flex h-6 w-10 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none disabled:opacity-60 ${
+                        effectiveStatus === "connected" ? "bg-accent" :
+                        effectiveStatus === "connecting" ? "bg-amber-400" : "bg-ink-900/15"
+                      }`}
+                      role="switch"
+                      aria-checked={effectiveStatus === "connected"}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform ${
+                          effectiveStatus === "connected" || effectiveStatus === "connecting" ? "translate-x-4" : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {/* Description */}
+                  <div className="mt-3 mb-4 rounded-xl bg-surface-secondary/80 px-3.5 py-2.5">
+                    <p className="text-xs text-muted">{platform.description}</p>
+                  </div>
+
+                  {/* Credentials */}
+                  <div className="flex flex-col gap-3">
+                    <p className="text-xs font-semibold text-ink-800">凭证配置</p>
+
+                    {selectedPlatform === "telegram" && (
+                      <>
+                        <FormField label="Bot Token">
+                          <input type="password" className={INPUT_CLASS} placeholder="123456:ABC-DEF..."
+                            value={form.telegram.token} onChange={(e) => updateTelegram({ token: e.target.value })} />
+                        </FormField>
+                        <FormField label="代理地址" hint="（国内网络必填）">
+                          <input className={INPUT_CLASS} placeholder="http://127.0.0.1:7890"
+                            value={form.telegram.proxy} onChange={(e) => updateTelegram({ proxy: e.target.value })} />
+                        </FormField>
+                      </>
+                    )}
+
+                    {selectedPlatform === "feishu" && (
+                      <>
+                        <FormField label="App ID">
+                          <input className={INPUT_CLASS} placeholder="cli_xxxx"
+                            value={form.feishu.appId} onChange={(e) => updateFeishu({ appId: e.target.value })} />
+                        </FormField>
+                        <FormField label="App Secret">
+                          <input type="password" className={INPUT_CLASS} placeholder="xxxx"
+                            value={form.feishu.appSecret} onChange={(e) => updateFeishu({ appSecret: e.target.value })} />
+                        </FormField>
+                        <FormField label="域名">
+                          <select className={INPUT_CLASS} value={form.feishu.domain}
+                            onChange={(e) => updateFeishu({ domain: e.target.value as "feishu" | "lark" })}>
+                            <option value="feishu">飞书 (feishu.cn)</option>
+                            <option value="lark">Lark (larksuite.com)</option>
+                          </select>
+                        </FormField>
+                      </>
+                    )}
+
+                    {selectedPlatform === "wecom" && (
+                      <>
+                        <FormField label="Corp ID">
+                          <input className={INPUT_CLASS} placeholder="ww..."
+                            value={form.wecom.corpId} onChange={(e) => updateWecom({ corpId: e.target.value })} />
+                        </FormField>
+                        <FormField label="Agent ID">
+                          <input className={INPUT_CLASS} placeholder="1000001"
+                            value={form.wecom.agentId} onChange={(e) => updateWecom({ agentId: e.target.value })} />
+                        </FormField>
+                        <FormField label="Secret">
+                          <input type="password" className={INPUT_CLASS} placeholder="xxxx"
+                            value={form.wecom.secret} onChange={(e) => updateWecom({ secret: e.target.value })} />
+                        </FormField>
+                      </>
+                    )}
+
+                    {selectedPlatform === "discord" && (
+                      <FormField label="Bot Token">
+                        <input type="password" className={INPUT_CLASS} placeholder="MTxxxx..."
+                          value={form.discord.token} onChange={(e) => updateDiscord({ token: e.target.value })} />
+                      </FormField>
+                    )}
+
+                    {selectedPlatform === "dingtalk" && (
+                      <>
+                        <FormField label="Client ID (AppKey)">
+                          <input className={INPUT_CLASS} placeholder="dingxxxxxxxx"
+                            value={form.dingtalk.appKey} onChange={(e) => updateDingtalk({ appKey: e.target.value })} />
+                        </FormField>
+                        <FormField label="Client Secret (AppSecret)">
+                          <input type="password" className={INPUT_CLASS} placeholder="xxxx"
+                            value={form.dingtalk.appSecret} onChange={(e) => updateDingtalk({ appSecret: e.target.value })} />
+                        </FormField>
+                      </>
+                    )}
+
+                    {/* Test result */}
+                    {testResult && (
+                      <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs ${
+                        testResult.success
+                          ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                          : "bg-red-50 text-red-700 border border-red-200"
+                      }`}>
+                        {testResult.success ? (
+                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <path d="M20 6L9 17l-5-5" />
+                          </svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="12" cy="12" r="10" /><path d="M15 9l-6 6M9 9l6 6" />
+                          </svg>
+                        )}
+                        {testResult.message}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action buttons */}
+                  <div className="mt-auto pt-5 flex items-center gap-3">
+                    <button onClick={handleSave} disabled={saving}
+                      className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white shadow-soft hover:bg-accent-hover transition-colors disabled:opacity-50">
+                      {saving ? "保存中…" : "保存配置"}
+                    </button>
+                    <button onClick={handleTestConnection} disabled={testing}
+                      className="rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2 text-sm text-ink-700 hover:bg-surface-tertiary transition-colors disabled:opacity-50">
+                      {testing ? "测试中…" : "测试连接"}
+                    </button>
+                    <button
+                      onClick={handleToggleConnect}
+                      disabled={connecting || effectiveStatus === "connecting"}
+                      className={`rounded-xl border px-4 py-2 text-sm transition-colors disabled:opacity-50 ${
+                        effectiveStatus === "connected"
+                          ? "border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
+                          : "border-ink-900/10 bg-surface-secondary text-ink-700 hover:bg-surface-tertiary"
+                      }`}>
+                      {connecting || effectiveStatus === "connecting" ? "连接中…" :
+                       effectiveStatus === "connected" ? "断开" : "连接"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Footer */}
+          <div className="flex justify-end px-5 py-3 border-t border-ink-900/6 flex-shrink-0">
+            <Dialog.Close asChild>
+              <button className="rounded-xl bg-accent px-5 py-2 text-sm font-medium text-white shadow-soft hover:bg-accent-hover transition-colors">
+                完成
+              </button>
+            </Dialog.Close>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}

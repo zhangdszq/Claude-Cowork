@@ -33,7 +33,7 @@ const DEFAULT_CWD = process.cwd();
 
 // ─── Codex binary resolution ─────────────────────────────────
 
-function getCodexBinaryPath(): string | undefined {
+export function getCodexBinaryPath(): string | undefined {
   if (app.isPackaged) {
     // In packaged app, the vendor directory is asar-unpacked
     const platform = process.platform === "darwin" ? "apple-darwin" : "unknown-linux-musl";

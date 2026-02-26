@@ -3,10 +3,21 @@ import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
 import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources } from "./test.js";
 import { handleClientEvent, sessions } from "./ipc-handlers.js";
+// Inject the shared SessionStore into the DingTalk bot module so it uses the same DB connection
+setSessionStore(sessions);
 import type { ClientEvent } from "./types.js";
 import "./libs/claude-settings.js";
 import { loadUserSettings, saveUserSettings, type UserSettings } from "./libs/user-settings.js";
 import { loadAssistantsConfig, saveAssistantsConfig, type AssistantsConfig } from "./libs/assistants-config.js";
+import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig } from "./libs/bot-config.js";
+import {
+  startDingtalkBot,
+  stopDingtalkBot,
+  getDingtalkBotStatus,
+  onDingtalkBotStatusChange,
+  setSessionStore,
+  type DingtalkBotOptions,
+} from "./libs/dingtalk-bot.js";
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { runEnvironmentChecks, validateApiConfig } from "./libs/env-check.js";
 import { openAILogin, openAILogout, getOpenAIAuthStatus, ensureCodexAuthSync } from "./libs/openai-auth.js";
@@ -47,6 +58,37 @@ function startMemoryJanitor(): void {
 }
 
 const JANITOR_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 h
+
+// ─── Auto-connect bots on startup ────────────────────────────
+async function autoConnectBots(win: BrowserWindow): Promise<void> {
+    const config = loadAssistantsConfig();
+    for (const assistant of config.assistants) {
+        const dingtalk = assistant.bots?.dingtalk as DingtalkBotConfig | undefined;
+        if (dingtalk?.connected && dingtalk.appKey && dingtalk.appSecret) {
+            console.log(`[AutoConnect] Starting DingTalk bot for assistant: ${assistant.name}`);
+            try {
+                await startDingtalkBot({
+                    appKey: dingtalk.appKey,
+                    appSecret: dingtalk.appSecret,
+                    assistantId: assistant.id,
+                    assistantName: assistant.name,
+                    persona: assistant.persona,
+                    provider: assistant.provider,
+                    model: assistant.model,
+                    defaultCwd: assistant.defaultCwd,
+                });
+                console.log(`[AutoConnect] DingTalk bot connected for: ${assistant.name}`);
+            } catch (err) {
+                console.error(`[AutoConnect] Failed to connect DingTalk bot for ${assistant.name}:`, err);
+                win.webContents.send("dingtalk-bot-status", {
+                    assistantId: assistant.id,
+                    status: "error",
+                    detail: err instanceof Error ? err.message : String(err),
+                });
+            }
+        }
+    }
+}
 
 app.on("ready", async () => {
     // Ensure app name shows correctly in dev mode (overrides the default "Electron")
@@ -125,6 +167,9 @@ app.on("ready", async () => {
         console.warn("[Memory] Failed to register compaction task:", e);
     }
 
+    // Auto-connect all bots that were previously connected
+    autoConnectBots(mainWindow);
+
     ipcMainHandle("getStaticData", () => {
         return getStaticData();
     });
@@ -181,6 +226,46 @@ app.on("ready", async () => {
 
     ipcMainHandle("save-assistants-config", (_: any, config: AssistantsConfig) => {
         return saveAssistantsConfig(config);
+    });
+
+    // Bot config handlers
+    ipcMainHandle("get-bot-config", () => {
+        return loadBotConfig();
+    });
+
+    ipcMainHandle("save-bot-config", (_: any, config: BotConfig) => {
+        return saveBotConfig(config);
+    });
+
+    ipcMainHandle("test-bot-connection", async (_: any, platformConfig: BotPlatformConfig) => {
+        return await testBotConnection(platformConfig);
+    });
+
+    // DingTalk bot lifecycle handlers
+    ipcMainHandle("start-dingtalk-bot", async (_: any, input: DingtalkBotOptions) => {
+        try {
+            await startDingtalkBot(input);
+            return { status: getDingtalkBotStatus(input.assistantId) as DingtalkBotStatus };
+        } catch (err) {
+            const detail = err instanceof Error ? err.message : String(err);
+            return { status: "error" as DingtalkBotStatus, detail };
+        }
+    });
+
+    ipcMainHandle("stop-dingtalk-bot", (_: any, assistantId: string) => {
+        stopDingtalkBot(assistantId);
+    });
+
+    ipcMainHandle("get-dingtalk-bot-status", (_: any, assistantId: string) => {
+        return { status: getDingtalkBotStatus(assistantId) as DingtalkBotStatus };
+    });
+
+    // Forward DingTalk bot status changes to renderer
+    onDingtalkBotStatusChange((assistantId, status, detail) => {
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+            win.webContents.send("dingtalk-bot-status", { assistantId, status, detail });
+        }
     });
 
     // Scheduler handlers

@@ -120,6 +120,7 @@ type AssistantConfig = {
     skillNames?: string[];
     persona?: string;
     defaultCwd?: string;
+    bots?: Partial<Record<BotPlatformType, BotPlatformConfig>>;
 }
 
 type AssistantsConfig = {
@@ -171,6 +172,78 @@ type MemoryListResult = {
     dailies: MemoryFileInfo[];
 }
 
+type BotPlatformType = "telegram" | "feishu" | "wecom" | "discord" | "dingtalk";
+
+type TelegramBotConfig = {
+    platform: "telegram";
+    token: string;
+    proxy?: string;
+    connected: boolean;
+};
+
+type FeishuBotConfig = {
+    platform: "feishu";
+    appId: string;
+    appSecret: string;
+    domain: "feishu" | "lark";
+    connected: boolean;
+};
+
+type WecomBotConfig = {
+    platform: "wecom";
+    corpId: string;
+    agentId: string;
+    secret: string;
+    connected: boolean;
+};
+
+type DiscordBotConfig = {
+    platform: "discord";
+    token: string;
+    connected: boolean;
+};
+
+type DingtalkBotConfig = {
+    platform: "dingtalk";
+    appKey: string;
+    appSecret: string;
+    connected: boolean;
+};
+
+type BotPlatformConfig =
+    | TelegramBotConfig
+    | FeishuBotConfig
+    | WecomBotConfig
+    | DiscordBotConfig
+    | DingtalkBotConfig;
+
+type BotConfig = {
+    platforms: Partial<Record<BotPlatformType, BotPlatformConfig>>;
+};
+
+type BotTestResult = {
+    success: boolean;
+    message: string;
+};
+
+type DingtalkBotStatus = "disconnected" | "connecting" | "connected" | "error";
+
+type StartDingtalkBotInput = {
+    appKey: string;
+    appSecret: string;
+    assistantId: string;
+    assistantName: string;
+    persona?: string;
+    provider?: "claude" | "codex";
+    model?: string;
+    defaultCwd?: string;
+};
+
+type DingtalkBotStatusResult = {
+    status: DingtalkBotStatus;
+    detail?: string;
+};
+
 type UnsubscribeFunction = () => void;
 
 type EventPayloadMapping = {
@@ -199,6 +272,12 @@ type EventPayloadMapping = {
     "install-skill": { success: boolean; skillName: string; message: string };
     "get-assistants-config": AssistantsConfig;
     "save-assistants-config": AssistantsConfig;
+    "get-bot-config": BotConfig;
+    "save-bot-config": BotConfig;
+    "test-bot-connection": BotTestResult;
+    "start-dingtalk-bot": DingtalkBotStatusResult;
+    "stop-dingtalk-bot": void;
+    "get-dingtalk-bot-status": DingtalkBotStatusResult;
     "is-sidecar-running": boolean;
     // OpenAI Codex OAuth
     "openai-login": OpenAILoginResult;
@@ -250,6 +329,15 @@ interface Window {
         installSkill: (url: string) => Promise<{ success: boolean; skillName: string; message: string }>;
         getAssistantsConfig: () => Promise<AssistantsConfig>;
         saveAssistantsConfig: (config: AssistantsConfig) => Promise<AssistantsConfig>;
+        // Bot config
+        getBotConfig: () => Promise<BotConfig>;
+        saveBotConfig: (config: BotConfig) => Promise<BotConfig>;
+        testBotConnection: (platformConfig: BotPlatformConfig) => Promise<BotTestResult>;
+        // DingTalk bot lifecycle
+        startDingtalkBot: (input: StartDingtalkBotInput) => Promise<DingtalkBotStatusResult>;
+        stopDingtalkBot: (assistantId: string) => Promise<void>;
+        getDingtalkBotStatus: (assistantId: string) => Promise<DingtalkBotStatusResult>;
+        onDingtalkBotStatus: (cb: (assistantId: string, status: DingtalkBotStatus, detail?: string) => void) => UnsubscribeFunction;
         // OpenAI Codex OAuth
         openaiLogin: () => Promise<OpenAILoginResult>;
         openaiLogout: () => Promise<{ success: boolean }>;

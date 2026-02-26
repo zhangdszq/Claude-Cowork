@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { BotConfigModal } from "./BotConfigModal";
+
 
 interface AssistantManagerModalProps {
   open: boolean;
@@ -57,6 +59,7 @@ export function AssistantManagerModal({
   const [isNew, setIsNew] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
   const [skillSearch, setSkillSearch] = useState("");
+  const [botTargetAssistant, setBotTargetAssistant] = useState<AssistantConfig | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -165,6 +168,7 @@ export function AssistantManagerModal({
   );
 
   return (
+    <>
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-900/20 backdrop-blur-sm" />
@@ -450,6 +454,18 @@ export function AssistantManagerModal({
                             </div>
                             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
+                                onClick={() => setBotTargetAssistant(assistant)}
+                                className="rounded-lg p-1.5 text-muted hover:bg-ink-900/5 hover:text-ink-700 transition-colors"
+                                title="机器人对话"
+                              >
+                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                                  <rect x="5" y="11" width="14" height="9" rx="2" />
+                                  <path d="M12 2a3 3 0 0 1 3 3v6H9V5a3 3 0 0 1 3-3z" />
+                                  <circle cx="9.5" cy="15.5" r="1" fill="currentColor" stroke="none" />
+                                  <circle cx="14.5" cy="15.5" r="1" fill="currentColor" stroke="none" />
+                                </svg>
+                              </button>
+                              <button
                                 onClick={() => startEditWithReset(assistant)}
                                 className="rounded-lg p-1.5 text-muted hover:bg-ink-900/5 hover:text-ink-700 transition-colors"
                                 title="编辑"
@@ -494,13 +510,24 @@ export function AssistantManagerModal({
                           )}
 
                           <div className="mt-auto pt-3">
-                            <div className="flex items-center gap-1.5">
-                              <svg viewBox="0 0 24 24" className="h-3 w-3 text-muted" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                              </svg>
-                              <span className="text-[11px] text-muted">
-                                {skillCount > 0 ? `${skillCount} 个技能` : "无技能"}
-                              </span>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <svg viewBox="0 0 24 24" className="h-3 w-3 text-muted" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                </svg>
+                                <span className="text-[11px] text-muted">
+                                  {skillCount > 0 ? `${skillCount} 个技能` : "无技能"}
+                                </span>
+                              </div>
+                              {(() => {
+                                const botCount = Object.values(assistant.bots ?? {}).filter((b: any) => b?.connected).length;
+                                return botCount > 0 ? (
+                                  <div className="flex items-center gap-1">
+                                    <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                    <span className="text-[11px] text-emerald-600">{botCount} 机器人</span>
+                                  </div>
+                                ) : null;
+                              })()}
                             </div>
                           </div>
                         </div>
@@ -553,5 +580,33 @@ export function AssistantManagerModal({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+    {botTargetAssistant && (
+      <BotConfigModal
+        open={!!botTargetAssistant}
+        onOpenChange={(v) => { if (!v) setBotTargetAssistant(null); }}
+        assistantId={botTargetAssistant.id}
+        assistantName={botTargetAssistant.name}
+        provider={botTargetAssistant.provider}
+        model={botTargetAssistant.model}
+        defaultCwd={botTargetAssistant.defaultCwd}
+        initialBots={(botTargetAssistant.bots ?? {}) as Partial<Record<BotPlatformType, BotPlatformConfig>>}
+        onSave={async (bots) => {
+          const updated: AssistantConfig = { ...botTargetAssistant, bots: bots as any };
+          const nextList = assistants.map((a) => a.id === updated.id ? updated : a);
+          try {
+            const saved = await window.electron.saveAssistantsConfig({
+              assistants: nextList,
+              defaultAssistantId: nextList[0]?.id,
+            });
+            setAssistants(saved.assistants);
+            setBotTargetAssistant(updated);
+            onAssistantsChanged?.();
+          } catch (err) {
+            console.error("Failed to save bot config:", err);
+          }
+        }}
+      />
+    )}
+    </>
   );
 }

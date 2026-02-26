@@ -10,6 +10,8 @@ export type AssistantConfig = {
   model?: string;
   skillNames?: string[];
   persona?: string;
+  defaultCwd?: string;
+  bots?: Record<string, unknown>;
 };
 
 export type AssistantsConfig = {
@@ -84,6 +86,7 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
         ? item.skillNames.filter(Boolean).map((name) => String(name))
         : [],
       persona: item.persona ? String(item.persona) : undefined,
+      bots: item.bots && typeof item.bots === "object" ? item.bots : undefined,
     }));
 
   if (assistants.length === 0) {
