@@ -96,6 +96,7 @@ type FormState = {
     dmPolicy: "open" | "allowlist";
     groupPolicy: "open" | "allowlist";
     allowFrom: string;
+    ownerStaffIds: string;
     maxConnectionAttempts: string;
   };
 };
@@ -116,6 +117,7 @@ function buildDefaultForm(): FormState {
       dmPolicy: "open",
       groupPolicy: "open",
       allowFrom: "",
+      ownerStaffIds: "",
       maxConnectionAttempts: "10",
     },
   };
@@ -151,6 +153,7 @@ function botsToForm(bots: Partial<Record<BotPlatformType, BotPlatformConfig>>): 
       dmPolicy: dt.dmPolicy ?? "open",
       groupPolicy: dt.groupPolicy ?? "open",
       allowFrom: (dt.allowFrom ?? []).join(","),
+      ownerStaffIds: (dt.ownerStaffIds ?? []).join(","),
       maxConnectionAttempts: String(dt.maxConnectionAttempts ?? 10),
     };
   }
@@ -186,6 +189,9 @@ function formToPlatformConfig(
     groupPolicy: form.dingtalk.groupPolicy,
     allowFrom: form.dingtalk.allowFrom
       ? form.dingtalk.allowFrom.split(",").map((s) => s.trim()).filter(Boolean)
+      : undefined,
+    ownerStaffIds: form.dingtalk.ownerStaffIds
+      ? form.dingtalk.ownerStaffIds.split(",").map((s) => s.trim()).filter(Boolean)
       : undefined,
     maxConnectionAttempts: parseInt(form.dingtalk.maxConnectionAttempts, 10) || undefined,
     connected,
@@ -345,6 +351,9 @@ export function BotConfigModal({
             groupPolicy: dt.groupPolicy,
             allowFrom: dt.allowFrom
               ? dt.allowFrom.split(",").map((s) => s.trim()).filter(Boolean)
+              : undefined,
+            ownerStaffIds: dt.ownerStaffIds
+              ? dt.ownerStaffIds.split(",").map((s) => s.trim()).filter(Boolean)
               : undefined,
             maxConnectionAttempts: parseInt(dt.maxConnectionAttempts, 10) || undefined,
           });
@@ -642,6 +651,10 @@ export function BotConfigModal({
                                   value={form.dingtalk.allowFrom} onChange={(e) => updateDingtalk({ allowFrom: e.target.value })} />
                               </FormField>
                             )}
+                            <FormField label="我的 StaffId（主动推送）" hint="填入你的钉钉 staffId，机器人才能主动发消息给你（逗号分隔支持多人）">
+                              <input className={INPUT_CLASS} placeholder="staff_xxxxx"
+                                value={form.dingtalk.ownerStaffIds} onChange={(e) => updateDingtalk({ ownerStaffIds: e.target.value })} />
+                            </FormField>
                             <FormField label="最大重连次数" hint="（默认 10）">
                               <input type="number" min="1" max="100" className={INPUT_CLASS} placeholder="10"
                                 value={form.dingtalk.maxConnectionAttempts} onChange={(e) => updateDingtalk({ maxConnectionAttempts: e.target.value })} />

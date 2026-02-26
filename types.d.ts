@@ -231,6 +231,11 @@ type DingtalkBotConfig = {
     maxReconnectDelay?: number;
     /** Jitter factor 0–1 (default: 0.3) */
     reconnectJitter?: number;
+    /**
+     * Owner staff ID(s) for proactive push messages.
+     * Fill in your own staffId so the bot can notify you proactively.
+     */
+    ownerStaffIds?: string[];
     connected: boolean;
 };
 
@@ -274,6 +279,19 @@ type StartDingtalkBotInput = {
     initialReconnectDelay?: number;
     maxReconnectDelay?: number;
     reconnectJitter?: number;
+    ownerStaffIds?: string[];
+};
+
+type SendProactiveDingtalkInput = {
+    assistantId: string;
+    text: string;
+    staffIds?: string[];
+    title?: string;
+};
+
+type SendProactiveDingtalkResult = {
+    ok: boolean;
+    error?: string;
 };
 
 type DingtalkBotStatusResult = {
@@ -315,6 +333,7 @@ type EventPayloadMapping = {
     "start-dingtalk-bot": DingtalkBotStatusResult;
     "stop-dingtalk-bot": void;
     "get-dingtalk-bot-status": DingtalkBotStatusResult;
+    "send-proactive-dingtalk": SendProactiveDingtalkResult;
     "is-sidecar-running": boolean;
     // OpenAI Codex OAuth
     "openai-login": OpenAILoginResult;
@@ -375,6 +394,7 @@ interface Window {
         stopDingtalkBot: (assistantId: string) => Promise<void>;
         getDingtalkBotStatus: (assistantId: string) => Promise<DingtalkBotStatusResult>;
         onDingtalkBotStatus: (cb: (assistantId: string, status: DingtalkBotStatus, detail?: string) => void) => UnsubscribeFunction;
+        sendProactiveDingtalk: (input: SendProactiveDingtalkInput) => Promise<SendProactiveDingtalkResult>;
         // OpenAI Codex OAuth
         openaiLogin: () => Promise<OpenAILoginResult>;
         openaiLogout: () => Promise<{ success: boolean }>;

@@ -71,6 +71,11 @@ export interface DingtalkBotOptions {
   maxReconnectDelay?: number;
   /** Jitter factor 0–1 (default: 0.3) */
   reconnectJitter?: number;
+  /**
+   * Owner staff ID(s) for proactive push messages.
+   * Used by sendProactiveDingtalkMessage() — e.g. notify yourself after a task completes.
+   */
+  ownerStaffIds?: string[];
 }
 
 interface StreamFrame {
@@ -422,6 +427,87 @@ export function getDingtalkBotStatus(assistantId: string): DingtalkBotStatus {
   return pool.get(assistantId)?.status ?? "disconnected";
 }
 
+// ─── Proactive (outbound) messaging ──────────────────────────────────────────
+
+export interface SendProactiveOptions {
+  /** Staff IDs to send to. Falls back to ownerStaffIds configured on the bot. */
+  staffIds?: string[];
+  title?: string;
+}
+
+/**
+ * Proactively send a markdown message to one or more DingTalk users.
+ * Requires the bot to be connected (to obtain appKey/appSecret) OR
+ * pass credentials directly.
+ */
+export async function sendProactiveDingtalkMessage(
+  assistantId: string,
+  text: string,
+  opts?: SendProactiveOptions,
+): Promise<{ ok: boolean; error?: string }> {
+  const conn = pool.get(assistantId);
+  if (!conn) {
+    return { ok: false, error: `钉钉 Bot (${assistantId}) 未连接` };
+  }
+
+  const botOpts = conn.getOptions();
+  const robotCode = botOpts.robotCode ?? botOpts.appKey;
+  const staffIds = opts?.staffIds?.length
+    ? opts.staffIds
+    : (botOpts.ownerStaffIds ?? []);
+
+  if (staffIds.length === 0) {
+    return { ok: false, error: "未配置接收者 staffId（ownerStaffIds），无法主动推送" };
+  }
+
+  try {
+    const token = await getAccessToken(botOpts.appKey, botOpts.appSecret);
+    const resp = await fetch(`${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-acs-dingtalk-access-token": token,
+      },
+      body: JSON.stringify({
+        robotCode,
+        userIds: staffIds,
+        msgKey: "sampleMarkdown",
+        msgParam: JSON.stringify({
+          title: opts?.title ?? botOpts.assistantName,
+          text,
+        }),
+      }),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      console.error(`[DingTalk] Proactive send failed: HTTP ${resp.status} ${errText}`);
+      return { ok: false, error: `发送失败 HTTP ${resp.status}: ${errText.slice(0, 200)}` };
+    }
+
+    console.log(`[DingTalk] Proactive message sent to ${staffIds.join(",")}`);
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * Send a proactive message to the owner of EVERY connected bot.
+ * Useful for broadcast notifications (e.g. "screenshot analysis done").
+ */
+export async function broadcastDingtalkMessage(
+  text: string,
+  opts?: SendProactiveOptions,
+): Promise<void> {
+  for (const [assistantId] of pool) {
+    await sendProactiveDingtalkMessage(assistantId, text, opts).catch((err) =>
+      console.error(`[DingTalk] Broadcast failed for ${assistantId}:`, err),
+    );
+  }
+}
+
 // ─── Conversation history & session management ────────────────────────────────
 
 const histories = new Map<string, ConvMessage[]>();
@@ -507,6 +593,10 @@ class DingtalkConnection {
   private reconnectAttempts = 0;
 
   constructor(private opts: DingtalkBotOptions) {}
+
+  getOptions(): DingtalkBotOptions {
+    return this.opts;
+  }
 
   async start(): Promise<void> {
     this.stopped = false;

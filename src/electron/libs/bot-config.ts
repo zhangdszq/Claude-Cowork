@@ -61,6 +61,11 @@ export type DingtalkBotConfig = {
   maxReconnectDelay?: number;
   /** Jitter factor 0–1 (default: 0.3) */
   reconnectJitter?: number;
+  /**
+   * Owner staff ID(s) for proactive push messages.
+   * Fill in your own staffId so the bot can notify you proactively.
+   */
+  ownerStaffIds?: string[];
   connected: boolean;
 };
 

@@ -16,6 +16,7 @@ import {
   getDingtalkBotStatus,
   onDingtalkBotStatusChange,
   setSessionStore,
+  sendProactiveDingtalkMessage,
   type DingtalkBotOptions,
 } from "./libs/dingtalk-bot.js";
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
@@ -89,6 +90,7 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
                     initialReconnectDelay: dingtalk.initialReconnectDelay,
                     maxReconnectDelay: dingtalk.maxReconnectDelay,
                     reconnectJitter: dingtalk.reconnectJitter,
+                    ownerStaffIds: dingtalk.ownerStaffIds,
                 });
                 console.log(`[AutoConnect] DingTalk bot connected for: ${assistant.name}`);
             } catch (err) {
@@ -271,6 +273,13 @@ app.on("ready", async () => {
 
     ipcMainHandle("get-dingtalk-bot-status", (_: any, assistantId: string) => {
         return { status: getDingtalkBotStatus(assistantId) as DingtalkBotStatus };
+    });
+
+    ipcMainHandle("send-proactive-dingtalk", async (_: any, input: { assistantId: string; text: string; staffIds?: string[]; title?: string }) => {
+        return await sendProactiveDingtalkMessage(input.assistantId, input.text, {
+            staffIds: input.staffIds,
+            title: input.title,
+        });
     });
 
     // Forward DingTalk bot status changes to renderer
