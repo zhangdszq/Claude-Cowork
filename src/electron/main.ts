@@ -54,7 +54,11 @@ app.on("ready", async () => {
 
     // Set Dock icon on macOS (required in dev mode; production uses .icns from app bundle)
     if (process.platform === "darwin" && app.dock) {
-        app.dock.setIcon(getIconPath());
+        try {
+            app.dock.setIcon(getIconPath());
+        } catch (e) {
+            console.warn("[main] Failed to set dock icon:", e);
+        }
     }
 
     // Run memory janitor once on startup, then every 24 h
