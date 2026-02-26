@@ -863,19 +863,18 @@ export async function sendProactiveMediaDingtalk(
       ? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
       : `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
 
+    // NOTE: sampleImageMsg.photoURL requires an HTTP URL — media_id is NOT a URL.
+    // Use sampleFile for image/video/file; use sampleAudio for voice only.
     let msgKey: string;
     let msgParam: string;
-    if (detectedType === "image") {
-      msgKey = "sampleImageMsg";
-      msgParam = JSON.stringify({ photoURL: mediaId });
-    } else if (detectedType === "voice") {
+    const fileName2 = filePath.split("/").pop() ?? "file";
+    if (detectedType === "voice") {
       msgKey = "sampleAudio";
       msgParam = JSON.stringify({ mediaId, duration: "0" });
     } else {
-      const fileName = filePath.split("/").pop() ?? "file";
-      const fileExt = ext || (detectedType === "video" ? "mp4" : "bin");
+      const fileExt = ext || (detectedType === "image" ? "png" : detectedType === "video" ? "mp4" : "bin");
       msgKey = "sampleFile";
-      msgParam = JSON.stringify({ mediaId, fileName, fileType: fileExt });
+      msgParam = JSON.stringify({ mediaId, fileName: fileName2, fileType: fileExt });
     }
 
     const payload: Record<string, unknown> = { robotCode, msgKey, msgParam };
@@ -1445,12 +1444,12 @@ class DingtalkConnection {
         return `媒体上传失败，请检查应用权限或网络（oapi.dingtalk.com）`;
       }
 
-      // 2a. Send via sessionWebhook if still valid (simplest, most reliable)
+      // 2a. Send via sessionWebhook (NO auth header — webhook URL is self-authenticating)
       const webhookExpired =
         msg.sessionWebhookExpiredTime && Date.now() > msg.sessionWebhookExpiredTime;
       if (!webhookExpired && msg.sessionWebhook) {
         try {
-          const token = await getAccessToken(this.opts.appKey, this.opts.appSecret);
+          // session webhook supports media_id directly for image/voice/file
           const body = mediaType === "image"
             ? { msgtype: "image", image: { media_id: mediaId } }
             : mediaType === "voice"
@@ -1459,24 +1458,29 @@ class DingtalkConnection {
 
           const resp = await fetch(msg.sessionWebhook, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-acs-dingtalk-access-token": token,
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
           });
-          cleanup();
-          if (resp.ok) return `文件已发送: ${path.basename(filePath)}`;
-          const errText = await resp.text();
-          console.error(`[DingTalk] Session webhook send failed: ${errText}`);
+          const respText = await resp.text();
+          if (resp.ok) {
+            console.log(`[DingTalk] File sent via session webhook: ${path.basename(filePath)}`);
+            cleanup();
+            return `文件已发送: ${path.basename(filePath)}`;
+          }
+          console.error(`[DingTalk] Session webhook send failed (${resp.status}): ${respText}`);
           // Fall through to proactive API
         } catch (err) {
           console.error("[DingTalk] Session webhook send error:", err);
           // Fall through to proactive API
         }
+      } else {
+        console.log(`[DingTalk] Session webhook skipped (expired=${!!webhookExpired})`);
       }
 
       // 2b. Fall back to proactive API
+      // NOTE: sampleImageMsg requires an HTTP URL in photoURL — media_id is NOT a URL.
+      // Use sampleFile for all types; users can tap to open images. This is the only
+      // safe option when session webhook is unavailable.
       const robotCode = this.opts.robotCode ?? this.opts.appKey;
       const target = msg.senderStaffId ?? msg.senderId ?? "";
       const isGroup = msg.conversationType === "2";
@@ -1486,14 +1490,13 @@ class DingtalkConnection {
         ? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
         : `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
 
-      const msgKey = mediaType === "image" ? "sampleImageMsg"
-        : mediaType === "voice" ? "sampleAudio"
-        : "sampleFile";
-      const msgParam = mediaType === "image"
-        ? JSON.stringify({ photoURL: mediaId })
-        : mediaType === "voice"
+      const fileName = path.basename(filePath);
+      const fileExt = ext || "png";
+      // Use sampleAudio for voice; sampleFile for everything else (including images)
+      const msgKey = mediaType === "voice" ? "sampleAudio" : "sampleFile";
+      const msgParam = mediaType === "voice"
         ? JSON.stringify({ mediaId, duration: "1" })
-        : JSON.stringify({ mediaId, fileName: path.basename(filePath), fileType: ext || "bin" });
+        : JSON.stringify({ mediaId, fileName, fileType: fileExt });
 
       const payload: Record<string, unknown> = { robotCode, msgKey, msgParam };
       if (isGroup) {
@@ -1512,10 +1515,13 @@ class DingtalkConnection {
           },
           body: JSON.stringify(payload),
         });
+        const respText = await resp.text();
         cleanup();
-        if (resp.ok) return `文件已发送: ${path.basename(filePath)}`;
-        const errText = await resp.text();
-        return `发送失败 (HTTP ${resp.status}): ${errText.slice(0, 200)}`;
+        if (resp.ok) {
+          console.log(`[DingTalk] File sent via proactive API: ${fileName}`);
+          return `文件已发送: ${fileName}`;
+        }
+        return `发送失败 (HTTP ${resp.status}): ${respText.slice(0, 200)}`;
       } catch (err) {
         cleanup();
         return `发送异常: ${err instanceof Error ? err.message : String(err)}`;
