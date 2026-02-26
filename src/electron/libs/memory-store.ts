@@ -8,7 +8,7 @@
  * On new session start the store assembles a context string that is injected
  * into the agent prompt so it "remembers" across conversations.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, readdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
@@ -80,25 +80,42 @@ export function readRecentDailyMemories(): { today: string; yesterday: string; t
 
 // ─── Write ───────────────────────────────────────────────────
 
+/**
+ * Atomic write: write to a .tmp file then rename into place.
+ * On POSIX systems rename() is atomic; on Windows it falls back to a
+ * direct overwrite (rename throws if dest exists, so we remove first).
+ */
+function atomicWrite(filePath: string, content: string): void {
+  const tmp = filePath + ".tmp";
+  writeFileSync(tmp, content, "utf8");
+  try {
+    renameSync(tmp, filePath);
+  } catch {
+    // Windows: destination may already exist
+    try { unlinkSync(filePath); } catch { /* ignore */ }
+    renameSync(tmp, filePath);
+  }
+}
+
 /** Overwrite the long-term MEMORY.md */
 export function writeLongTermMemory(content: string): void {
   ensureDirs();
-  writeFileSync(LONG_TERM_FILE, content, "utf8");
+  atomicWrite(LONG_TERM_FILE, content);
 }
 
 /** Append content to today's daily memory (or a specific date) */
 export function appendDailyMemory(content: string, date?: string): void {
   ensureDirs();
-  const d = date ?? todayStr();
-  const p = dailyPath(d);
-  const prefix = existsSync(p) ? "\n" : "";
-  appendFileSync(p, prefix + content, "utf8");
+  const p = dailyPath(date ?? todayStr());
+  const existing = existsSync(p) ? readFileSync(p, "utf8") : "";
+  const next = existing ? existing + "\n" + content : content;
+  atomicWrite(p, next);
 }
 
 /** Overwrite a daily memory file */
 export function writeDailyMemory(content: string, date: string): void {
   ensureDirs();
-  writeFileSync(dailyPath(date), content, "utf8");
+  atomicWrite(dailyPath(date), content);
 }
 
 // ─── List ────────────────────────────────────────────────────
@@ -117,8 +134,8 @@ export function listDailyMemories(): MemoryFileInfo[] {
   return files
     .map((f) => {
       const p = join(DAILY_DIR, f);
-      const stat = existsSync(p) ? readFileSync(p).length : 0;
-      return { date: f.replace(".md", ""), path: p, size: stat };
+      const content = existsSync(p) ? readFileSync(p, "utf8") : "";
+      return { date: f.replace(".md", ""), path: p, size: Buffer.byteLength(content, "utf8") };
     })
     .sort((a, b) => b.date.localeCompare(a.date));
 }
@@ -128,10 +145,11 @@ export function getMemorySummary(): { longTermSize: number; dailyCount: number; 
   const lt = readLongTermMemory();
   const dailies = listDailyMemories();
   const dailyTotalSize = dailies.reduce((sum, d) => sum + d.size, 0);
+  const ltSize = Buffer.byteLength(lt, "utf8");
   return {
-    longTermSize: lt.length,
+    longTermSize: ltSize,
     dailyCount: dailies.length,
-    totalSize: lt.length + dailyTotalSize,
+    totalSize: ltSize + dailyTotalSize,
   };
 }
 

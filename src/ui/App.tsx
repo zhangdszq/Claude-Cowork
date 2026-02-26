@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { useIPC } from "./hooks/useIPC";
 import { useAppStore } from "./store/useAppStore";
@@ -6,27 +7,193 @@ import type { ServerEvent } from "./types";
 import { Sidebar } from "./components/Sidebar";
 import { StartSessionModal } from "./components/StartSessionModal";
 import { PromptInput, usePromptActions } from "./components/PromptInput";
-import { MessageCard } from "./components/EventCard";
+import { MessageCard, ProcessGroup } from "./components/EventCard";
 import { MessageSkeleton } from "./components/MessageSkeleton";
 import { McpSkillModal } from "./components/McpSkillModal";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { DecisionPanel } from "./components/DecisionPanel";
 import { ChapterSelector, parseChapters, isChapterSelectionText } from "./components/ChapterSelector";
-import { SchedulerModal } from "./components/SchedulerModal";
+import { WorkspacePicker } from "./components/WorkspacePicker";
+import { WorkspacePanel } from "./components/WorkspacePanel";
 import MDContent from "./render/markdown";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 
 const ONBOARDING_COMPLETE_KEY = "vk-cowork-onboarding-complete";
+const ASSISTANT_CWDS_KEY = "vk-cowork-assistant-cwds";
+
+function ThinkingDots() {
+  return (
+    <span className="inline-flex gap-[2px] ml-0.5">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="inline-block w-[3px] h-[3px] rounded-full bg-current opacity-60"
+          style={{ animation: `thinking-dot 1.2s ease-in-out ${i * 0.2}s infinite` }}
+        />
+      ))}
+    </span>
+  );
+}
+
+// ─── Per-assistant workspace persistence (localStorage) ───────────────────────
+function getAssistantCwds(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(ASSISTANT_CWDS_KEY) || "{}"); }
+  catch { return {}; }
+}
+function saveAssistantCwdLocal(assistantId: string, cwd: string) {
+  const map = getAssistantCwds();
+  map[assistantId] = cwd;
+  localStorage.setItem(ASSISTANT_CWDS_KEY, JSON.stringify(map));
+}
+function loadAssistantCwdLocal(assistantId: string | null): string {
+  if (!assistantId) return "";
+  return getAssistantCwds()[assistantId] ?? "";
+}
+
+// ─── WorkspaceDropdown ────────────────────────────────────────────────────────
+interface WorkspaceDropdownProps {
+  currentCwd: string;
+  onSelect: (path: string) => void;
+  onBrowse: () => void;
+}
+
+function WorkspaceDropdown({ currentCwd, onSelect, onBrowse }: WorkspaceDropdownProps) {
+  const [recentCwds, setRecentCwds] = useState<string[]>([]);
+
+  useEffect(() => {
+    window.electron.getRecentCwds(8).then(setRecentCwds).catch(console.error);
+  }, []);
+
+  const formatPath = (path: string) => {
+    const parts = path.split(/[\\/]+/).filter(Boolean);
+    return parts[parts.length - 1] || path;
+  };
+
+  const getPathParent = (path: string) => {
+    const parts = path.split(/[\\/]+/).filter(Boolean);
+    if (parts.length <= 1) return path;
+    return "/" + parts.slice(0, -1).join("/");
+  };
+
+  return (
+    <div className="absolute right-0 top-full z-50 mt-1.5 w-72 rounded-xl border border-ink-900/10 bg-white shadow-elevated overflow-hidden">
+      {recentCwds.length > 0 ? (
+        <div className="py-1.5">
+          <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-light">
+            最近使用
+          </div>
+          {recentCwds.slice(0, 6).map((path) => {
+            const isActive = currentCwd === path;
+            return (
+              <button
+                key={path}
+                onClick={() => onSelect(path)}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors ${
+                  isActive ? "bg-accent/8" : "hover:bg-surface-secondary"
+                }`}
+              >
+                <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
+                  isActive ? "bg-accent/15" : "bg-surface-tertiary"
+                }`}>
+                  <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 ${isActive ? "text-accent" : "text-muted"}`} fill="none" stroke="currentColor" strokeWidth="1.75">
+                    <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+                  </svg>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className={`text-xs font-medium truncate ${isActive ? "text-accent" : "text-ink-800"}`}>
+                    {formatPath(path)}
+                  </div>
+                  <div className="text-[10px] text-muted-light truncate">{getPathParent(path)}</div>
+                </div>
+                {isActive && (
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-accent" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="px-3 py-4 text-center text-xs text-muted">暂无最近工作区</div>
+      )}
+      <div className="border-t border-ink-900/8 p-1.5">
+        <button
+          onClick={onBrowse}
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-ink-700 hover:bg-surface-secondary transition-colors"
+        >
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-muted" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          浏览其他目录...
+        </button>
+      </div>
+    </div>
+  );
+}
 const SIDEBAR_WIDTH_KEY = "vk-cowork-sidebar-width";
-const MIN_SIDEBAR_WIDTH = 280;
+const MIN_SIDEBAR_WIDTH = 300;
 const MAX_SIDEBAR_WIDTH = 520;
 const DEFAULT_SIDEBAR_WIDTH = 340;
+const WORKSPACE_PANEL_WIDTH = 320;
 
 // 按 session 存储的 partialMessage 状态
 type SessionPartialState = {
   content: string;
   isVisible: boolean;
 };
+
+// ─── 消息分组：把连续的工具调用/结果归入"过程组" ──────────────────────────────
+import type { StreamMessage } from "./types";
+
+type MessageGroup =
+  | { type: "single"; message: StreamMessage; key: string }
+  | { type: "process"; messages: StreamMessage[]; key: string };
+
+function isProcessMessage(msg: StreamMessage): boolean {
+  const m = msg as any;
+  if (m.type === "user_prompt" || m.type === "skill_loaded") return false;
+  if (m.type === "system" || m.type === "result") return false;
+  if (m.type === "assistant") {
+    const content: any[] = m.message?.content ?? [];
+    const hasText = content.some((c: any) => c.type === "text");
+    const hasToolUse = content.some((c: any) => c.type === "tool_use");
+    const hasThinking = content.some((c: any) => c.type === "thinking");
+    // tool calls or pure thinking (no final text) → process
+    return hasToolUse || (hasThinking && !hasText);
+  }
+  if (m.type === "user") {
+    const content = m.message?.content;
+    return Array.isArray(content) && content.some((c: any) => c.type === "tool_result");
+  }
+  return false;
+}
+
+function groupMessages(messages: StreamMessage[]): MessageGroup[] {
+  const result: MessageGroup[] = [];
+  let bucket: StreamMessage[] = [];
+  let bucketStart = 0;
+
+  messages.forEach((msg, idx) => {
+    if (isProcessMessage(msg)) {
+      if (bucket.length === 0) bucketStart = idx;
+      bucket.push(msg);
+    } else {
+      if (bucket.length > 0) {
+        result.push({ type: "process", messages: bucket, key: `proc-${bucketStart}` });
+        bucket = [];
+      }
+      const key = ("uuid" in msg && msg.uuid) ? String(msg.uuid) : `msg-${idx}`;
+      result.push({ type: "single", message: msg, key });
+    }
+  });
+
+  if (bucket.length > 0) {
+    result.push({ type: "process", messages: bucket, key: `proc-${bucketStart}` });
+  }
+
+  return result;
+}
 
 function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -47,6 +214,18 @@ function App() {
   // 使用 Map 按 sessionId 存储每个 session 的 partial message 状态
   const partialMessagesRef = useRef<Map<string, string>>(new Map());
   const [partialMessages, setPartialMessages] = useState<Map<string, SessionPartialState>>(new Map());
+
+  // 打字机模拟：用于 Codex 等非流式后端
+  const [animatingMsgUuid, setAnimatingMsgUuid] = useState<string | null>(null);
+  const typewriterIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const typewriterPosRef = useRef(0);
+
+  // 组件卸载时清理打字机定时器
+  useEffect(() => {
+    return () => {
+      if (typewriterIntervalRef.current) clearInterval(typewriterIntervalRef.current);
+    };
+  }, []);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const raw = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
     if (!Number.isFinite(raw)) return DEFAULT_SIDEBAR_WIDTH;
@@ -73,9 +252,31 @@ function App() {
 
   // Assistants list for resolving assistant names
   const [assistantsList, setAssistantsList] = useState<AssistantConfig[]>([]);
-  useEffect(() => {
+  const refreshAssistantsList = useCallback(() => {
     window.electron.getAssistantsConfig().then((c) => setAssistantsList(c.assistants ?? [])).catch(console.error);
   }, []);
+  useEffect(() => {
+    refreshAssistantsList();
+  }, [refreshAssistantsList]);
+
+  // Save defaultCwd for the currently selected assistant
+  const saveAssistantDefaultCwd = useCallback(async (path: string) => {
+    const currentId = useAppStore.getState().selectedAssistantId;
+    if (!currentId) return;
+    const updated = assistantsList.map((a) =>
+      a.id === currentId ? { ...a, defaultCwd: path } : a
+    );
+    if (!updated.some((a) => a.id === currentId)) return;
+    try {
+      const saved = await window.electron.saveAssistantsConfig({
+        assistants: updated,
+        defaultAssistantId: updated[0]?.id,
+      });
+      setAssistantsList(saved.assistants);
+    } catch (err) {
+      console.error("Failed to save defaultCwd:", err);
+    }
+  }, [assistantsList]);
 
   // Helper function to extract partial message content
   const getPartialMessageContent = (eventMessage: any) => {
@@ -89,12 +290,24 @@ function App() {
   };
 
   // 更新指定 session 的 partial message
-  const updatePartialMessage = useCallback((sessionId: string, content: string, isVisible: boolean) => {
-    setPartialMessages(prev => {
-      const next = new Map(prev);
-      next.set(sessionId, { content, isVisible });
-      return next;
-    });
+  // forceFlush=true 用于 Claude streaming（IPC 事件可能被 React 18 批处理，需要强制刷新）
+  // forceFlush=false 用于打字机模拟（setInterval tick 已是独立事件循环，无需强制刷新）
+  const updatePartialMessage = useCallback((sessionId: string, content: string, isVisible: boolean, forceFlush = false) => {
+    if (forceFlush) {
+      flushSync(() => {
+        setPartialMessages(prev => {
+          const next = new Map(prev);
+          next.set(sessionId, { content, isVisible });
+          return next;
+        });
+      });
+    } else {
+      setPartialMessages(prev => {
+        const next = new Map(prev);
+        next.set(sessionId, { content, isVisible });
+        return next;
+      });
+    }
   }, []);
 
   // Clear partial message for a session
@@ -109,43 +322,82 @@ function App() {
 
   // Handle partial messages from stream events - 按 session 隔离
   const handlePartialMessages = useCallback((partialEvent: ServerEvent) => {
-    // Clear partial message when session stops (status changes to non-running)
+    // 会话结束时停止所有动画并清理
     if (partialEvent.type === "session.status") {
       const { sessionId, status } = partialEvent.payload;
       if (status !== "running") {
+        if (typewriterIntervalRef.current) {
+          clearInterval(typewriterIntervalRef.current);
+          typewriterIntervalRef.current = null;
+        }
+        setAnimatingMsgUuid(null);
         clearPartialMessage(sessionId);
       }
       return;
     }
 
-    if (partialEvent.type !== "stream.message" || partialEvent.payload.message.type !== "stream_event") return;
+    if (partialEvent.type !== "stream.message") return;
 
     const sessionId = partialEvent.payload.sessionId;
     const message = partialEvent.payload.message as any;
-    
-    if (message.event.type === "content_block_start") {
-      partialMessagesRef.current.set(sessionId, "");
-      updatePartialMessage(sessionId, "", true);
-      // 新的流式输出开始时，重置滚动状态，恢复自动滚动
-      isUserScrolledUpRef.current = false;
+
+    // ── Claude 原生流式（stream_event / content_block_delta）──────────────────
+    if (message.type === "stream_event") {
+      if (message.event.type === "content_block_start") {
+        partialMessagesRef.current.set(sessionId, "");
+        updatePartialMessage(sessionId, "", true, true);
+        isUserScrolledUpRef.current = false;
+      }
+      if (message.event.type === "content_block_delta") {
+        const currentContent = partialMessagesRef.current.get(sessionId) || "";
+        const newContent = currentContent + (getPartialMessageContent(message.event) || "");
+        partialMessagesRef.current.set(sessionId, newContent);
+        updatePartialMessage(sessionId, newContent, true, true); // flushSync 防止 React 18 批处理
+      }
+      if (message.event.type === "content_block_stop") {
+        const finalContent = partialMessagesRef.current.get(sessionId) || "";
+        updatePartialMessage(sessionId, finalContent, false, true);
+        setTimeout(() => clearPartialMessage(sessionId), 500);
+      }
+      return;
     }
 
-    if (message.event.type === "content_block_delta") {
-      const currentContent = partialMessagesRef.current.get(sessionId) || "";
-      const newContent = currentContent + (getPartialMessageContent(message.event) || "");
-      partialMessagesRef.current.set(sessionId, newContent);
-      updatePartialMessage(sessionId, newContent, true);
-    }
+    // ── Codex / 其他非流式后端：收到完整文本消息后模拟打字机 ──────────────────
+    if (message.type === "assistant" && message.uuid) {
+      const content: any[] = message.message?.content ?? [];
+      const textItem = content.find((c: any) => c.type === "text");
+      // 只对有实质内容的文本消息做打字机（短文本直接展示）
+      if (textItem?.text && textItem.text.length > 8) {
+        const fullText: string = textItem.text;
+        const msgUuid: string = message.uuid;
 
-    if (message.event.type === "content_block_stop") {
-      const finalContent = partialMessagesRef.current.get(sessionId) || "";
-      updatePartialMessage(sessionId, finalContent, false);
-      // 延迟清理
-      setTimeout(() => {
-        clearPartialMessage(sessionId);
-      }, 500);
+        // 停止上一次动画
+        if (typewriterIntervalRef.current) {
+          clearInterval(typewriterIntervalRef.current);
+          typewriterIntervalRef.current = null;
+        }
+
+        typewriterPosRef.current = 0;
+        setAnimatingMsgUuid(msgUuid);
+        updatePartialMessage(sessionId, "", true);
+        isUserScrolledUpRef.current = false;
+
+        // 每帧展示若干字符，约 60fps × 4字符 = ~240字/秒
+        const CHARS_PER_TICK = 4;
+        typewriterIntervalRef.current = setInterval(() => {
+          typewriterPosRef.current += CHARS_PER_TICK;
+          if (typewriterPosRef.current >= fullText.length) {
+            clearInterval(typewriterIntervalRef.current!);
+            typewriterIntervalRef.current = null;
+            setAnimatingMsgUuid(null);
+            clearPartialMessage(sessionId);
+          } else {
+            updatePartialMessage(sessionId, fullText.slice(0, typewriterPosRef.current), true);
+          }
+        }, 16);
+      }
     }
-  }, [updatePartialMessage, clearPartialMessage]);
+  }, [updatePartialMessage, clearPartialMessage, setAnimatingMsgUuid]);
 
   // Combined event handler
   const onEvent = useCallback((event: ServerEvent) => {
@@ -344,10 +596,43 @@ function App() {
     };
   }, [messages, partialMessage]);
 
+  const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
+  const [showChangeWorkspacePicker, setShowChangeWorkspacePicker] = useState(false);
+  const [workspaceDropdownOpen, setWorkspaceDropdownOpen] = useState(false);
+  const [showWorkspacePanel, setShowWorkspacePanel] = useState(false);
+
   const handleNewSession = useCallback(() => {
     useAppStore.getState().setActiveSessionId(null);
-    setShowStartModal(true);
-  }, [setShowStartModal]);
+    const assistantId = useAppStore.getState().selectedAssistantId;
+    const savedCwd = loadAssistantCwdLocal(assistantId);
+    if (savedCwd) {
+      // 助理已记住过工作区，直接进入对话
+      useAppStore.getState().setCwd(savedCwd);
+      setShowWorkspacePicker(false);
+    } else {
+      setShowWorkspacePicker(true);
+    }
+  }, []);
+
+  // 统一的工作区选择回调：保存到 localStorage + 更新 store
+  const handleWorkspaceSelect = useCallback((path: string) => {
+    setCwd(path);
+    setShowWorkspacePicker(false);
+    setShowChangeWorkspacePicker(false);
+    const assistantId = useAppStore.getState().selectedAssistantId;
+    if (assistantId) {
+      saveAssistantCwdLocal(assistantId, path);
+    }
+    // 异步同步到 assistant config（可选，不影响主流程）
+    saveAssistantDefaultCwd(path);
+  }, [saveAssistantDefaultCwd, setCwd]);
+
+  // 点击历史任务时关闭工作区选择器
+  useEffect(() => {
+    if (activeSessionId) {
+      setShowWorkspacePicker(false);
+    }
+  }, [activeSessionId]);
 
   const handleDeleteSession = useCallback((sessionId: string) => {
     sendEvent({ type: "session.delete", payload: { sessionId } });
@@ -357,9 +642,6 @@ function App() {
   const [mcpSkillModalOpen, setMcpSkillModalOpen] = useState(false);
   const [mcpSkillInitialTab, setMcpSkillInitialTab] = useState<"mcp" | "skill">("mcp");
 
-  // Scheduler modal state
-  const [schedulerModalOpen, setSchedulerModalOpen] = useState(false);
-
   const handleOpenMcp = useCallback(() => {
     setMcpSkillInitialTab("mcp");
     setMcpSkillModalOpen(true);
@@ -368,10 +650,6 @@ function App() {
   const handleOpenSkill = useCallback(() => {
     setMcpSkillInitialTab("skill");
     setMcpSkillModalOpen(true);
-  }, []);
-
-  const handleOpenScheduler = useCallback(() => {
-    setSchedulerModalOpen(true);
   }, []);
 
   const handlePermissionResult = useCallback((toolUseId: string, result: PermissionResult) => {
@@ -410,16 +688,25 @@ function App() {
   }
 
   return (
-    <div className="flex h-screen bg-surface">
+    <div className="flex h-screen bg-surface-cream">
       <Sidebar
         connected={connected}
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
         width={sidebarWidth}
         onResizeStart={handleSidebarResizeStart}
+        onOpenSkill={handleOpenSkill}
+        onOpenMcp={handleOpenMcp}
       />
 
-      <main className="flex flex-1 flex-col bg-surface-cream" style={{ marginLeft: `${sidebarWidth}px` }}>
+      <main
+        className="flex flex-1 flex-col bg-surface-cream"
+        style={{
+          marginLeft: `${sidebarWidth}px`,
+          marginRight: showWorkspacePanel ? `${WORKSPACE_PANEL_WIDTH}px` : 0,
+          transition: "margin-right 0.2s ease",
+        }}
+      >
         <div 
           className="flex items-center justify-between h-12 border-b border-ink-900/10 bg-surface-cream select-none px-4"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
@@ -427,75 +714,123 @@ function App() {
           <div className="w-24" /> {/* Spacer for balance */}
           <span className="text-sm font-medium text-ink-700">{activeSession?.title || "VK Cowork"}</span>
           <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+            {/* Workspace button */}
+            <div className="relative">
+              <button
+                onClick={() => setWorkspaceDropdownOpen((v) => !v)}
+                className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors max-w-[180px]"
+                title="工作区"
+              >
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+                </svg>
+                <span className="truncate">
+                  {cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : "选择工作区"}
+                </span>
+                <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </button>
+
+              {workspaceDropdownOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setWorkspaceDropdownOpen(false)}
+                  />
+                  <WorkspaceDropdown
+                    currentCwd={cwd}
+                    onSelect={(path) => {
+                      setWorkspaceDropdownOpen(false);
+                      handleWorkspaceSelect(path);
+                    }}
+                    onBrowse={() => {
+                      setWorkspaceDropdownOpen(false);
+                      setShowChangeWorkspacePicker(true);
+                    }}
+                  />
+                </>
+              )}
+            </div>
+
+            {/* Workspace panel toggle button */}
             <button
-              onClick={() => setShowSystemInfo(!showSystemInfo)}
+              onClick={() => setShowWorkspacePanel((v) => !v)}
               className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                showSystemInfo 
-                  ? "bg-accent/10 text-accent" 
+                showWorkspacePanel
+                  ? "bg-accent/10 text-accent"
                   : "text-muted hover:bg-surface-tertiary hover:text-ink-700"
               }`}
-              title={showSystemInfo ? "隐藏系统信息" : "显示系统信息"}
+              title="工作区产出"
             >
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 16v-4M12 8h.01" />
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M15 3v18" />
+                <path d="M9 9h3M9 12h3M9 15h3" />
               </svg>
-              {showSystemInfo ? "隐藏详情" : "显示详情"}
-            </button>
-            <button
-              onClick={handleOpenMcp}
-              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
-              title="MCP 服务器"
-            >
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M12 1v6m0 6v10M1 12h6m6 0h10" />
-              </svg>
-              MCP
-            </button>
-            <button
-              onClick={handleOpenSkill}
-              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
-              title="Skills"
-            >
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-              </svg>
-              SKILL
-            </button>
-            <button
-              onClick={handleOpenScheduler}
-              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
-              title="定时任务"
-            >
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 6v6l4 2" />
-              </svg>
-              定时
+              工作区
             </button>
           </div>
         </div>
 
-        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-8 pb-40 pt-6">
+        {showWorkspacePicker ? (
+          <WorkspacePicker
+            currentCwd={cwd}
+            onSelect={handleWorkspaceSelect}
+          />
+        ) : null}
+
+        {showChangeWorkspacePicker ? (
+          <div className="absolute inset-0 z-30 flex flex-col bg-surface-cream" style={{ top: "48px" }}>
+            <div className="flex items-center gap-2 px-4 pt-4 pb-2 border-b border-ink-900/8">
+              <button
+                onClick={() => setShowChangeWorkspacePicker(false)}
+                className="rounded-lg p-1.5 text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M19 12H5M12 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <span className="text-sm font-medium text-ink-800">切换工作区</span>
+            </div>
+            <WorkspacePicker
+              currentCwd={cwd}
+              onSelect={handleWorkspaceSelect}
+            />
+          </div>
+        ) : null}
+
+        <div ref={scrollContainerRef} className={`flex-1 overflow-y-auto px-8 pb-40 pt-6 ${showWorkspacePicker || showChangeWorkspacePicker ? "hidden" : ""}`}>
           <div className="mx-auto max-w-3xl">
             {isLoadingHistory ? (
               // 骨架屏 - 加载历史消息时显示
               <MessageSkeleton />
-            ) : messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 text-center">
-                <div className="text-lg font-medium text-ink-700">No messages yet</div>
-                <p className="mt-2 text-sm text-muted">Start a conversation with Claude Code</p>
-              </div>
-            ) : (
-              messages.map((msg, idx) => {
-                // 使用消息的唯一标识作为 key，避免不必要的重新渲染
-                const msgKey = ('uuid' in msg && msg.uuid) ? String(msg.uuid) : `msg-${idx}`;
+            ) : messages.length === 0 ? null : (
+              // 打字机动画进行时，从列表中隐藏正在被动画展示的消息（避免重复显示）
+              groupMessages(
+                animatingMsgUuid
+                  ? messages.filter(msg => (msg as any).uuid !== animatingMsgUuid)
+                  : messages
+              ).map((group, gIdx, arr) => {
+                const isLastGroup = gIdx === arr.length - 1;
+                if (group.type === "process") {
+                  return (
+                    <ProcessGroup
+                      key={group.key}
+                      messages={group.messages}
+                      isLast={isLastGroup}
+                      isRunning={isRunning}
+                      showSystemInfo={false}
+                      onAskUserQuestionAnswer={handleAskUserQuestionAnswer}
+                      assistantName={activeAssistantName}
+                    />
+                  );
+                }
                 return (
                   <MessageCard
-                    key={msgKey}
-                    message={msg}
-                    isLast={idx === messages.length - 1}
+                    key={group.key}
+                    message={group.message}
+                    isLast={isLastGroup}
                     isRunning={isRunning}
                     showSystemInfo={showSystemInfo}
                     onAskUserQuestionAnswer={handleAskUserQuestionAnswer}
@@ -513,7 +848,7 @@ function App() {
                     <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
                     <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
                   </div>
-                  <span className="text-xs text-muted">思考中...</span>
+                  <span className="text-xs text-muted">思考中<ThinkingDots /></span>
                 </div>
                 <div className="flex flex-col gap-2 px-1">
                   <div className="relative h-3 w-2/12 overflow-hidden rounded-full bg-ink-900/10">
@@ -529,27 +864,11 @@ function App() {
               </div>
             )}
 
-            {/* Partial message display with skeleton loading - show when streaming is active */}
+            {/* Streaming content - typewriter display when active */}
             {showPartialMessage && (
               <div className="partial-message">
                 <MDContent text={partialMessage} />
-                <div className="mt-3 flex flex-col gap-2 px-1">
-                  <div className="relative h-3 w-2/12 overflow-hidden rounded-full bg-ink-900/10">
-                    <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-ink-900/30 to-transparent animate-shimmer" />
-                  </div>
-                  <div className="relative h-3 w-full overflow-hidden rounded-full bg-ink-900/10">
-                    <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-ink-900/30 to-transparent animate-shimmer" />
-                  </div>
-                  <div className="relative h-3 w-full overflow-hidden rounded-full bg-ink-900/10">
-                    <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-ink-900/30 to-transparent animate-shimmer" />
-                  </div>
-                  <div className="relative h-3 w-full overflow-hidden rounded-full bg-ink-900/10">
-                    <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-ink-900/30 to-transparent animate-shimmer" />
-                  </div>
-                  <div className="relative h-3 w-4/12 overflow-hidden rounded-full bg-ink-900/10">
-                    <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-ink-900/30 to-transparent animate-shimmer" />
-                  </div>
-                </div>
+                <span className="inline-block w-[2px] h-[1em] bg-ink-400 animate-pulse ml-0.5 align-middle translate-y-[0.05em]" />
               </div>
             )}
 
@@ -580,7 +899,7 @@ function App() {
           </div>
         </div>
 
-        <PromptInput sendEvent={sendEvent} sidebarWidth={sidebarWidth} />
+        {!showWorkspacePicker && !showChangeWorkspacePicker && <PromptInput sendEvent={sendEvent} sidebarWidth={sidebarWidth} rightPanelWidth={showWorkspacePanel ? WORKSPACE_PANEL_WIDTH : 0} />}
       </main>
 
       {showStartModal && (
@@ -613,10 +932,17 @@ function App() {
         initialTab={mcpSkillInitialTab}
       />
 
-      <SchedulerModal
-        open={schedulerModalOpen}
-        onOpenChange={setSchedulerModalOpen}
-      />
+      {/* Workspace Panel - right sidebar */}
+      {showWorkspacePanel && (
+        <div
+          className="fixed right-0 top-0 bottom-0 border-l border-ink-900/10 overflow-hidden"
+          style={{ width: `${WORKSPACE_PANEL_WIDTH}px`, zIndex: 20 }}
+        >
+          <WorkspacePanel
+            onClose={() => setShowWorkspacePanel(false)}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -102,12 +102,76 @@ function SkillIcon({ type, className = "" }: { type: string; className?: string 
   }
 }
 
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 6) return "深夜好，有什么想让我做的吗？";
+  if (hour < 12) return "早上好，有什么想让我做的吗？";
+  if (hour < 14) return "中午好，有什么想让我做的吗？";
+  if (hour < 18) return "下午好，有什么想让我做的吗？";
+  return "晚上好，有什么想让我做的吗？";
+}
+
+const QUICK_ACTIONS = [
+  { id: "guide", label: "引导帮助", prompt: "" },
+  { id: "write", label: "写作", prompt: "帮我写作：" },
+  { id: "ppt", label: "PPT", prompt: "帮我制作一份PPT，主题是：" },
+  { id: "research", label: "调研报告", prompt: "帮我撰写一份调研报告，主题是：" },
+  { id: "analysis", label: "需求分析", prompt: "帮我分析以下需求：" },
+  { id: "video", label: "视频", prompt: "帮我制作视频脚本，主题是：" },
+  { id: "design", label: "设计", prompt: "帮我设计：" },
+  { id: "excel", label: "Excel", prompt: "帮我处理Excel数据：" },
+  { id: "code", label: "编程", prompt: "帮我编写代码：" },
+] as const;
+
 interface PromptInputProps {
   sendEvent: (event: ClientEvent) => void;
   sidebarWidth: number;
+  rightPanelWidth?: number;
 }
 
-export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
+/**
+ * 从助理配置的技能列表中找到最匹配当前 prompt 的技能。
+ * - 只有 1 个技能：直接返回
+ * - 多个技能：按 prompt 与技能名/描述关键词的匹配度打分，返回最高分
+ */
+function findBestSkill(prompt: string, availableSkills: SkillInfo[]): SkillInfo | null {
+  if (availableSkills.length === 0) return null;
+  if (availableSkills.length === 1) return availableSkills[0];
+
+  const lower = prompt.toLowerCase();
+  let bestScore = -1;
+  let best = availableSkills[0];
+
+  for (const skill of availableSkills) {
+    let score = 0;
+    if (lower.includes(skill.name.toLowerCase())) score += 3;
+    const keywords = (skill.description || "")
+      .toLowerCase()
+      .split(/[\s,，。.!?！？、]+/)
+      .filter((w) => w.length > 1);
+    for (const kw of keywords) {
+      if (lower.includes(kw)) score += 1;
+    }
+    if (score > bestScore) { bestScore = score; best = skill; }
+  }
+  return best;
+}
+
+export interface UsePromptActionsOptions {
+  /** 当前可用的技能列表（来自组件 state） */
+  skills?: SkillInfo[];
+  /** 用户当前主动选中的技能名（null = 未手动选择） */
+  activeSkillName?: string | null;
+  /** 自动选中技能后的回调（用于更新工具栏） */
+  onAutoSelectSkill?: (skill: SkillInfo) => void;
+}
+
+export function usePromptActions(
+  sendEvent: (event: ClientEvent) => void,
+  options: UsePromptActionsOptions = {},
+) {
+  const { skills: optionSkills, activeSkillName, onAutoSelectSkill } = options;
+
   const prompt = useAppStore((state) => state.prompt);
   const cwd = useAppStore((state) => state.cwd);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
@@ -209,6 +273,29 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
     const needNewSession = !activeSessionId || (activeProvider !== provider) || assistantChanged;
 
     if (needNewSession) {
+      // ── 自动选择技能 ──────────────────────────────────────────────────────────
+      // 若用户未手动指定技能，且助理配置了技能，则按 prompt 关键词自动匹配最合适的
+      let resolvedSkillNames: string[] | undefined;
+      if (!activeSkillName && selectedAssistantSkillNames.length > 0) {
+        const assistantSkills = (optionSkills ?? []).filter((s) =>
+          selectedAssistantSkillNames.includes(s.name)
+        );
+        const best = findBestSkill(finalPrompt, assistantSkills);
+        if (best) {
+          resolvedSkillNames = [best.name];
+          onAutoSelectSkill?.(best);
+        } else {
+          resolvedSkillNames = selectedAssistantSkillNames;
+        }
+      } else if (activeSkillName) {
+        // 用户手动选择了技能，只用这一个
+        resolvedSkillNames = [activeSkillName];
+      } else {
+        resolvedSkillNames = selectedAssistantSkillNames.length > 0
+          ? selectedAssistantSkillNames
+          : undefined;
+      }
+
       let title = "";
       try {
         setPendingStart(true);
@@ -229,8 +316,8 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
           provider,
           ...(provider === "codex" ? { model: codexModel } : {}),
           ...(selectedAssistantId ? { assistantId: selectedAssistantId } : {}),
-          ...(selectedAssistantSkillNames.length > 0 ? { assistantSkillNames: selectedAssistantSkillNames } : {}),
           ...(selectedAssistantPersona ? { assistantPersona: selectedAssistantPersona } : {}),
+          ...(resolvedSkillNames ? { assistantSkillNames: resolvedSkillNames } : {}),
         }
       });
     } else {
@@ -241,12 +328,26 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
       sendEvent({ type: "session.continue", payload: { sessionId: activeSessionId, prompt: finalPrompt } });
     }
     setPrompt("");
-  }, [activeSession, activeSessionId, cwd, imagePath, prompt, provider, codexModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona, sendEvent, setGlobalError, setPendingStart, setPrompt]);
+  }, [activeSession, activeSessionId, cwd, imagePath, prompt, provider, codexModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona, sendEvent, setGlobalError, setPendingStart, setPrompt, activeSkillName, optionSkills, onAutoSelectSkill]);
 
   const handleStop = useCallback(() => {
     if (!activeSessionId) return;
     sendEvent({ type: "session.stop", payload: { sessionId: activeSessionId } });
-  }, [activeSessionId, sendEvent]);
+    // Restore the last user prompt into the input box
+    const session = useAppStore.getState().sessions[activeSessionId];
+    if (session) {
+      const msgs = session.messages;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const msg = msgs[i] as any;
+        if (msg.type === "user_prompt" && msg.prompt) {
+          setPrompt(msg.prompt);
+          break;
+        }
+      }
+    }
+    // Revert conversation area to before the last prompt was sent
+    useAppStore.getState().revertSessionToBeforeLastPrompt(activeSessionId);
+  }, [activeSessionId, sendEvent, setPrompt]);
 
   // handleStartFromModal can be called with optional params (for scheduled tasks)
   const handleStartFromModal = useCallback((params?: { prompt?: string; cwd?: string; title?: string }) => {
@@ -277,7 +378,6 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
           provider,
           ...(provider === "codex" ? { model: codexModel } : {}),
           ...(selectedAssistantId ? { assistantId: selectedAssistantId } : {}),
-          ...(selectedAssistantSkillNames.length > 0 ? { assistantSkillNames: selectedAssistantSkillNames } : {}),
           ...(selectedAssistantPersona ? { assistantPersona: selectedAssistantPersona } : {}),
         }
       });
@@ -302,7 +402,45 @@ export function usePromptActions(sendEvent: (event: ClientEvent) => void) {
   };
 }
 
-export function PromptInput({ sendEvent, sidebarWidth }: PromptInputProps) {
+export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: PromptInputProps) {
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const selectedAssistantSkillNames = useAppStore((state) => state.selectedAssistantSkillNames);
+  const hasMessages = useAppStore((state) => {
+    const session = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
+    return (session?.messages?.length ?? 0) > 0;
+  });
+  const provider = useAppStore((state) => state.provider);
+  const codexModelStore = useAppStore((state) => state.codexModel);
+  const modelDisplayName = provider === "codex" ? "Codex" : "Claude";
+  void codexModelStore;
+
+  // Skills state
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [showSkills, setShowSkills] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [skillFilter, setSkillFilter] = useState("");
+  const skillListRef = useRef<HTMLDivElement | null>(null);
+
+  // Toolbar skill button state
+  const [activeToolbarSkill, setActiveToolbarSkill] = useState<SkillInfo | null>(null);
+  const [showToolbarSkillPicker, setShowToolbarSkillPicker] = useState(false);
+  const [toolbarSkillFilter, setToolbarSkillFilter] = useState("");
+  const [toolbarSkillSelectedIndex, setToolbarSkillSelectedIndex] = useState(0);
+  const toolbarSkillListRef = useRef<HTMLDivElement | null>(null);
+  const toolbarSkillPickerRef = useRef<HTMLDivElement | null>(null);
+  const toolbarSkillBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // 切换助理时，重置工具栏技能（让下次发送时重新自动匹配）
+  const prevAssistantSkillKeyRef = useRef(selectedAssistantSkillNames.join(","));
+  useEffect(() => {
+    const key = selectedAssistantSkillNames.join(",");
+    if (key !== prevAssistantSkillKeyRef.current) {
+      prevAssistantSkillKeyRef.current = key;
+      setActiveToolbarSkill(null);
+    }
+  }, [selectedAssistantSkillNames]);
+
   const { 
     prompt, 
     setPrompt, 
@@ -313,17 +451,11 @@ export function PromptInput({ sendEvent, sidebarWidth }: PromptInputProps) {
     handleSelectImage,
     handleRemoveImage,
     handlePaste
-  } = usePromptActions(sendEvent);
-  const promptRef = useRef<HTMLTextAreaElement | null>(null);
-
-  const selectedAssistantSkillNames = useAppStore((state) => state.selectedAssistantSkillNames);
-
-  // Skills state
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [showSkills, setShowSkills] = useState(false);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [skillFilter, setSkillFilter] = useState("");
-  const skillListRef = useRef<HTMLDivElement | null>(null);
+  } = usePromptActions(sendEvent, {
+    skills,
+    activeSkillName: activeToolbarSkill?.name ?? null,
+    onAutoSelectSkill: setActiveToolbarSkill,
+  });
 
   // Memory indicator state
   const [memorySummary, setMemorySummary] = useState<{ longTermSize: number; dailyCount: number; totalSize: number } | null>(null);
@@ -351,7 +483,33 @@ export function PromptInput({ sendEvent, sidebarWidth }: PromptInputProps) {
       (skill.description || "").toLowerCase().includes(filter);
   });
 
-  // Check if we should show skills selector
+  // Filter skills for toolbar picker
+  const toolbarFilteredSkills = skills.filter(skill => {
+    if (selectedAssistantSkillNames.length > 0) {
+      if (!selectedAssistantSkillNames.includes(skill.name)) return false;
+    }
+    const filter = toolbarSkillFilter.toLowerCase();
+    return skill.name.toLowerCase().includes(filter) ||
+      (skill.description || "").toLowerCase().includes(filter);
+  });
+
+  // Close toolbar skill picker when clicking outside (exclude the toggle button itself)
+  useEffect(() => {
+    if (!showToolbarSkillPicker) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insidePicker = toolbarSkillPickerRef.current?.contains(target);
+      const insideBtn = toolbarSkillBtnRef.current?.contains(target);
+      if (!insidePicker && !insideBtn) {
+        setShowToolbarSkillPicker(false);
+        setToolbarSkillFilter("");
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showToolbarSkillPicker]);
+
+  // Check if we should show skills selector, and sync toolbar skill state with prompt
   useEffect(() => {
     const trimmed = prompt.trimStart();
     // Show skills selector only when:
@@ -366,6 +524,13 @@ export function PromptInput({ sendEvent, sidebarWidth }: PromptInputProps) {
       setShowSkills(false);
       setSkillFilter("");
     }
+
+    // If toolbar shows an active skill but the prompt no longer has its prefix, clear it
+    setActiveToolbarSkill(prev => {
+      if (!prev) return prev;
+      const expectedPrefix = `/${prev.name} `;
+      return trimmed.startsWith(expectedPrefix) ? prev : null;
+    });
   }, [prompt]);
 
   // Scroll selected item into view
@@ -380,6 +545,7 @@ export function PromptInput({ sendEvent, sidebarWidth }: PromptInputProps) {
 
   const handleSelectSkill = useCallback(async (skill: SkillInfo) => {
     setShowSkills(false);
+    setActiveToolbarSkill(skill);
     
     // Read full skill content
     try {
@@ -473,144 +639,271 @@ export function PromptInput({ sendEvent, sidebarWidth }: PromptInputProps) {
   // Get filename from path
   const imageFileName = imagePath ? imagePath.split("/").pop() : null;
 
-  return (
-    <section
-      className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-surface via-surface to-transparent pb-6 px-2 lg:pb-8 pt-8"
-      style={{ marginLeft: `${sidebarWidth}px` }}
-    >
-      <div className="mx-auto w-full max-w-full lg:max-w-3xl relative">
-        {/* Skills Selector Dropdown */}
-        {showSkills && (
-          <div className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-ink-900/10 bg-surface shadow-elevated overflow-hidden z-50">
-            {/* Header */}
-            <div className="px-4 py-2.5 border-b border-ink-900/5 bg-surface-secondary/50">
-              <div className="flex items-center gap-2">
-                <svg viewBox="0 0 24 24" className="h-4 w-4 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                </svg>
-                <span className="text-sm font-medium text-ink-800">选择技能</span>
-                <span className="text-xs text-muted">输入 / 搜索技能</span>
-              </div>
-            </div>
-            
-            {filteredSkills.length === 0 ? (
-              <div className="px-4 py-8 text-center">
-                <svg viewBox="0 0 24 24" className="h-10 w-10 mx-auto text-muted-light" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                </svg>
-                <p className="mt-2 text-sm text-muted">
-                  {skills.length === 0 ? "暂无可用技能" : "没有找到匹配的技能"}
-                </p>
-                <p className="mt-1 text-xs text-muted-light">
-                  在 ~/.claude/skills/ 目录下添加技能
-                </p>
-              </div>
-            ) : (
-              <div 
-                ref={skillListRef}
-                className="max-h-72 overflow-y-auto py-1"
+  const skillsDropdown = showSkills ? (
+    <div className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-ink-900/10 bg-surface shadow-elevated overflow-hidden z-50">
+      <div className="px-4 py-2.5 border-b border-ink-900/5 bg-surface-secondary/50">
+        <div className="flex items-center gap-2">
+          <svg viewBox="0 0 24 24" className="h-4 w-4 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+          </svg>
+          <span className="text-sm font-medium text-ink-800">选择技能</span>
+          <span className="text-xs text-muted">输入 / 搜索技能</span>
+        </div>
+      </div>
+      {filteredSkills.length === 0 ? (
+        <div className="px-4 py-8 text-center">
+          <svg viewBox="0 0 24 24" className="h-10 w-10 mx-auto text-muted-light" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+          </svg>
+          <p className="mt-2 text-sm text-muted">
+            {skills.length === 0 ? "暂无可用技能" : "没有找到匹配的技能"}
+          </p>
+          <p className="mt-1 text-xs text-muted-light">在 ~/.claude/skills/ 目录下添加技能</p>
+        </div>
+      ) : (
+        <div ref={skillListRef} className="max-h-72 overflow-y-auto py-1">
+          {filteredSkills.map((skill, index) => {
+            const category = getSkillCategory(skill);
+            const config = SKILL_CATEGORY_CONFIG[category] || SKILL_CATEGORY_CONFIG.other;
+            return (
+              <button
+                key={skill.name}
+                className={`w-full px-4 py-3 text-left flex items-start gap-3 transition-colors ${
+                  index === selectedIndex ? "bg-accent/10" : "hover:bg-surface-secondary"
+                }`}
+                onClick={() => handleSelectSkill(skill)}
+                onMouseEnter={() => setSelectedIndex(index)}
               >
-                {filteredSkills.map((skill, index) => {
-                  const category = getSkillCategory(skill);
-                  const config = SKILL_CATEGORY_CONFIG[category] || SKILL_CATEGORY_CONFIG.other;
-                  return (
-                    <button
-                      key={skill.name}
-                      className={`w-full px-4 py-3 text-left flex items-start gap-3 transition-colors ${
-                        index === selectedIndex 
-                          ? "bg-accent/10" 
-                          : "hover:bg-surface-secondary"
-                      }`}
-                      onClick={() => handleSelectSkill(skill)}
-                      onMouseEnter={() => setSelectedIndex(index)}
-                    >
-                      <div className={`flex h-10 w-10 items-center justify-center rounded-xl flex-shrink-0 ${config.color}`}>
-                        <SkillIcon type={config.icon} className="h-5 w-5" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className={`font-medium ${index === selectedIndex ? "text-accent" : "text-ink-800"}`}>
-                            {skill.name}
-                          </span>
-                          <span className="flex items-center gap-1 text-[10px] text-success">
-                            <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" fill="currentColor">
-                              <circle cx="12" cy="12" r="4" />
-                            </svg>
-                            已安装
-                          </span>
-                        </div>
-                        <div className="text-xs text-muted mt-1 line-clamp-2">
-                          {skill.description || "暂无描述"}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            
-            {/* Footer */}
-            <div className="border-t border-ink-900/5 px-4 py-2 bg-surface-secondary/50">
-              <div className="flex items-center gap-4 text-xs text-muted">
-                <span className="flex items-center gap-1">
-                  <kbd className="px-1.5 py-0.5 bg-surface rounded border border-ink-900/10 font-mono text-[10px]">↑↓</kbd>
-                  选择
-                </span>
-                <span className="flex items-center gap-1">
-                  <kbd className="px-1.5 py-0.5 bg-surface rounded border border-ink-900/10 font-mono text-[10px]">Tab</kbd>
-                  确认
-                </span>
-                <span className="flex items-center gap-1">
-                  <kbd className="px-1.5 py-0.5 bg-surface rounded border border-ink-900/10 font-mono text-[10px]">Esc</kbd>
-                  取消
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
+                <div className={`flex h-10 w-10 items-center justify-center rounded-xl flex-shrink-0 ${config.color}`}>
+                  <SkillIcon type={config.icon} className="h-5 w-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`font-medium ${index === selectedIndex ? "text-accent" : "text-ink-800"}`}>
+                      {skill.name}
+                    </span>
+                    <span className="flex items-center gap-1 text-[10px] text-success">
+                      <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" fill="currentColor"><circle cx="12" cy="12" r="4" /></svg>
+                      已安装
+                    </span>
+                  </div>
+                  <div className="text-xs text-muted mt-1 line-clamp-2">{skill.description || "暂无描述"}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div className="border-t border-ink-900/5 px-4 py-2 bg-surface-secondary/50">
+        <div className="flex items-center gap-4 text-xs text-muted">
+          <span className="flex items-center gap-1">
+            <kbd className="px-1.5 py-0.5 bg-surface rounded border border-ink-900/10 font-mono text-[10px]">↑↓</kbd>选择
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1.5 py-0.5 bg-surface rounded border border-ink-900/10 font-mono text-[10px]">Tab</kbd>确认
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1.5 py-0.5 bg-surface rounded border border-ink-900/10 font-mono text-[10px]">Esc</kbd>取消
+          </span>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
-        {/* Image Preview */}
-        {imagePath && (
-          <div className="mb-2 flex items-center gap-2 rounded-xl border border-ink-900/10 bg-surface-secondary px-3 py-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/10">
-              <svg className="h-4 w-4 text-accent" viewBox="0 0 24 24" fill="none">
-                <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-ink-700 truncate">{imageFileName}</div>
-              <div className="text-xs text-muted">Agent will analyze this image</div>
-            </div>
-            <button
-              onClick={handleRemoveImage}
-              className="flex h-6 w-6 items-center justify-center rounded-full text-muted hover:bg-ink-900/10 hover:text-ink-700"
-              aria-label="Remove image"
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
-            </button>
+  const toolbarSkillPickerDropdown = showToolbarSkillPicker ? (
+    <div ref={toolbarSkillPickerRef} className="absolute bottom-full left-0 mb-2 w-72 rounded-xl border border-ink-900/10 bg-surface shadow-elevated overflow-hidden z-50">
+      <div className="px-3 py-2.5 border-b border-ink-900/5 bg-surface-secondary/50">
+        <div className="flex items-center gap-2 rounded-lg bg-surface border border-ink-900/8 px-2.5 py-1.5">
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-muted flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            autoFocus
+            type="text"
+            placeholder="搜索技能..."
+            value={toolbarSkillFilter}
+            onChange={e => {
+              setToolbarSkillFilter(e.target.value);
+              setToolbarSkillSelectedIndex(0);
+            }}
+            onKeyDown={e => {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setToolbarSkillSelectedIndex(prev => (prev + 1) % Math.max(1, toolbarFilteredSkills.length));
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setToolbarSkillSelectedIndex(prev => (prev - 1 + Math.max(1, toolbarFilteredSkills.length)) % Math.max(1, toolbarFilteredSkills.length));
+              } else if (e.key === "Enter" && toolbarFilteredSkills[toolbarSkillSelectedIndex]) {
+                e.preventDefault();
+                const skill = toolbarFilteredSkills[toolbarSkillSelectedIndex];
+                handleSelectSkill(skill);
+                setActiveToolbarSkill(skill);
+                setShowToolbarSkillPicker(false);
+                setToolbarSkillFilter("");
+              } else if (e.key === "Escape") {
+                setShowToolbarSkillPicker(false);
+                setToolbarSkillFilter("");
+              }
+            }}
+            className="flex-1 bg-transparent text-xs text-ink-800 placeholder:text-muted focus:outline-none"
+          />
+        </div>
+      </div>
+      {toolbarFilteredSkills.length === 0 ? (
+        <div className="px-4 py-6 text-center">
+          <p className="text-sm text-muted">{skills.length === 0 ? "暂无可用技能" : "没有找到匹配的技能"}</p>
+        </div>
+      ) : (
+        <div ref={toolbarSkillListRef} className="max-h-56 overflow-y-auto py-1">
+          {toolbarFilteredSkills.map((skill, index) => {
+            const category = getSkillCategory(skill);
+            const config = SKILL_CATEGORY_CONFIG[category] || SKILL_CATEGORY_CONFIG.other;
+            return (
+              <button
+                key={skill.name}
+                className={`w-full px-3 py-2.5 text-left flex items-center gap-2.5 transition-colors ${
+                  index === toolbarSkillSelectedIndex ? "bg-accent/10" : "hover:bg-surface-secondary"
+                }`}
+                onClick={() => {
+                  handleSelectSkill(skill);
+                  setActiveToolbarSkill(skill);
+                  setShowToolbarSkillPicker(false);
+                  setToolbarSkillFilter("");
+                }}
+                onMouseEnter={() => setToolbarSkillSelectedIndex(index)}
+              >
+                <div className={`flex h-8 w-8 items-center justify-center rounded-lg flex-shrink-0 ${config.color}`}>
+                  <SkillIcon type={config.icon} className="h-4 w-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className={`text-xs font-medium truncate ${index === toolbarSkillSelectedIndex ? "text-accent" : "text-ink-800"}`}>
+                    {skill.name}
+                  </div>
+                  <div className="text-[11px] text-muted truncate">{skill.description || "暂无描述"}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  ) : null;
+
+  const inputCard = (
+    <div className="w-full rounded-2xl border border-black/[0.07] bg-white shadow-[0_2px_12px_rgba(0,0,0,0.06),0_1px_3px_rgba(0,0,0,0.04)]">
+      {/* Image Preview */}
+      {imagePath && (
+        <div className="mx-3 mt-3 flex items-center gap-2 rounded-xl border border-ink-900/8 bg-surface-secondary px-3 py-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/10">
+            <svg className="h-4 w-4 text-accent" viewBox="0 0 24 24" fill="none">
+              <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
           </div>
-        )}
-        
-        {/* Input Area */}
-        <div className="flex w-full items-end gap-3 rounded-2xl border border-ink-900/10 bg-surface px-4 py-3 shadow-card">
-          {/* Memory Indicator */}
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-ink-700 truncate">{imageFileName}</div>
+            <div className="text-xs text-muted">Agent will analyze this image</div>
+          </div>
+          <button
+            onClick={handleRemoveImage}
+            className="flex h-6 w-6 items-center justify-center rounded-full text-muted hover:bg-ink-900/10 hover:text-ink-700"
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+          </button>
+        </div>
+      )}
+
+      {/* Textarea */}
+      <div className="px-4 pt-4 pb-2">
+        <textarea
+          rows={hasMessages ? 1 : 3}
+          className="w-full resize-none bg-transparent text-sm text-ink-800 placeholder:text-ink-400/60 focus:outline-none leading-relaxed"
+          placeholder={imagePath ? "为图片添加说明（可选）..." : "帮我把这个想法变成一个技术方案"}
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onInput={handleInput}
+          onPaste={handlePaste}
+          ref={promptRef}
+          disabled={isRunning}
+        />
+      </div>
+
+      {/* Divider */}
+      <div className="h-px bg-black/[0.05] mx-3" />
+
+      {/* Toolbar */}
+      <div className="flex items-center justify-between px-2.5 py-2">
+        {/* Left icons */}
+        <div className="flex items-center gap-0.5">
+          {/* Attach */}
+          <button
+            onClick={handleSelectImage}
+            disabled={isRunning}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-400 transition-colors hover:bg-surface-secondary hover:text-ink-700 disabled:opacity-40"
+            title="附件"
+          >
+            <svg viewBox="0 0 24 24" className="h-[15px] w-[15px]" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+            </svg>
+          </button>
+
+          {/* Skill picker button */}
+          {activeToolbarSkill ? (
+            <div className="flex items-center gap-1 rounded-full bg-accent/10 pl-2.5 pr-1.5 py-1 text-xs font-medium text-accent max-w-[140px]">
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+              </svg>
+              <span className="truncate">{activeToolbarSkill.name}</span>
+              <button
+                onClick={() => {
+                  const prefix = `/${activeToolbarSkill.name} `;
+                  const currentPrompt = useAppStore.getState().prompt;
+                  setPrompt(currentPrompt.startsWith(prefix) ? currentPrompt.slice(prefix.length) : currentPrompt);
+                  setActiveToolbarSkill(null);
+                }}
+                className="flex-shrink-0 flex h-4 w-4 items-center justify-center rounded-full hover:bg-accent/20 text-accent/70 hover:text-accent transition-colors"
+                title="取消技能"
+              >
+                <svg viewBox="0 0 24 24" className="h-3 w-3"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/></svg>
+              </button>
+            </div>
+          ) : (
+            <button
+              ref={toolbarSkillBtnRef}
+              onClick={() => {
+                setShowToolbarSkillPicker(prev => !prev);
+                setToolbarSkillFilter("");
+                setToolbarSkillSelectedIndex(0);
+              }}
+              className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
+                showToolbarSkillPicker
+                  ? "bg-accent/10 text-accent"
+                  : "bg-ink-900/[0.05] text-ink-500 hover:bg-ink-900/[0.09] hover:text-ink-700"
+              }`}
+              title="选择技能"
+            >
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 18h6M10 22h4M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 01-1 1H9a1 1 0 01-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z"/>
+              </svg>
+              自动
+            </button>
+          )}
+
+          {/* Memory indicator (inline with toolbar) */}
           {memorySummary && memorySummary.totalSize > 0 && (
             <div
-              className="relative flex h-9 shrink-0 items-center"
+              className="relative"
               onMouseEnter={() => setShowMemoryTooltip(true)}
               onMouseLeave={() => setShowMemoryTooltip(false)}
             >
-              <div className="flex items-center gap-1 rounded-full border border-accent/20 bg-accent/5 px-2 py-1 text-accent">
+              <div className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-accent cursor-default">
                 <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" />
-                  <path d="M12 6v6l4 2" />
+                  <circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />
                 </svg>
-                <span className="text-[10px] font-medium">记忆</span>
+                <span className="font-medium">记忆</span>
               </div>
               {showMemoryTooltip && (
-                <div className="absolute bottom-full left-0 mb-2 w-48 rounded-xl border border-ink-900/10 bg-surface p-3 shadow-elevated z-50">
+                <div className="absolute bottom-full left-0 mb-2 w-52 rounded-xl border border-ink-900/10 bg-surface p-3 shadow-elevated z-50">
                   <p className="text-xs font-medium text-ink-800 mb-1.5">记忆系统已激活</p>
                   <div className="grid gap-1 text-[11px] text-muted">
                     <span>长期记忆: {memorySummary.longTermSize > 0 ? `${(memorySummary.longTermSize / 1024).toFixed(1)} KB` : "空"}</span>
@@ -622,60 +915,110 @@ export function PromptInput({ sendEvent, sidebarWidth }: PromptInputProps) {
               )}
             </div>
           )}
+        </div>
 
-          {/* Image Upload Button */}
+        {/* Right: model + mic + send */}
+        <div className="flex items-center gap-1.5">
+          {/* Mic */}
           <button
-            onClick={handleSelectImage}
-            disabled={isRunning}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-ink-900/10 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            aria-label="Attach image"
+            className="flex h-8 w-8 items-center justify-center rounded-full text-ink-400 transition-colors hover:bg-surface-secondary hover:text-ink-700"
+            title="语音输入"
           >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-              <path 
-                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" 
-                stroke="currentColor" 
-                strokeWidth="1.5" 
-                strokeLinecap="round" 
-                strokeLinejoin="round"
-                fill="none"
-              />
+            <svg viewBox="0 0 24 24" className="h-[15px] w-[15px]" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2a3 3 0 013 3v7a3 3 0 01-6 0V5a3 3 0 013-3z"/>
+              <path d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8"/>
             </svg>
           </button>
-          
-          <textarea
-            rows={1}
-            className="flex-1 resize-none bg-transparent py-1.5 text-sm text-ink-800 placeholder:text-muted focus:outline-none"
-            placeholder={imagePath ? "Add instructions for the image (optional)..." : "Describe what you want agent to handle... (Cmd+V to paste image)"}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={handleKeyDown}
-            onInput={handleInput}
-            onPaste={handlePaste}
-            ref={promptRef}
-            disabled={isRunning}
-          />
-          
+
+          {/* Send / Stop */}
           <button
-            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${
-              isRunning 
-                ? "bg-error text-white hover:bg-error/90" 
-                : "bg-accent text-white hover:bg-accent-hover"
+            className={`flex h-8 w-8 items-center justify-center rounded-full transition-all ${
+              isRunning
+                ? "bg-error text-white hover:bg-error/90"
+                : (prompt.trim() || imagePath)
+                  ? "bg-[#2C5F2E] text-white hover:bg-[#2C5F2E]/90 shadow-sm"
+                  : "bg-ink-900/8 text-ink-300 cursor-default"
             }`}
             onClick={isRunning ? handleStop : handleSend}
-            aria-label={isRunning ? "Stop session" : "Send prompt"}
+            aria-label={isRunning ? "停止" : "发送"}
           >
             {isRunning ? (
-              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
-              </svg>
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>
             ) : (
-              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
-                <path d="M3.4 20.6 21 12 3.4 3.4l2.8 7.2L16 12l-9.8 1.4-2.8 7.2Z" fill="currentColor" />
+              <svg viewBox="0 0 24 24" className="h-[15px] w-[15px]" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 19V5M5 12l7-7 7 7" />
               </svg>
             )}
           </button>
         </div>
       </div>
+    </div>
+  );
+
+  return (
+    <section
+      className={
+        hasMessages
+          ? "fixed bottom-0 left-0 right-0 bg-gradient-to-t from-surface-cream via-surface-cream to-transparent pb-6 px-4 lg:pb-8 pt-12"
+          : "fixed inset-0 flex flex-col items-center justify-center px-4 pointer-events-none"
+      }
+      style={{ marginLeft: `${sidebarWidth}px`, marginRight: `${rightPanelWidth}px`, transition: "margin 0.2s ease" }}
+    >
+      {hasMessages ? (
+        <div className="mx-auto w-full max-w-full lg:max-w-3xl relative">
+          {skillsDropdown}
+          {toolbarSkillPickerDropdown}
+          {inputCard}
+        </div>
+      ) : (
+        <div className="pointer-events-auto w-full max-w-2xl flex flex-col items-center gap-5">
+          {/* Keyboard shortcut hint */}
+          <div className="flex items-center gap-1.5 rounded-full bg-surface-secondary/80 px-3.5 py-1.5 text-xs text-ink-400 border border-ink-900/[0.05]">
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-ink-400 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 18l6-6-6-6"/>
+            </svg>
+            <span>⌥ Space 可以随时唤醒AI输入，可在设置中自定义</span>
+          </div>
+
+          {/* Greeting */}
+          <h1 className="text-[26px] font-medium text-ink-900 tracking-[-0.01em] text-center">
+            {getGreeting()}
+          </h1>
+
+          {/* Input card + skills dropdown */}
+          <div className="w-full relative">
+            {skillsDropdown}
+            {toolbarSkillPickerDropdown}
+            {inputCard}
+          </div>
+
+          {/* Quick action chips */}
+          <div className="flex flex-wrap gap-2 justify-center">
+            {QUICK_ACTIONS.map((action) => (
+              <button
+                key={action.id}
+                className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all ${
+                  action.id === "guide"
+                    ? "bg-[#2C5F2E] text-white hover:bg-[#2C5F2E]/90"
+                    : "bg-surface-secondary text-ink-800 hover:bg-surface-tertiary border border-ink-900/[0.08]"
+                }`}
+                onClick={() => {
+                  if (action.prompt) setPrompt(action.prompt);
+                  promptRef.current?.focus();
+                }}
+              >
+                {action.id === "guide" && (
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 006 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/>
+                    <path d="M9 18h6M10 22h4"/>
+                  </svg>
+                )}
+                {action.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

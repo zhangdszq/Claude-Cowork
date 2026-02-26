@@ -4,6 +4,16 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useAppStore } from "../store/useAppStore";
 import { SettingsModal } from "./SettingsModal";
 import { AssistantManagerModal } from "./AssistantManagerModal";
+import { SchedulerModal } from "./SchedulerModal";
+
+const ASSISTANT_CWDS_KEY = "vk-cowork-assistant-cwds";
+function loadAssistantCwdLocal(assistantId: string | null): string {
+  if (!assistantId) return "";
+  try {
+    const map = JSON.parse(localStorage.getItem(ASSISTANT_CWDS_KEY) || "{}");
+    return map[assistantId] ?? "";
+  } catch { return ""; }
+}
 
 interface SidebarProps {
   connected: boolean;
@@ -11,6 +21,8 @@ interface SidebarProps {
   onDeleteSession: (sessionId: string) => void;
   width: number;
   onResizeStart: (event: MouseEvent<HTMLDivElement>) => void;
+  onOpenSkill?: () => void;
+  onOpenMcp?: () => void;
 }
 
 export function Sidebar({
@@ -18,18 +30,22 @@ export function Sidebar({
   onDeleteSession,
   width,
   onResizeStart,
+  onOpenSkill,
+  onOpenMcp,
 }: SidebarProps) {
   const sessions = useAppStore((state) => state.sessions);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
   const setActiveSessionId = useAppStore((state) => state.setActiveSessionId);
   const selectedAssistantId = useAppStore((state) => state.selectedAssistantId);
   const setSelectedAssistant = useAppStore((state) => state.setSelectedAssistant);
+  const setCwd = useAppStore((state) => state.setCwd);
 
   const [assistants, setAssistants] = useState<AssistantConfig[]>([]);
   const [resumeSessionId, setResumeSessionId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showAssistantManager, setShowAssistantManager] = useState(false);
+  const [showScheduler, setShowScheduler] = useState(false);
   const closeTimerRef = useRef<number | null>(null);
 
   const formatCwd = (cwd?: string) => {
@@ -56,9 +72,14 @@ export function Sidebar({
       const target = list.find((item) => item.id === targetId) ?? list[0];
       if (target) {
         setSelectedAssistant(target.id, target.skillNames ?? [], target.provider, target.model, target.persona);
+        // 从 localStorage 恢复该助理的工作区（仅当 cwd 为空时）
+        if (!useAppStore.getState().cwd) {
+          const savedCwd = loadAssistantCwdLocal(target.id);
+          if (savedCwd) setCwd(savedCwd);
+        }
       }
     }).catch(console.error);
-  }, [setSelectedAssistant]);
+  }, [setSelectedAssistant, setCwd]);
 
   useEffect(() => {
     loadAssistants();
@@ -113,6 +134,11 @@ export function Sidebar({
   const handleSelectAssistant = (assistant?: AssistantConfig) => {
     if (!assistant) return;
     setSelectedAssistant(assistant.id, assistant.skillNames ?? [], assistant.provider, assistant.model, assistant.persona);
+    // 切换助理时从 localStorage 恢复该助理的工作区（没有则清空）
+    setCwd(loadAssistantCwdLocal(assistant.id));
+    // 自动定位到该助理最新的一个会话（sessionList 已按 updatedAt 降序排列）
+    const latestSession = sessionList.find((s) => s.assistantId === assistant.id);
+    setActiveSessionId(latestSession?.id ?? null);
   };
 
   const getAssistantInitial = (name: string) => {
@@ -171,6 +197,39 @@ export function Sidebar({
               </svg>
             </button>
             <button
+              onClick={() => setShowScheduler(true)}
+              title="定时任务"
+              className="flex h-10 w-full items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 6v6l4 2" />
+              </svg>
+            </button>
+            {onOpenSkill && (
+              <button
+                onClick={onOpenSkill}
+                title="Skills"
+                className="flex h-10 w-full items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                </svg>
+              </button>
+            )}
+            {onOpenMcp && (
+              <button
+                onClick={onOpenMcp}
+                title="MCP 服务器"
+                className="flex h-10 w-full items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M12 1v6m0 6v10M1 12h6m6 0h10" />
+                </svg>
+              </button>
+            )}
+            <button
               onClick={() => setShowSettings(true)}
               title="设置"
               className="flex h-10 w-full items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
@@ -183,13 +242,13 @@ export function Sidebar({
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col px-3">
-          <div className="py-2">
-            <div className="truncate text-center text-sm font-semibold text-ink-800">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-2.5">
+          <div className="pb-2 pt-3">
+            <div className="mb-2 truncate px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-light">
               {currentAssistant?.name ?? "未归类会话"}
             </div>
             <button
-              className="mt-2 w-full rounded-xl border border-ink-900/10 bg-surface px-3 py-2 text-sm font-medium text-ink-700 transition-colors hover:border-ink-900/20 hover:bg-surface-tertiary"
+              className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-accent px-3 py-2 text-sm font-medium text-white shadow-soft transition-all hover:bg-accent-hover active:scale-[0.98]"
               onClick={() => {
                 if (currentAssistant) {
                   handleSelectAssistant(currentAssistant);
@@ -197,21 +256,39 @@ export function Sidebar({
                 onNewSession();
               }}
             >
-              + New Task
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              New Task
             </button>
           </div>
 
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2 gap-0.5 pt-1 pr-1">
             {filteredSessions.length === 0 && (
-              <div className="px-3 py-4 text-center text-xs text-muted">
-                暂无任务
+              <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-ink-900/5">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4 text-muted" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2" />
+                    <path d="M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  </svg>
+                </div>
+                <p className="text-xs text-muted">暂无任务</p>
               </div>
             )}
 
-            {filteredSessions.map((session) => (
+            {filteredSessions.map((session) => {
+              const isActive = activeSessionId === session.id;
+              const isRunning = session.status === "running";
+              const isError = session.status === "error";
+              const isCompleted = session.status === "completed";
+              return (
               <div
                 key={session.id}
-                className={`cursor-pointer border-b border-ink-900/5 px-2 py-2.5 text-left transition last:border-b-0 ${activeSessionId === session.id ? "bg-accent-subtle" : "bg-surface hover:bg-surface-tertiary"}`}
+                className={`group relative cursor-pointer rounded-xl px-3 py-2.5 text-left transition-all ${
+                  isActive
+                    ? "bg-accent/8 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.06)]"
+                    : "hover:bg-ink-900/4"
+                }`}
                 onClick={() => setActiveSessionId(session.id)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
@@ -222,56 +299,76 @@ export function Sidebar({
                 role="button"
                 tabIndex={0}
               >
-                <div className="flex items-center justify-between gap-2">
-                  {session.status === "running" && (
-                    <span className="relative flex h-2 w-2 flex-shrink-0">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-info opacity-75" />
-                      <span className="relative inline-flex h-2 w-2 rounded-full bg-info" />
-                    </span>
-                  )}
-                  <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-                    <div className={`text-[12px] font-medium ${session.status === "running" ? "text-info" : session.status === "completed" ? "text-success" : session.status === "error" ? "text-error" : "text-ink-800"}`}>
-                      {session.title}
-                    </div>
-                    <div className="mt-0.5 flex items-center justify-between text-xs text-muted">
-                      <span className="truncate">{formatCwd(session.cwd)}</span>
-                    </div>
+                <div className="flex items-start gap-2">
+                  {/* 状态指示点 */}
+                  <div className="mt-1 flex-shrink-0">
+                    {isRunning ? (
+                      <span className="relative flex h-1.5 w-1.5">
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-info opacity-75" />
+                        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-info" />
+                      </span>
+                    ) : (
+                      <span className={`inline-flex h-1.5 w-1.5 rounded-full ${
+                        isActive ? "bg-accent" : isCompleted ? "bg-success/60" : isError ? "bg-error/60" : "bg-ink-900/15"
+                      }`} />
+                    )}
                   </div>
+
+                  {/* 内容 */}
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <span className={`truncate text-[12.5px] font-medium leading-snug ${
+                      isRunning ? "text-info" : isError ? "text-error" : isActive ? "text-ink-900" : "text-ink-700"
+                    }`}>
+                      {session.title || "未命名任务"}
+                    </span>
+                    {session.cwd && (
+                      <span className="mt-0.5 truncate text-[10.5px] text-muted-light">
+                        {formatCwd(session.cwd)}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* 菜单按钮：默认隐藏，hover/active 时显示 */}
                   <DropdownMenu.Root>
                     <DropdownMenu.Trigger asChild>
                       <button
-                        className="flex-shrink-0 rounded-full p-1.5 text-ink-500 hover:bg-ink-900/10"
+                        className={`flex-shrink-0 rounded-lg p-1 transition-all ${
+                          isActive
+                            ? "text-ink-400 hover:bg-ink-900/8 hover:text-ink-600"
+                            : "text-transparent group-hover:text-ink-400 hover:bg-ink-900/8 hover:text-ink-600"
+                        }`}
                         aria-label="Open session menu"
                         onClick={(e) => e.stopPropagation()}
                         onPointerDown={(e) => e.stopPropagation()}
                       >
-                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
-                          <circle cx="5" cy="12" r="1.7" />
-                          <circle cx="12" cy="12" r="1.7" />
-                          <circle cx="19" cy="12" r="1.7" />
+                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor">
+                          <circle cx="5" cy="12" r="1.6" />
+                          <circle cx="12" cy="12" r="1.6" />
+                          <circle cx="19" cy="12" r="1.6" />
                         </svg>
                       </button>
                     </DropdownMenu.Trigger>
                     <DropdownMenu.Portal>
-                      <DropdownMenu.Content className="z-50 min-w-[220px] rounded-xl border border-ink-900/10 bg-white p-1 shadow-lg" align="center" sideOffset={8}>
-                        <DropdownMenu.Item className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-700 outline-none hover:bg-ink-900/5" onSelect={() => onDeleteSession(session.id)}>
-                          <svg viewBox="0 0 24 24" className="h-4 w-4 text-error/80" fill="none" stroke="currentColor" strokeWidth="1.8">
+                      <DropdownMenu.Content className="z-50 min-w-[200px] rounded-xl border border-ink-900/8 bg-white p-1 shadow-elevated" align="end" sideOffset={4}>
+                        <DropdownMenu.Item className="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink-700 outline-none hover:bg-ink-900/5" onSelect={() => onDeleteSession(session.id)}>
+                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-error/70" fill="none" stroke="currentColor" strokeWidth="1.8">
                             <path d="M4 7h16" /><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /><path d="M7 7l1 12a1 1 0 0 0 1 .9h6a1 1 0 0 0 1-.9l1-12" />
                           </svg>
-                          Delete this session
+                          删除任务
                         </DropdownMenu.Item>
                         <DropdownMenu.Item className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-700 outline-none hover:bg-ink-900/5" onSelect={() => setResumeSessionId(session.id)}>
-                          <svg viewBox="0 0 24 24" className="h-4 w-4 text-ink-500" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-ink-400" fill="none" stroke="currentColor" strokeWidth="1.8">
                             <path d="M4 5h16v14H4z" /><path d="M7 9h10M7 12h6" /><path d="M13 15l3 2-3 2" />
                           </svg>
-                          Resume in Claude Code
+                          在 Claude Code 中恢复
                         </DropdownMenu.Item>
                       </DropdownMenu.Content>
                     </DropdownMenu.Portal>
                   </DropdownMenu.Root>
                 </div>
               </div>
-            ))}
+            );})}
+
           </div>
         </div>
       </div>
@@ -311,6 +408,8 @@ export function Sidebar({
         onOpenChange={setShowAssistantManager}
         onAssistantsChanged={loadAssistants}
       />
+
+      <SchedulerModal open={showScheduler} onOpenChange={setShowScheduler} />
 
       <div
         className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize bg-transparent transition-colors hover:bg-accent/20"

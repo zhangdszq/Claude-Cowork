@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 
 interface ScheduledTask {
@@ -8,14 +8,24 @@ interface ScheduledTask {
   prompt: string;
   cwd?: string;
   skillPath?: string;
-  scheduleType: "once" | "interval";
+  scheduleType: "once" | "interval" | "daily";
   scheduledTime?: string;
   intervalValue?: number;
   intervalUnit?: "minutes" | "hours" | "days" | "weeks";
+  dailyTime?: string;    // "HH:MM"
+  dailyDays?: number[];  // 0=Sun…6=Sat; empty = every day
   lastRun?: string;
   nextRun?: string;
+  assistantId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+interface AssistantConfig {
+  id: string;
+  name: string;
+  provider: "claude" | "codex";
+  model?: string;
 }
 
 interface SchedulerModalProps {
@@ -23,24 +33,116 @@ interface SchedulerModalProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type EditMode = "list" | "create" | "edit";
+type EditMode = "calendar" | "create" | "edit";
+
+// Weekday labels and JS day indices (Mon-first display order)
+const WEEKDAY_OPTIONS: { label: string; value: number }[] = [
+  { label: "一", value: 1 },
+  { label: "二", value: 2 },
+  { label: "三", value: 3 },
+  { label: "四", value: 4 },
+  { label: "五", value: 5 },
+  { label: "六", value: 6 },
+  { label: "日", value: 0 },
+];
+
+// Assistant event colors
+const ASSISTANT_COLORS = [
+  { bg: "bg-accent/15", text: "text-accent", dot: "bg-accent" },
+  { bg: "bg-emerald-500/15", text: "text-emerald-600", dot: "bg-emerald-500" },
+  { bg: "bg-orange-500/15", text: "text-orange-600", dot: "bg-orange-500" },
+  { bg: "bg-purple-500/15", text: "text-purple-600", dot: "bg-purple-500" },
+  { bg: "bg-pink-500/15", text: "text-pink-600", dot: "bg-pink-500" },
+  { bg: "bg-teal-500/15", text: "text-teal-600", dot: "bg-teal-500" },
+  { bg: "bg-red-500/15", text: "text-red-600", dot: "bg-red-500" },
+  { bg: "bg-yellow-500/15", text: "text-yellow-600", dot: "bg-yellow-500" },
+];
+const DEFAULT_COLOR = { bg: "bg-ink-900/8", text: "text-ink-500", dot: "bg-ink-300" };
+
+const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
+const MONTHS = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
+
+// Calendar helpers
+const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
+const getFirstDayOfMonth = (year: number, month: number) => {
+  const day = new Date(year, month, 1).getDay();
+  return day === 0 ? 6 : day - 1; // Convert Sun=0 to Mon=0
+};
+
+interface CalendarDay {
+  date: Date;
+  isCurrentMonth: boolean;
+}
+
+const generateCalendarDays = (year: number, month: number): CalendarDay[] => {
+  const daysInMonth = getDaysInMonth(year, month);
+  const firstDay = getFirstDayOfMonth(year, month);
+  const days: CalendarDay[] = [];
+
+  const prevMonthDays = getDaysInMonth(year, month - 1);
+  for (let i = firstDay - 1; i >= 0; i--) {
+    days.push({ date: new Date(year, month - 1, prevMonthDays - i), isCurrentMonth: false });
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    days.push({ date: new Date(year, month, d), isCurrentMonth: true });
+  }
+  // Always fill to 42 cells (6 rows)
+  const remaining = 42 - days.length;
+  for (let d = 1; d <= remaining; d++) {
+    days.push({ date: new Date(year, month + 1, d), isCurrentMonth: false });
+  }
+  return days;
+};
+
+const isSameDay = (a: Date, b: Date) =>
+  a.getFullYear() === b.getFullYear() &&
+  a.getMonth() === b.getMonth() &&
+  a.getDate() === b.getDate();
+
+const getTaskDisplayDate = (task: ScheduledTask): Date | null => {
+  if (task.scheduleType === "once" && task.scheduledTime) return new Date(task.scheduledTime);
+  if (task.scheduleType === "interval" && task.nextRun) return new Date(task.nextRun);
+  return null;
+};
+
+// Returns true if task should appear on this calendar day
+const isTaskOnDay = (task: ScheduledTask, date: Date): boolean => {
+  if (task.scheduleType === "once" || task.scheduleType === "interval") {
+    const d = getTaskDisplayDate(task);
+    return !!d && isSameDay(d, date);
+  }
+  if (task.scheduleType === "daily") {
+    if (!task.dailyTime) return false;
+    if (task.dailyDays && task.dailyDays.length > 0) {
+      return task.dailyDays.includes(date.getDay());
+    }
+    return true; // every day
+  }
+  return false;
+};
 
 export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
-  const [mode, setMode] = useState<EditMode>("list");
+  const [mode, setMode] = useState<EditMode>("calendar");
   const [editingTask, setEditingTask] = useState<ScheduledTask | null>(null);
   const [loading, setLoading] = useState(false);
-  
+  const [assistants, setAssistants] = useState<AssistantConfig[]>([]);
+  const [currentMonth, setCurrentMonth] = useState(() => new Date());
+  // null = 全员，"__default__" = 无助理，其他 = 特定助理 id
+  const [filterAssistantId, setFilterAssistantId] = useState<string | null>(null);
+
   // Form state
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [cwd, setCwd] = useState("");
-  const [scheduleType, setScheduleType] = useState<"once" | "interval">("once");
+  const [scheduleType, setScheduleType] = useState<"once" | "interval" | "daily">("once");
   const [scheduledTime, setScheduledTime] = useState("");
   const [intervalValue, setIntervalValue] = useState(1);
   const [intervalUnit, setIntervalUnit] = useState<"minutes" | "hours" | "days" | "weeks">("hours");
+  const [dailyTime, setDailyTime] = useState("09:00");
+  const [dailyDays, setDailyDays] = useState<number[]>([]); // empty = every day
+  const [formAssistantId, setFormAssistantId] = useState<string>("");
 
-  // Load tasks
   const loadTasks = useCallback(async () => {
     setLoading(true);
     try {
@@ -56,53 +158,92 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
   useEffect(() => {
     if (open) {
       loadTasks();
-      setMode("list");
+      setMode("calendar");
+      setCurrentMonth(new Date());
     }
   }, [open, loadTasks]);
 
-  // Reset form
-  const resetForm = () => {
-    setName("");
-    setPrompt("");
-    setCwd("");
-    setScheduleType("once");
-    setScheduledTime("");
-    setIntervalValue(1);
-    setIntervalUnit("hours");
-    setEditingTask(null);
+  useEffect(() => {
+    window.electron.getAssistantsConfig().then((config) => {
+      setAssistants(config.assistants || []);
+    }).catch(console.error);
+  }, []);
+
+  // Map assistant id → color (stable across renders)
+  const assistantColorMap = useMemo(() => {
+    const map = new Map<string, typeof ASSISTANT_COLORS[0]>();
+    assistants.forEach((a, i) => map.set(a.id, ASSISTANT_COLORS[i % ASSISTANT_COLORS.length]));
+    return map;
+  }, [assistants]);
+
+  const getAssistantColor = (assistantId?: string) =>
+    assistantId ? (assistantColorMap.get(assistantId) ?? DEFAULT_COLOR) : DEFAULT_COLOR;
+
+  const getAssistantName = (assistantId?: string) => {
+    if (!assistantId) return null;
+    return assistants.find((a) => a.id === assistantId)?.name ?? null;
   };
 
-  // Start creating new task
-  const handleCreate = () => {
+  const calendarDays = useMemo(
+    () => generateCalendarDays(currentMonth.getFullYear(), currentMonth.getMonth()),
+    [currentMonth]
+  );
+
+  const filteredTasks = useMemo(() => {
+    if (filterAssistantId === null) return tasks;
+    if (filterAssistantId === "__default__") return tasks.filter((t) => !t.assistantId);
+    return tasks.filter((t) => t.assistantId === filterAssistantId);
+  }, [tasks, filterAssistantId]);
+
+  const getTasksForDay = useCallback(
+    (date: Date) => filteredTasks.filter((t) => isTaskOnDay(t, date)),
+    [filteredTasks]
+  );
+
+  const today = useMemo(() => new Date(), []);
+
+  const prevMonth = () => setCurrentMonth((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1));
+  const nextMonth = () => setCurrentMonth((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1));
+  const goToToday = () => setCurrentMonth(new Date());
+
+  const resetForm = () => {
+    setName(""); setPrompt(""); setCwd("");
+    setScheduleType("once"); setScheduledTime("");
+    setIntervalValue(1); setIntervalUnit("hours");
+    setDailyTime("09:00"); setDailyDays([]);
+    setFormAssistantId(""); setEditingTask(null);
+  };
+
+  const handleCreate = (date?: Date) => {
     resetForm();
-    // Set default scheduled time to 1 hour from now
-    const defaultTime = new Date();
-    defaultTime.setHours(defaultTime.getHours() + 1);
-    defaultTime.setMinutes(0);
-    defaultTime.setSeconds(0);
-    setScheduledTime(defaultTime.toISOString().slice(0, 16));
+    const t = date ? new Date(date) : new Date();
+    if (!date) t.setHours(t.getHours() + 1);
+    t.setMinutes(0); t.setSeconds(0);
+    setScheduledTime(t.toISOString().slice(0, 16));
+    // pre-fill assistant from sidebar filter
+    if (filterAssistantId && filterAssistantId !== "__default__") {
+      setFormAssistantId(filterAssistantId);
+    }
     setMode("create");
   };
 
-  // Start editing task
   const handleEdit = (task: ScheduledTask) => {
     setEditingTask(task);
     setName(task.name);
     setPrompt(task.prompt);
     setCwd(task.cwd || "");
     setScheduleType(task.scheduleType);
-    if (task.scheduledTime) {
-      setScheduledTime(new Date(task.scheduledTime).toISOString().slice(0, 16));
-    }
+    if (task.scheduledTime) setScheduledTime(new Date(task.scheduledTime).toISOString().slice(0, 16));
     setIntervalValue(task.intervalValue || 1);
     setIntervalUnit(task.intervalUnit || "hours");
+    setDailyTime(task.dailyTime || "09:00");
+    setDailyDays(task.dailyDays || []);
+    setFormAssistantId(task.assistantId || "");
     setMode("edit");
   };
 
-  // Save task
   const handleSave = async () => {
     if (!name.trim() || !prompt.trim()) return;
-
     setLoading(true);
     try {
       const taskData = {
@@ -114,16 +255,17 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
         scheduledTime: scheduleType === "once" ? new Date(scheduledTime).toISOString() : undefined,
         intervalValue: scheduleType === "interval" ? intervalValue : undefined,
         intervalUnit: scheduleType === "interval" ? intervalUnit : undefined,
+        dailyTime: scheduleType === "daily" ? dailyTime : undefined,
+        dailyDays: scheduleType === "daily" ? dailyDays : undefined,
+        assistantId: formAssistantId || undefined,
       };
-
       if (mode === "edit" && editingTask) {
         await window.electron.updateScheduledTask(editingTask.id, taskData);
       } else {
         await window.electron.addScheduledTask(taskData);
       }
-
       await loadTasks();
-      setMode("list");
+      setMode("calendar");
       resetForm();
     } catch (error) {
       console.error("Failed to save task:", error);
@@ -132,14 +274,13 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     }
   };
 
-  // Delete task
   const handleDelete = async (id: string) => {
     if (!confirm("确定要删除这个定时任务吗？")) return;
-
     setLoading(true);
     try {
       await window.electron.deleteScheduledTask(id);
       await loadTasks();
+      setMode("calendar");
     } catch (error) {
       console.error("Failed to delete task:", error);
     } finally {
@@ -147,11 +288,12 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     }
   };
 
-  // Toggle task enabled
-  const handleToggle = async (task: ScheduledTask) => {
+  const handleToggle = async (task: ScheduledTask, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     setLoading(true);
     try {
-      await window.electron.updateScheduledTask(task.id, { enabled: !task.enabled });
+      const updated = await window.electron.updateScheduledTask(task.id, { enabled: !task.enabled });
+      if (editingTask && updated) setEditingTask(updated);
       await loadTasks();
     } catch (error) {
       console.error("Failed to toggle task:", error);
@@ -160,7 +302,6 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     }
   };
 
-  // Select directory
   const handleSelectDirectory = async () => {
     try {
       const path = await window.electron.selectDirectory();
@@ -170,295 +311,515 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     }
   };
 
-  // Format next run time
-  const formatNextRun = (nextRun?: string) => {
-    if (!nextRun) return "未设置";
-    const date = new Date(nextRun);
-    const now = new Date();
-    const diff = date.getTime() - now.getTime();
-    
-    if (diff < 0) return "已过期";
-    if (diff < 60 * 1000) return "即将执行";
-    if (diff < 60 * 60 * 1000) return `${Math.round(diff / 60000)} 分钟后`;
-    if (diff < 24 * 60 * 60 * 1000) return `${Math.round(diff / 3600000)} 小时后`;
-    return date.toLocaleString("zh-CN");
-  };
-
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-900/20 backdrop-blur-sm" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-full max-w-2xl max-h-[85vh] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-ink-900/5 bg-surface shadow-elevated overflow-hidden flex flex-col">
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-full max-w-[1140px] h-[82vh] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-ink-900/5 bg-surface shadow-elevated overflow-hidden flex flex-col">
+
           {/* Header */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-ink-900/10">
-            <div className="flex items-center gap-3">
-              {mode !== "list" && (
+          <div className="flex items-center justify-between px-6 py-3.5 border-b border-ink-900/10 shrink-0">
+            <div className="flex items-center gap-2.5">
+              {mode !== "calendar" && (
                 <button
-                  onClick={() => { setMode("list"); resetForm(); }}
+                  onClick={() => { setMode("calendar"); resetForm(); }}
                   className="rounded-lg p-1.5 text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
                 >
-                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M15 18l-6-6 6-6" />
                   </svg>
                 </button>
               )}
               <Dialog.Title className="text-base font-semibold text-ink-800">
-                {mode === "list" ? "定时任务" : mode === "create" ? "新建任务" : "编辑任务"}
+                {mode === "calendar" ? "定时任务" : mode === "create" ? "新建任务" : "编辑任务"}
               </Dialog.Title>
             </div>
-            <Dialog.Close asChild>
-              <button
-                className="rounded-full p-1.5 text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
-                aria-label="Close"
-              >
-                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M18 6L6 18M6 6l12 12" />
-                </svg>
-              </button>
-            </Dialog.Close>
+            <div className="flex items-center gap-2">
+              {mode === "calendar" && (
+                <button
+                  onClick={() => handleCreate()}
+                  className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover transition-colors"
+                >
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                  新建任务
+                </button>
+              )}
+              <Dialog.Close asChild>
+                <button
+                  className="rounded-full p-1.5 text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
+                  aria-label="Close"
+                >
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M18 6L6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </Dialog.Close>
+            </div>
           </div>
 
-          {/* Content */}
-          <div className="flex-1 overflow-y-auto p-6">
-            {mode === "list" ? (
-              /* Task List */
-              <div className="space-y-3">
-                {loading ? (
-                  <div className="flex items-center justify-center py-12">
-                    <svg className="h-6 w-6 animate-spin text-muted" viewBox="0 0 24 24" fill="none">
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
-                      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                    </svg>
-                  </div>
-                ) : tasks.length === 0 ? (
-                  <div className="text-center py-12">
-                    <div className="text-5xl mb-4">⏰</div>
-                    <div className="text-ink-700 font-medium mb-2">没有定时任务</div>
-                    <div className="text-sm text-muted">创建定时任务来自动运行会话</div>
-                  </div>
-                ) : (
-                  tasks.map((task) => (
-                    <div
-                      key={task.id}
-                      className={`rounded-xl border p-4 transition-colors ${
-                        task.enabled 
-                          ? "border-accent/30 bg-accent/5" 
-                          : "border-ink-900/10 bg-surface-secondary"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-medium text-ink-800 truncate">{task.name}</span>
-                            {task.enabled && (
-                              <span className="text-xs text-accent bg-accent/10 px-2 py-0.5 rounded-full">
-                                已启用
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-sm text-muted truncate mb-2">{task.prompt}</div>
-                          <div className="flex items-center gap-4 text-xs text-muted">
-                            <span className="flex items-center gap-1">
-                              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                                <circle cx="12" cy="12" r="10" />
-                                <path d="M12 6v6l4 2" />
-                              </svg>
-                              {task.scheduleType === "once" 
-                                ? "单次执行" 
-                                : `每 ${task.intervalValue} ${
-                                    task.intervalUnit === "minutes" ? "分钟" :
-                                    task.intervalUnit === "hours" ? "小时" :
-                                    task.intervalUnit === "days" ? "天" : "周"
-                                  }`
-                              }
-                            </span>
-                            {task.enabled && (
-                              <span className="flex items-center gap-1 text-accent">
-                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                                  <path d="M5 12h14M12 5l7 7-7 7" />
-                                </svg>
-                                {formatNextRun(task.nextRun)}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleToggle(task)}
-                            className={`relative w-10 h-6 rounded-full transition-colors ${
-                              task.enabled ? "bg-accent" : "bg-ink-900/20"
-                            }`}
-                          >
-                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${
-                              task.enabled ? "left-5" : "left-1"
-                            }`} />
-                          </button>
-                          <button
-                            onClick={() => handleEdit(task)}
-                            className="rounded-lg p-1.5 text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
-                          >
-                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                            </svg>
-                          </button>
-                          <button
-                            onClick={() => handleDelete(task.id)}
-                            className="rounded-lg p-1.5 text-muted hover:bg-error/10 hover:text-error transition-colors"
-                          >
-                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                              <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                            </svg>
-                          </button>
-                        </div>
-                      </div>
+          {mode === "calendar" ? (
+            /* ── Calendar View ── */
+            <div className="flex flex-1 overflow-hidden">
+
+              {/* ── Sidebar ── */}
+              <div className="w-44 shrink-0 border-r border-ink-900/10 flex flex-col overflow-y-auto bg-surface-secondary/30">
+                <div className="px-3 pt-3 pb-1">
+                  <p className="text-[11px] font-semibold text-muted uppercase tracking-wider px-1">日历</p>
+                </div>
+
+                {/* 全员日历 */}
+                <button
+                  onClick={() => setFilterAssistantId(null)}
+                  className={`mx-2 mb-0.5 flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
+                    filterAssistantId === null
+                      ? "bg-accent/15 text-accent font-medium"
+                      : "text-ink-700 hover:bg-surface-tertiary"
+                  }`}
+                >
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="3" y="4" width="18" height="18" rx="2" />
+                    <path d="M16 2v4M8 2v4M3 10h18" />
+                  </svg>
+                  <span className="truncate">全员日历</span>
+                  <span className={`ml-auto text-[11px] tabular-nums ${filterAssistantId === null ? "text-accent/70" : "text-muted"}`}>
+                    {tasks.length}
+                  </span>
+                </button>
+
+                {/* Assistants section */}
+                {assistants.length > 0 && (
+                  <>
+                    <div className="px-3 pt-3 pb-1">
+                      <p className="text-[11px] font-semibold text-muted uppercase tracking-wider px-1">助理</p>
                     </div>
-                  ))
+                    {assistants.map((a, i) => {
+                      const color = ASSISTANT_COLORS[i % ASSISTANT_COLORS.length];
+                      const count = tasks.filter((t) => t.assistantId === a.id).length;
+                      const isActive = filterAssistantId === a.id;
+                      return (
+                        <button
+                          key={a.id}
+                          onClick={() => setFilterAssistantId(isActive ? null : a.id)}
+                          className={`mx-2 mb-0.5 flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
+                            isActive ? `${color.bg} ${color.text} font-medium` : "text-ink-700 hover:bg-surface-tertiary"
+                          }`}
+                        >
+                          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${color.dot}`} />
+                          <span className="truncate">{a.name}</span>
+                          {count > 0 && (
+                            <span className={`ml-auto text-[11px] tabular-nums ${isActive ? "opacity-70" : "text-muted"}`}>
+                              {count}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </>
                 )}
 
-                <button
-                  onClick={handleCreate}
-                  className="w-full rounded-xl border-2 border-dashed border-ink-900/20 py-4 text-sm text-muted hover:border-accent hover:text-accent transition-colors"
-                >
-                  + 新建定时任务
-                </button>
+                {/* Default (no assistant assigned) */}
+                {tasks.some((t) => !t.assistantId) && (
+                  <>
+                    <div className="px-3 pt-3 pb-1">
+                      <p className="text-[11px] font-semibold text-muted uppercase tracking-wider px-1">其他</p>
+                    </div>
+                    <button
+                      onClick={() => setFilterAssistantId(filterAssistantId === "__default__" ? null : "__default__")}
+                      className={`mx-2 mb-0.5 flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
+                        filterAssistantId === "__default__"
+                          ? "bg-ink-900/8 text-ink-700 font-medium"
+                          : "text-ink-600 hover:bg-surface-tertiary"
+                      }`}
+                    >
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-ink-300" />
+                      <span className="truncate">默认助理</span>
+                      <span className="ml-auto text-[11px] tabular-nums text-muted">
+                        {tasks.filter((t) => !t.assistantId).length}
+                      </span>
+                    </button>
+                  </>
+                )}
+
+                <div className="flex-1" />
               </div>
-            ) : (
-              /* Create/Edit Form */
-              <div className="space-y-4">
-                <label className="block">
-                  <span className="text-xs font-medium text-muted">任务名称</span>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="例如：每日视频剪辑"
-                    className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
-                  />
-                </label>
 
-                <label className="block">
-                  <span className="text-xs font-medium text-muted">执行指令</span>
-                  <textarea
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    placeholder="输入要执行的任务指令..."
-                    rows={3}
-                    className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors resize-none"
-                  />
-                </label>
+              {/* ── Calendar panel ── */}
+              <div className="flex flex-col flex-1 overflow-hidden">
 
-                <label className="block">
-                  <span className="text-xs font-medium text-muted">工作目录 (可选)</span>
-                  <div className="mt-1.5 flex gap-2">
+                {/* Month navigation */}
+                <div className="flex items-center gap-2 px-4 py-2.5 shrink-0">
+                  <button
+                    onClick={goToToday}
+                    className="rounded-lg border border-ink-900/10 px-3 py-1 text-xs font-medium text-ink-700 hover:bg-surface-tertiary transition-colors"
+                  >
+                    今天
+                  </button>
+                  <div className="flex items-center">
+                    <button onClick={prevMonth} className="rounded-lg p-1.5 text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M15 18l-6-6 6-6" />
+                      </svg>
+                    </button>
+                    <button onClick={nextMonth} className="rounded-lg p-1.5 text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M9 18l6-6-6-6" />
+                      </svg>
+                    </button>
+                  </div>
+                  <span className="text-sm font-semibold text-ink-800">
+                    {currentMonth.getFullYear()}年{MONTHS[currentMonth.getMonth()]}
+                  </span>
+                  {filterAssistantId !== null && (
+                    <span className="ml-1 text-xs text-muted">
+                      · {filterAssistantId === "__default__" ? "默认助理" : (assistants.find(a => a.id === filterAssistantId)?.name ?? "")}
+                    </span>
+                  )}
+                </div>
+
+                {/* Weekday headers */}
+                <div className="grid grid-cols-7 border-t border-b border-ink-900/10 shrink-0">
+                  {WEEKDAYS.map((day, i) => (
+                    <div
+                      key={day}
+                      className={`py-1.5 text-center text-xs font-medium tracking-wide ${
+                        i >= 5 ? "text-muted" : "text-ink-500"
+                      }`}
+                    >
+                      周{day}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Calendar grid */}
+                <div className="flex-1 overflow-y-auto">
+                  <div className="grid grid-cols-7" style={{ gridTemplateRows: "repeat(6, minmax(90px, 1fr))" }}>
+                  {calendarDays.map((day, idx) => {
+                    const dayTasks = getTasksForDay(day.date);
+                    const isToday = isSameDay(day.date, today);
+                    const isWeekend = idx % 7 >= 5;
+                    const isFirstCol = idx % 7 === 0;
+
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => day.isCurrentMonth && handleCreate(day.date)}
+                        className={`relative border-b border-r border-ink-900/8 p-1.5 cursor-pointer transition-colors group/cell ${
+                          isFirstCol ? "border-l border-ink-900/8" : ""
+                        } ${
+                          day.isCurrentMonth
+                            ? isWeekend
+                              ? "bg-surface-secondary/30 hover:bg-surface-secondary/60"
+                              : "bg-surface hover:bg-surface-secondary/40"
+                            : "bg-surface-secondary/15 hover:bg-surface-secondary/30"
+                        }`}
+                      >
+                        {/* Date number */}
+                        <div className="flex items-center justify-between mb-1">
+                          <span
+                            className={`inline-flex h-[22px] w-[22px] items-center justify-center rounded-full text-[12px] font-medium ${
+                              isToday
+                                ? "bg-accent text-white font-semibold"
+                                : day.isCurrentMonth
+                                ? isWeekend
+                                  ? "text-ink-400"
+                                  : "text-ink-700"
+                                : "text-ink-300"
+                            }`}
+                          >
+                            {day.date.getDate()}
+                          </span>
+                          {day.isCurrentMonth && (
+                            <svg
+                              viewBox="0 0 24 24"
+                              className="h-3 w-3 text-ink-300 opacity-0 group-hover/cell:opacity-100 transition-opacity"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.5"
+                            >
+                              <path d="M12 5v14M5 12h14" />
+                            </svg>
+                          )}
+                        </div>
+
+                        {/* Task events */}
+                        <div className="space-y-0.5">
+                          {dayTasks.slice(0, 3).map((task) => {
+                            const color = getAssistantColor(task.assistantId);
+                            const assistantName = getAssistantName(task.assistantId);
+                            return (
+                              <button
+                                key={task.id}
+                                onClick={(e) => { e.stopPropagation(); handleEdit(task); }}
+                                className={`w-full flex items-center gap-1 rounded px-1.5 py-[3px] text-left transition-all hover:brightness-95 active:scale-[0.98] ${
+                                  task.enabled ? color.bg : "bg-ink-900/5"
+                                }`}
+                                title={`${assistantName ? assistantName + " · " : ""}${task.name}`}
+                              >
+                                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${task.enabled ? color.dot : "bg-ink-300"}`} />
+                                <span className={`truncate text-[11px] leading-[1.3] font-medium ${task.enabled ? color.text : "text-ink-400"}`}>
+                                  {assistantName && (
+                                    <span className="opacity-60">{assistantName} · </span>
+                                  )}
+                                  {task.name}
+                                </span>
+                                {(task.scheduleType === "interval" || task.scheduleType === "daily") && (
+                                  <span className={`ml-auto shrink-0 text-[10px] opacity-60 ${task.enabled ? color.text : "text-ink-300"}`}>
+                                    {task.scheduleType === "daily" ? task.dailyTime : "↻"}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                          {dayTasks.length > 3 && (
+                            <div className="px-1.5 text-[11px] text-muted leading-tight">
+                              还有 {dayTasks.length - 3} 个
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          ) : (
+            /* ── Create / Edit Form ── */
+            <>
+              <div className="flex-1 overflow-y-auto p-6">
+                <div className="space-y-4 max-w-lg mx-auto">
+
+                  {/* Assistant selector */}
+                  <label className="block">
+                    <span className="text-xs font-medium text-muted">执行助理</span>
+                    <select
+                      value={formAssistantId}
+                      onChange={(e) => setFormAssistantId(e.target.value)}
+                      className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                    >
+                      <option value="">默认助理</option>
+                      {assistants.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-medium text-muted">任务名称</span>
                     <input
                       type="text"
-                      value={cwd}
-                      onChange={(e) => setCwd(e.target.value)}
-                      placeholder="选择工作目录..."
-                      className="flex-1 rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
-                      readOnly
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="例如：每日视频剪辑"
+                      className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
                     />
-                    <button
-                      onClick={handleSelectDirectory}
-                      className="rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-muted hover:bg-surface-tertiary transition-colors"
-                    >
-                      浏览
-                    </button>
-                  </div>
-                </label>
+                  </label>
 
-                <div className="border-t border-ink-900/10 pt-4">
-                  <span className="text-xs font-medium text-muted">执行时间</span>
-                  
-                  <div className="mt-3 flex gap-3">
-                    <button
-                      onClick={() => setScheduleType("once")}
-                      className={`flex-1 rounded-xl border py-3 text-sm font-medium transition-colors ${
-                        scheduleType === "once"
-                          ? "border-accent bg-accent/10 text-accent"
-                          : "border-ink-900/10 text-muted hover:border-ink-900/20"
-                      }`}
-                    >
-                      单次执行
-                    </button>
-                    <button
-                      onClick={() => setScheduleType("interval")}
-                      className={`flex-1 rounded-xl border py-3 text-sm font-medium transition-colors ${
-                        scheduleType === "interval"
-                          ? "border-accent bg-accent/10 text-accent"
-                          : "border-ink-900/10 text-muted hover:border-ink-900/20"
-                      }`}
-                    >
-                      定时重复
-                    </button>
-                  </div>
+                  <label className="block">
+                    <span className="text-xs font-medium text-muted">执行指令</span>
+                    <textarea
+                      value={prompt}
+                      onChange={(e) => setPrompt(e.target.value)}
+                      placeholder="输入要执行的任务指令..."
+                      rows={3}
+                      className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors resize-none"
+                    />
+                  </label>
 
-                  {scheduleType === "once" ? (
-                    <label className="block mt-4">
-                      <span className="text-xs font-medium text-muted">执行时间</span>
+                  <label className="block">
+                    <span className="text-xs font-medium text-muted">工作目录（可选）</span>
+                    <div className="mt-1.5 flex gap-2">
                       <input
-                        type="datetime-local"
-                        value={scheduledTime}
-                        onChange={(e) => setScheduledTime(e.target.value)}
-                        className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                        type="text"
+                        value={cwd}
+                        onChange={(e) => setCwd(e.target.value)}
+                        placeholder="选择工作目录..."
+                        className="flex-1 rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                        readOnly
                       />
-                    </label>
-                  ) : (
-                    <div className="mt-4 flex gap-3">
-                      <label className="flex-1">
-                        <span className="text-xs font-medium text-muted">间隔</span>
+                      <button
+                        onClick={handleSelectDirectory}
+                        className="rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-muted hover:bg-surface-tertiary transition-colors"
+                      >
+                        浏览
+                      </button>
+                    </div>
+                  </label>
+
+                  <div className="border-t border-ink-900/10 pt-4">
+                    <span className="text-xs font-medium text-muted">执行方式</span>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      {(["once", "interval", "daily"] as const).map((type) => {
+                        const labels = { once: "单次执行", interval: "间隔重复", daily: "指定时间" };
+                        return (
+                          <button
+                            key={type}
+                            onClick={() => setScheduleType(type)}
+                            className={`rounded-xl border py-2.5 text-sm font-medium transition-colors ${
+                              scheduleType === type
+                                ? "border-accent bg-accent/10 text-accent"
+                                : "border-ink-900/10 text-muted hover:border-ink-900/20"
+                            }`}
+                          >
+                            {labels[type]}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {scheduleType === "once" && (
+                      <label className="block mt-4">
+                        <span className="text-xs font-medium text-muted">执行时间</span>
                         <input
-                          type="number"
-                          min="1"
-                          value={intervalValue}
-                          onChange={(e) => setIntervalValue(parseInt(e.target.value) || 1)}
+                          type="datetime-local"
+                          value={scheduledTime}
+                          onChange={(e) => setScheduledTime(e.target.value)}
                           className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
                         />
                       </label>
-                      <label className="flex-1">
-                        <span className="text-xs font-medium text-muted">单位</span>
-                        <select
-                          value={intervalUnit}
-                          onChange={(e) => setIntervalUnit(e.target.value as any)}
-                          className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                    )}
+
+                    {scheduleType === "interval" && (
+                      <div className="mt-4 flex gap-3">
+                        <label className="flex-1">
+                          <span className="text-xs font-medium text-muted">间隔</span>
+                          <input
+                            type="number"
+                            min="1"
+                            value={intervalValue}
+                            onChange={(e) => setIntervalValue(parseInt(e.target.value) || 1)}
+                            className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                          />
+                        </label>
+                        <label className="flex-1">
+                          <span className="text-xs font-medium text-muted">单位</span>
+                          <select
+                            value={intervalUnit}
+                            onChange={(e) => setIntervalUnit(e.target.value as "minutes" | "hours" | "days" | "weeks")}
+                            className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                          >
+                            <option value="minutes">分钟</option>
+                            <option value="hours">小时</option>
+                            <option value="days">天</option>
+                            <option value="weeks">周</option>
+                          </select>
+                        </label>
+                      </div>
+                    )}
+
+                    {scheduleType === "daily" && (
+                      <div className="mt-4 space-y-3">
+                        <label className="block">
+                          <span className="text-xs font-medium text-muted">执行时间</span>
+                          <input
+                            type="time"
+                            value={dailyTime}
+                            onChange={(e) => setDailyTime(e.target.value)}
+                            className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                          />
+                        </label>
+                        <div>
+                          <span className="text-xs font-medium text-muted">重复日期</span>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {/* "每天" shortcut */}
+                            <button
+                              onClick={() => setDailyDays([])}
+                              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                                dailyDays.length === 0
+                                  ? "bg-accent text-white"
+                                  : "bg-surface-secondary border border-ink-900/10 text-ink-600 hover:border-ink-900/20"
+                              }`}
+                            >
+                              每天
+                            </button>
+                            {WEEKDAY_OPTIONS.map(({ label, value }) => {
+                              const selected = dailyDays.includes(value);
+                              return (
+                                <button
+                                  key={value}
+                                  onClick={() => {
+                                    setDailyDays((prev) =>
+                                      selected ? prev.filter((d) => d !== value) : [...prev, value]
+                                    );
+                                  }}
+                                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                                    selected
+                                      ? "bg-accent text-white"
+                                      : "bg-surface-secondary border border-ink-900/10 text-ink-600 hover:border-ink-900/20"
+                                  }`}
+                                >
+                                  周{label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {dailyDays.length === 0 && (
+                            <p className="mt-1.5 text-xs text-muted">每天 {dailyTime} 执行</p>
+                          )}
+                          {dailyDays.length > 0 && (
+                            <p className="mt-1.5 text-xs text-muted">
+                              每{WEEKDAY_OPTIONS.filter(o => dailyDays.includes(o.value)).map(o => "周" + o.label).join("、")} {dailyTime} 执行
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Edit-only: toggle enabled + delete */}
+                  {mode === "edit" && editingTask && (
+                    <div className="border-t border-ink-900/10 pt-4 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs font-medium text-muted">启用</span>
+                        <button
+                          onClick={(e) => editingTask && handleToggle(editingTask, e)}
+                          className={`relative w-10 h-6 rounded-full transition-colors ${
+                            editingTask.enabled ? "bg-accent" : "bg-ink-900/20"
+                          }`}
                         >
-                          <option value="minutes">分钟</option>
-                          <option value="hours">小时</option>
-                          <option value="days">天</option>
-                          <option value="weeks">周</option>
-                        </select>
-                      </label>
+                          <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${
+                            editingTask.enabled ? "left-5" : "left-1"
+                          }`} />
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => editingTask && handleDelete(editingTask.id)}
+                        className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-error hover:bg-error/10 transition-colors"
+                      >
+                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                        删除任务
+                      </button>
                     </div>
                   )}
                 </div>
               </div>
-            )}
-          </div>
 
-          {/* Footer */}
-          {mode !== "list" && (
-            <div className="px-6 py-4 border-t border-ink-900/10 bg-surface-secondary/50">
-              <button
-                onClick={handleSave}
-                disabled={loading || !name.trim() || !prompt.trim()}
-                className="w-full rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white shadow-soft hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {loading ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
-                      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                    </svg>
-                    保存中...
-                  </span>
-                ) : mode === "edit" ? (
-                  "保存修改"
-                ) : (
-                  "创建任务"
-                )}
-              </button>
-            </div>
+              {/* Footer */}
+              <div className="px-6 py-4 border-t border-ink-900/10 bg-surface-secondary/50 shrink-0">
+                <div className="max-w-lg mx-auto">
+                  <button
+                    onClick={handleSave}
+                    disabled={loading || !name.trim() || !prompt.trim()}
+                    className="w-full rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white shadow-soft hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loading ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                          <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
+                          <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                        </svg>
+                        保存中...
+                      </span>
+                    ) : mode === "edit" ? "保存修改" : "创建任务"}
+                  </button>
+                </div>
+              </div>
+            </>
           )}
         </Dialog.Content>
       </Dialog.Portal>

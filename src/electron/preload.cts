@@ -104,7 +104,9 @@ electron.contextBridge.exposeInMainWorld("electron", {
         const cb = (_: Electron.IpcRendererEvent, task: any) => callback(task);
         electron.ipcRenderer.on("scheduler:run-task", cb);
         return () => electron.ipcRenderer.off("scheduler:run-task", cb);
-    }
+    },
+    readDir: (dirPath: string) =>
+        ipcInvoke("read-dir", dirPath),
 } satisfies Window['electron'])
 
 function ipcInvoke<Key extends keyof EventPayloadMapping>(key: Key, ...args: any[]): Promise<EventPayloadMapping[Key]> {

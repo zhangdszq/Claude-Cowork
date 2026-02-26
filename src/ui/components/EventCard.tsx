@@ -300,15 +300,75 @@ const ToolResult = ({ messageContent }: { messageContent: ToolResultContent }) =
   );
 };
 
-const AssistantBlockCard = ({ title, text, showIndicator = false }: { title: string; text: string; showIndicator?: boolean }) => (
-  <div className="flex flex-col mt-4">
-    <div className="header text-accent flex items-center gap-2">
-      <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
-      {title}
+const AssistantBlockCard = ({
+  title,
+  text,
+  showIndicator = false,
+  copyable = false,
+}: {
+  title: string;
+  text: string;
+  showIndicator?: boolean;
+  copyable?: boolean;
+}) => {
+  const [copied, setCopied] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const handleCopy = async () => {
+    if (!contentRef.current) return;
+    try {
+      const htmlContent = contentRef.current.innerHTML;
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([htmlContent], { type: "text/html" }),
+          "text/plain": new Blob([text], { type: "text/plain" }),
+        }),
+      ]);
+    } catch {
+      await navigator.clipboard.writeText(text);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="flex flex-col mt-4">
+      <div className="header text-accent flex items-center gap-2">
+        <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
+        {title}
+      </div>
+      <div ref={contentRef}>
+        <MDContent text={text} />
+      </div>
+      {copyable && (
+        <div className="mt-2 flex justify-end">
+          <button
+            onClick={handleCopy}
+            title="复制为富文本"
+            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs text-muted hover:text-ink-700 hover:bg-surface-tertiary transition-colors"
+          >
+            {copied ? (
+              <>
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-success" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M20 6L9 17l-5-5" />
+                </svg>
+                <span>已复制</span>
+              </>
+            ) : (
+              <>
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+                <span>复制</span>
+              </>
+            )}
+          </button>
+        </div>
+      )}
     </div>
-    <MDContent text={text} />
-  </div>
-);
+  );
+};
 
 const ToolUseCard = ({ messageContent, showIndicator = false }: { messageContent: MessageContent; showIndicator?: boolean }) => {
   if (messageContent.type !== "tool_use") return null;
@@ -542,27 +602,19 @@ export const MessageCard = memo(function MessageCard({
   }
 
   if (message.type === "skill_loaded") {
-    return <SkillLoadedCard message={message as SkillLoadedMessage} />;
+    return null;
   }
 
   const sdkMessage = message as SDKMessage;
 
-  // Hide system init and session result based on setting
-  if (sdkMessage.type === "system" && !showSystemInfo) {
+  // Always hide system init and successful session result
+  if (sdkMessage.type === "system") {
     return null;
   }
 
-  if (sdkMessage.type === "system") {
-    return <SystemInfoCard message={sdkMessage} showIndicator={showIndicator} />;
-  }
-
   if (sdkMessage.type === "result") {
-    // Always hide successful result unless showSystemInfo is true
-    if (sdkMessage.subtype === "success" && !showSystemInfo) {
-      return null;
-    }
     if (sdkMessage.subtype === "success") {
-      return <SessionResult message={sdkMessage} />;
+      return null;
     }
     // Always show errors
     return (
@@ -586,7 +638,7 @@ export const MessageCard = memo(function MessageCard({
             return <AssistantBlockCard key={idx} title="Thinking" text={content.thinking} showIndicator={isLastContent && showIndicator} />;
           }
           if (content.type === "text") {
-            return <AssistantBlockCard key={idx} title={assistantName || "Assistant"} text={content.text} showIndicator={isLastContent && showIndicator} />;
+            return <AssistantBlockCard key={idx} title={assistantName || "Assistant"} text={content.text} showIndicator={isLastContent && showIndicator} copyable />;
           }
           if (content.type === "tool_use") {
             if (content.name === "AskUserQuestion") {
@@ -628,3 +680,97 @@ export const MessageCard = memo(function MessageCard({
 });
 
 export { MessageCard as EventCard };
+
+// ─── Process Group ────────────────────────────────────────────────────────────
+// Collapses consecutive tool-call / tool-result messages into one clickable row.
+
+export function ProcessGroup({
+  messages,
+  isLast = false,
+  isRunning = false,
+  showSystemInfo,
+  onAskUserQuestionAnswer,
+  assistantName,
+}: {
+  messages: StreamMessage[];
+  isLast?: boolean;
+  isRunning?: boolean;
+  showSystemInfo: boolean;
+  onAskUserQuestionAnswer?: (toolUseId: string, answers: Record<string, string>) => void;
+  assistantName?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Collect tool call names/count for the summary line
+  const toolNames: string[] = [];
+  for (const msg of messages) {
+    const m = msg as any;
+    if (m.type === "assistant" && Array.isArray(m.message?.content)) {
+      for (const c of m.message.content) {
+        if (c.type === "tool_use") toolNames.push(c.name as string);
+      }
+    }
+  }
+
+  const unique = [...new Set(toolNames)];
+  const count = toolNames.length;
+  const summaryText =
+    count === 0
+      ? "思考中…"
+      : `${unique.slice(0, 3).join(" · ")}${unique.length > 3 ? ` 等` : ""}  ·  共 ${count} 步`;
+
+  return (
+    <div className="my-1">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-2 w-full text-left px-2.5 py-1.5 rounded-lg text-xs hover:bg-surface-secondary/70 transition-colors group"
+      >
+        {/* Chevron */}
+        <svg
+          className={`h-3 w-3 text-ink-400 shrink-0 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
+          fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"
+        >
+          <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+
+        {/* Summary */}
+        {isRunning && isLast ? (
+          <span className="flex items-center gap-1.5 text-accent">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
+            </span>
+            处理中…
+          </span>
+        ) : (
+          <span className="text-ink-400 font-mono">{summaryText}</span>
+        )}
+
+        {/* Toggle hint */}
+        <span className="ml-auto text-ink-300 opacity-0 group-hover:opacity-100 transition-opacity text-[11px]">
+          {expanded ? "收起" : "展开"}
+        </span>
+      </button>
+
+      {/* Expanded content */}
+      {expanded && (
+        <div className="ml-4 mt-1 pl-3 border-l-2 border-ink-900/8">
+          {messages.map((msg, idx) => {
+            const msgKey = ("uuid" in msg && msg.uuid) ? String(msg.uuid) : `proc-${idx}`;
+            return (
+              <MessageCard
+                key={msgKey}
+                message={msg}
+                isLast={isLast && idx === messages.length - 1}
+                isRunning={isRunning}
+                showSystemInfo={showSystemInfo}
+                onAskUserQuestionAnswer={onAskUserQuestionAnswer}
+                assistantName={assistantName}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

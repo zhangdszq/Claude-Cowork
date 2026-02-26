@@ -523,6 +523,40 @@ app.on("ready", async () => {
     ipcMainHandle("is-sidecar-running", () => {
         return isEmbeddedApiRunning();
     });
+
+    // Read directory contents (one level deep)
+    ipcMainHandle("read-dir", (_: any, dirPath: string) => {
+        const IGNORE = new Set([
+            ".git", "node_modules", ".DS_Store", "__pycache__",
+            ".next", "dist", "build", ".cache", ".venv", "venv",
+        ]);
+        try {
+            const names = readdirSync(dirPath);
+            const result: Array<{ name: string; path: string; isDir: boolean; size: number; modifiedAt: number }> = [];
+            for (const name of names) {
+                if (IGNORE.has(name) || name.startsWith(".")) continue;
+                try {
+                    const fullPath = join(dirPath, name);
+                    const stat = statSync(fullPath);
+                    result.push({
+                        name,
+                        path: fullPath,
+                        isDir: stat.isDirectory(),
+                        size: stat.size,
+                        modifiedAt: stat.mtimeMs,
+                    });
+                } catch { /* skip inaccessible entries */ }
+            }
+            result.sort((a, b) => {
+                if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+                return a.name.localeCompare(b.name);
+            });
+            return result;
+        } catch (err) {
+            console.error("[read-dir] Error reading", dirPath, err);
+            return [];
+        }
+    });
 });
 
 // Stop embedded API when app is quitting

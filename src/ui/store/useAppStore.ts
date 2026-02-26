@@ -49,6 +49,7 @@ interface AppState {
   resolvePermissionRequest: (sessionId: string, toolUseId: string) => void;
   handleServerEvent: (event: ServerEvent) => void;
   addLocalMessage: (sessionId: string, message: StreamMessage) => void;
+  revertSessionToBeforeLastPrompt: (sessionId: string) => void;
   setShowSystemInfo: (show: boolean) => void;
   setProvider: (provider: AgentProvider) => void;
   setCodexModel: (model: string) => void;
@@ -309,6 +310,29 @@ export const useAppStore = create<AppState>((set, get) => ({
         sessions: {
           ...state.sessions,
           [sessionId]: { ...existing, messages: [...existing.messages, message] }
+        }
+      };
+    });
+  },
+
+  revertSessionToBeforeLastPrompt: (sessionId) => {
+    set((state) => {
+      const existing = state.sessions[sessionId];
+      if (!existing) return {};
+      const msgs = existing.messages;
+      // Find the last user_prompt index
+      let cutIndex = -1;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if ((msgs[i] as any).type === "user_prompt") {
+          cutIndex = i;
+          break;
+        }
+      }
+      if (cutIndex === -1) return {};
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...existing, messages: msgs.slice(0, cutIndex) }
         }
       };
     });

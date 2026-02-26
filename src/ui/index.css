@@ -60,7 +60,7 @@ body,
 
 body {
   font-family: "Söhne", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  background-color: var(--color-surface);
+  background-color: var(--color-surface-cream);
   color: var(--color-ink-900);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -110,4 +110,10 @@ code, pre, textarea.mono, input.mono {
 
 .animate-shimmer {
   animation: shimmer 1.4s linear infinite;
+}
+
+/* Thinking dots animation */
+@keyframes thinking-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-3px); opacity: 1; }
 }

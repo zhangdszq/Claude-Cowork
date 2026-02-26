@@ -43,12 +43,18 @@ type ScheduledTask = {
     prompt: string;
     cwd?: string;
     skillPath?: string;
-    scheduleType: "once" | "interval";
+    scheduleType: "once" | "interval" | "daily";
+    // For "once" type
     scheduledTime?: string;
+    // For "interval" type
     intervalValue?: number;
     intervalUnit?: "minutes" | "hours" | "days" | "weeks";
+    // For "daily" type — run at a fixed time each day/week
+    dailyTime?: string;    // "HH:MM"
+    dailyDays?: number[];  // 0=Sun…6=Sat; empty = every day
     lastRun?: string;
     nextRun?: string;
+    assistantId?: string;
     createdAt: string;
     updatedAt: string;
 }
@@ -61,6 +67,7 @@ type SchedulerRunTaskPayload = {
     prompt: string;
     cwd?: string;
     skillPath?: string;
+    assistantId?: string;
 }
 
 type EnvironmentCheck = {
@@ -112,6 +119,7 @@ type AssistantConfig = {
     model?: string;
     skillNames?: string[];
     persona?: string;
+    defaultCwd?: string;
 }
 
 type AssistantsConfig = {
@@ -143,6 +151,14 @@ type MemoryFileInfo = {
     date: string;
     path: string;
     size: number;
+}
+
+type DirEntry = {
+    name: string;
+    path: string;
+    isDir: boolean;
+    size: number;
+    modifiedAt: number;
 }
 
 type MemoryListResult = {
@@ -197,6 +213,7 @@ type EventPayloadMapping = {
     "add-scheduled-task": ScheduledTask;
     "update-scheduled-task": ScheduledTask | null;
     "delete-scheduled-task": boolean;
+    "read-dir": DirEntry[];
 }
 
 interface Window {
@@ -247,5 +264,6 @@ interface Window {
         updateScheduledTask: (id: string, updates: Partial<ScheduledTask>) => Promise<ScheduledTask | null>;
         deleteScheduledTask: (id: string) => Promise<boolean>;
         onSchedulerRunTask: (callback: (task: SchedulerRunTaskPayload) => void) => UnsubscribeFunction;
+        readDir: (dirPath: string) => Promise<DirEntry[]>;
     }
 }

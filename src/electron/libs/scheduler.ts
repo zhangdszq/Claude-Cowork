@@ -11,13 +11,17 @@ export interface ScheduledTask {
   prompt: string;
   cwd?: string;
   skillPath?: string;
+  assistantId?: string;
   // Schedule configuration
-  scheduleType: "once" | "interval";
+  scheduleType: "once" | "interval" | "daily";
   // For "once" type
   scheduledTime?: string;  // ISO date string
   // For "interval" type
   intervalValue?: number;
   intervalUnit?: "minutes" | "hours" | "days" | "weeks";
+  // For "daily" type — fixed clock time, optional day-of-week filter
+  dailyTime?: string;    // "HH:MM"
+  dailyDays?: number[];  // 0=Sun…6=Sat; empty = every day
   lastRun?: string;  // ISO date string
   nextRun?: string;  // ISO date string
   // Metadata
@@ -164,6 +168,33 @@ export function calculateNextRun(task: ScheduledTask): string | undefined {
     }
     
     return nextRun.toISOString();
+  }
+
+  if (task.scheduleType === "daily") {
+    if (!task.dailyTime) return undefined;
+    const [hours, minutes] = task.dailyTime.split(":").map(Number);
+
+    // Start candidate at today's target time
+    const candidate = new Date(now);
+    candidate.setHours(hours, minutes, 0, 0);
+
+    // If that moment has already passed today, advance to tomorrow
+    if (candidate <= now) {
+      candidate.setDate(candidate.getDate() + 1);
+    }
+
+    // If specific weekdays are required, find the next matching day (≤7 iterations)
+    if (task.dailyDays && task.dailyDays.length > 0) {
+      for (let i = 0; i < 8; i++) {
+        if (task.dailyDays.includes(candidate.getDay())) {
+          return candidate.toISOString();
+        }
+        candidate.setDate(candidate.getDate() + 1);
+      }
+      return undefined;
+    }
+
+    return candidate.toISOString();
   }
   
   return undefined;
