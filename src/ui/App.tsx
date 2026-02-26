@@ -201,9 +201,19 @@ function App() {
   
   // Onboarding state
   const [showOnboarding, setShowOnboarding] = useState(() => {
-    // Check if onboarding was completed before
     return !localStorage.getItem(ONBOARDING_COMPLETE_KEY);
   });
+
+  // 若 localStorage 标志未设置，但配置文件中已有 API Token，则自动跳过引导
+  useEffect(() => {
+    if (!showOnboarding) return;
+    window.electron.getUserSettings().then((settings) => {
+      if (settings.anthropicAuthToken) {
+        localStorage.setItem(ONBOARDING_COMPLETE_KEY, "true");
+        setShowOnboarding(false);
+      }
+    }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleOnboardingComplete = useCallback(() => {
     localStorage.setItem(ONBOARDING_COMPLETE_KEY, "true");
