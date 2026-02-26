@@ -97,12 +97,14 @@ jobs:
         if: matrix.platform == 'mac'
         run: npx electron-builder --mac --arm64
         env:
+          BUILD_ARCH: arm64
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Package (macOS x64)
         if: matrix.platform == 'mac'
         run: npx electron-builder --mac --x64
         env:
+          BUILD_ARCH: x64
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Package (Linux)
