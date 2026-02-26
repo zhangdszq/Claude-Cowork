@@ -20,11 +20,14 @@
         "hardenedRuntime": true,
         "gatekeeperAssess": false,
         "notarize": false,
-        "x64ArchFiles": "**/vendor/**",
         "extraResources": [
             {
                 "from": "src-api/dist/agent-api-aarch64-apple-darwin",
                 "to": "sidecar/agent-api-aarch64-apple-darwin"
+            },
+            {
+                "from": "src-api/dist/agent-api-x86_64-apple-darwin",
+                "to": "sidecar/agent-api-x86_64-apple-darwin"
             },
             {
                 "from": "cli-bundle",

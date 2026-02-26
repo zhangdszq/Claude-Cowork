@@ -29,9 +29,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14  # Apple Silicon runner，构建 Universal Binary（ARM + Intel）
+          - os: macos-14  # Apple Silicon runner，同时出 ARM64 和 x64 两个 DMG
             platform: mac
-            artifact-name: macos-universal
+            artifact-name: macos
           - os: ubuntu-latest
             platform: linux
             artifact-name: linux-x64
@@ -93,9 +93,15 @@ jobs:
         run: bun run transpile:electron
 
       # 打包应用
-      - name: Package (macOS Universal)
+      - name: Package (macOS ARM64)
         if: matrix.platform == 'mac'
-        run: npx electron-builder --mac --universal
+        run: npx electron-builder --mac --arm64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package (macOS x64)
+        if: matrix.platform == 'mac'
+        run: npx electron-builder --mac --x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
