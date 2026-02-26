@@ -241,8 +241,6 @@ function App() {
   const markHistoryRequested = useAppStore((s) => s.markHistoryRequested);
   const resolvePermissionRequest = useAppStore((s) => s.resolvePermissionRequest);
   const handleServerEvent = useAppStore((s) => s.handleServerEvent);
-  const prompt = useAppStore((s) => s.prompt);
-  const setPrompt = useAppStore((s) => s.setPrompt);
   const cwd = useAppStore((s) => s.cwd);
   const setCwd = useAppStore((s) => s.setCwd);
   const showSystemInfo = useAppStore((s) => s.showSystemInfo);
@@ -425,16 +423,11 @@ function App() {
   const messages = activeSession?.messages ?? [];
   const permissionRequests = activeSession?.permissionRequests ?? [];
   const isRunning = activeSession?.status === "running";
-  const selectedAssistantId = useAppStore((s) => s.selectedAssistantId);
   const activeAssistantName = useMemo(() => {
     const aid = activeSession?.assistantId;
     if (!aid) return undefined;
     return assistantsList.find((a) => a.id === aid)?.name;
   }, [activeSession?.assistantId, assistantsList]);
-  const selectedAssistantName = useMemo(() => {
-    if (!selectedAssistantId) return undefined;
-    return assistantsList.find((a) => a.id === selectedAssistantId)?.name;
-  }, [selectedAssistantId, assistantsList]);
 
   // Check if the last assistant message contains chapter selection prompt
   // Only show if user hasn't replied yet
