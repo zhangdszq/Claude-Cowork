@@ -15,6 +15,7 @@ type EditingAssistant = {
   provider: "claude" | "codex";
   model: string;
   skillNames: string[];
+  skillTags: string[];
   persona: string;
 };
 
@@ -25,6 +26,7 @@ function emptyAssistant(): EditingAssistant {
     provider: "claude",
     model: "",
     skillNames: [],
+    skillTags: [],
     persona: "",
   };
 }
@@ -60,6 +62,8 @@ export function AssistantManagerModal({
   const [currentPage, setCurrentPage] = useState(0);
   const [skillSearch, setSkillSearch] = useState("");
   const [botTargetAssistant, setBotTargetAssistant] = useState<AssistantConfig | null>(null);
+  const [generatingTags, setGeneratingTags] = useState(false);
+  const [newTagInput, setNewTagInput] = useState("");
 
   const loadData = useCallback(async () => {
     try {
@@ -87,6 +91,7 @@ export function AssistantManagerModal({
       provider: editing.provider,
       model: editing.model.trim() || undefined,
       skillNames: editing.skillNames,
+      skillTags: editing.skillTags.length > 0 ? editing.skillTags : undefined,
       persona: editing.persona.trim() || undefined,
     };
 
@@ -138,6 +143,39 @@ export function AssistantManagerModal({
     });
   };
 
+  const handleGenerateTags = async () => {
+    if (!editing) return;
+    setGeneratingTags(true);
+    try {
+      const tags = await window.electron.generateSkillTags(
+        editing.persona,
+        editing.skillNames,
+        editing.name,
+      );
+      if (tags.length > 0) {
+        setEditing({ ...editing, skillTags: tags });
+      }
+    } catch (err) {
+      console.error("Failed to generate skill tags:", err);
+    } finally {
+      setGeneratingTags(false);
+    }
+  };
+
+  const handleAddTag = () => {
+    if (!editing || !newTagInput.trim()) return;
+    const tag = newTagInput.trim();
+    if (!editing.skillTags.includes(tag)) {
+      setEditing({ ...editing, skillTags: [...editing.skillTags, tag] });
+    }
+    setNewTagInput("");
+  };
+
+  const handleRemoveTag = (tag: string) => {
+    if (!editing) return;
+    setEditing({ ...editing, skillTags: editing.skillTags.filter((t) => t !== tag) });
+  };
+
   const startEdit = (assistant: AssistantConfig) => {
     setEditing({
       id: assistant.id,
@@ -145,6 +183,7 @@ export function AssistantManagerModal({
       provider: assistant.provider,
       model: assistant.model ?? "",
       skillNames: assistant.skillNames ?? [],
+      skillTags: assistant.skillTags ?? [],
       persona: assistant.persona ?? "",
     });
     setIsNew(false);
@@ -275,6 +314,63 @@ export function AssistantManagerModal({
                     />
                     <span className="text-[11px] text-muted-light">
                       定义助理的角色与行为方式，会在每次对话开头注入。
+                    </span>
+                  </div>
+
+                  {/* 技能标签 */}
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-muted">技能标签</span>
+                      <button
+                        onClick={handleGenerateTags}
+                        disabled={generatingTags || !editing.name.trim()}
+                        className="flex items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-medium text-accent hover:bg-accent/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {generatingTags ? (
+                          <>
+                            <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" strokeDasharray="31.4" strokeLinecap="round" />
+                            </svg>
+                            生成中...
+                          </>
+                        ) : (
+                          <>
+                            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                            </svg>
+                            AI 生成
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {editing.skillTags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="flex items-center gap-1 rounded-full bg-surface-secondary border border-ink-900/8 px-2.5 py-1 text-xs text-ink-700"
+                        >
+                          {tag}
+                          <button
+                            onClick={() => handleRemoveTag(tag)}
+                            className="flex h-3.5 w-3.5 items-center justify-center rounded-full text-muted hover:bg-ink-900/10 hover:text-ink-700 transition-colors"
+                          >
+                            <svg viewBox="0 0 24 24" className="h-2.5 w-2.5"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/></svg>
+                          </button>
+                        </span>
+                      ))}
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={newTagInput}
+                          onChange={(e) => setNewTagInput(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddTag(); } }}
+                          placeholder="添加标签..."
+                          className="w-20 rounded-full border border-dashed border-ink-900/15 bg-transparent px-2.5 py-1 text-xs text-ink-700 placeholder:text-muted-light focus:border-accent focus:outline-none transition-colors"
+                        />
+                      </div>
+                    </div>
+                    <span className="text-[11px] text-muted-light">
+                      显示在对话框下方的快捷提示，点击「AI 生成」自动提取。
                     </span>
                   </div>
                 </div>

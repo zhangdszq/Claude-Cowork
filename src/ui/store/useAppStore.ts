@@ -37,6 +37,7 @@ interface AppState {
   codexModel: string;       // Codex model to use
   selectedAssistantId: string | null;
   selectedAssistantSkillNames: string[];
+  selectedAssistantSkillTags: string[];
   selectedAssistantPersona: string;
 
   setPrompt: (prompt: string) => void;
@@ -53,7 +54,7 @@ interface AppState {
   setShowSystemInfo: (show: boolean) => void;
   setProvider: (provider: AgentProvider) => void;
   setCodexModel: (model: string) => void;
-  setSelectedAssistant: (assistantId: string, skillNames?: string[], provider?: AgentProvider, model?: string, persona?: string) => void;
+  setSelectedAssistant: (assistantId: string, skillNames?: string[], provider?: AgentProvider, model?: string, persona?: string, skillTags?: string[]) => void;
 }
 
 function createSession(id: string): SessionView {
@@ -75,6 +76,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   codexModel: "gpt-5.3-codex",
   selectedAssistantId: null,
   selectedAssistantSkillNames: [],
+  selectedAssistantSkillTags: [],
   selectedAssistantPersona: "",
 
   setPrompt: (prompt) => set({ prompt }),
@@ -86,10 +88,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   setShowSystemInfo: (showSystemInfo) => set({ showSystemInfo }),
   setProvider: (provider) => set({ provider }),
   setCodexModel: (codexModel) => set({ codexModel }),
-  setSelectedAssistant: (assistantId, skillNames = [], provider, model, persona) =>
+  setSelectedAssistant: (assistantId, skillNames = [], provider, model, persona, skillTags = []) =>
     set((state) => ({
       selectedAssistantId: assistantId,
       selectedAssistantSkillNames: skillNames,
+      selectedAssistantSkillTags: skillTags,
       selectedAssistantPersona: persona ?? "",
       provider: provider ?? state.provider,
       codexModel: model ?? state.codexModel,

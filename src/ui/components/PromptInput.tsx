@@ -406,6 +406,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
   const selectedAssistantSkillNames = useAppStore((state) => state.selectedAssistantSkillNames);
+  const selectedAssistantSkillTags = useAppStore((state) => state.selectedAssistantSkillTags);
   const hasMessages = useAppStore((state) => {
     const session = state.activeSessionId ? state.sessions[state.activeSessionId] : null;
     return (session?.messages?.length ?? 0) > 0;
@@ -990,30 +991,57 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
             {inputCard}
           </div>
 
-          {/* Quick action chips */}
+          {/* Quick action chips — use assistant skillTags if available */}
           <div className="flex flex-wrap gap-2 justify-center">
-            {QUICK_ACTIONS.map((action) => (
-              <button
-                key={action.id}
-                className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all ${
-                  action.id === "guide"
-                    ? "bg-[#2C5F2E] text-white hover:bg-[#2C5F2E]/90"
-                    : "bg-surface-secondary text-ink-800 hover:bg-surface-tertiary border border-ink-900/[0.08]"
-                }`}
-                onClick={() => {
-                  if (action.prompt) setPrompt(action.prompt);
-                  promptRef.current?.focus();
-                }}
-              >
-                {action.id === "guide" && (
+            {selectedAssistantSkillTags.length > 0 ? (
+              <>
+                <button
+                  className="flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium bg-[#2C5F2E] text-white hover:bg-[#2C5F2E]/90 transition-all"
+                  onClick={() => { promptRef.current?.focus(); }}
+                >
                   <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 006 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/>
                     <path d="M9 18h6M10 22h4"/>
                   </svg>
-                )}
-                {action.label}
-              </button>
-            ))}
+                  引导帮助
+                </button>
+                {selectedAssistantSkillTags.map((tag) => (
+                  <button
+                    key={tag}
+                    className="flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium bg-surface-secondary text-ink-800 hover:bg-surface-tertiary border border-ink-900/[0.08] transition-all"
+                    onClick={() => {
+                      setPrompt(`帮我${tag}：`);
+                      promptRef.current?.focus();
+                    }}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </>
+            ) : (
+              QUICK_ACTIONS.map((action) => (
+                <button
+                  key={action.id}
+                  className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium transition-all ${
+                    action.id === "guide"
+                      ? "bg-[#2C5F2E] text-white hover:bg-[#2C5F2E]/90"
+                      : "bg-surface-secondary text-ink-800 hover:bg-surface-tertiary border border-ink-900/[0.08]"
+                  }`}
+                  onClick={() => {
+                    if (action.prompt) setPrompt(action.prompt);
+                    promptRef.current?.focus();
+                  }}
+                >
+                  {action.id === "guide" && (
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 006 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/>
+                      <path d="M9 18h6M10 22h4"/>
+                    </svg>
+                  )}
+                  {action.label}
+                </button>
+              ))
+            )}
           </div>
         </div>
       )}

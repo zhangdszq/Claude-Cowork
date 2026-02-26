@@ -638,3 +638,128 @@ export async function generateSessionTitle(userIntent: string | null): Promise<s
 
   return 'New Session';
 }
+
+/**
+ * Generate skill tags for an assistant using the Agent SDK.
+ * Detects which SDK is configured and uses it; if both are configured,
+ * prefers Codex. The other serves as fallback.
+ */
+export async function generateSkillTags(
+  persona: string,
+  skillNames: string[],
+  assistantName: string,
+): Promise<string[]> {
+  const { loadUserSettings } = await import('../../libs/user-settings.js');
+  const settings = loadUserSettings();
+
+  const hasCodex =
+    !!settings.openaiTokens?.accessToken ||
+    existsSync(join(homedir(), '.codex', 'auth.json'));
+  const hasClaude =
+    !!settings.anthropicAuthToken ||
+    !!process.env.ANTHROPIC_AUTH_TOKEN;
+
+  const skillsPart = skillNames.length > 0
+    ? `\n已配置的技能: ${skillNames.join(', ')}`
+    : '';
+
+  const prompt = `请根据以下AI助理的配置，提取6-8个简短的技能标签（每个2-4个字），用于展示在聊天框下方的快捷按钮。
+
+助理名称: ${assistantName}
+人格设定: ${persona || '通用助理'}${skillsPart}
+
+要求：
+1. 标签应简短精练，每个2-4个中文字
+2. 标签应准确反映该助理的核心能力
+3. 直接输出JSON数组格式，例如: ["写作","数据分析","代码审查","调研报告"]
+4. 不要输出其他任何内容，只输出JSON数组`;
+
+  // Build ordered list: configured SDKs, Codex first when both available
+  const attempts: Array<() => Promise<string[]>> = [];
+  if (hasCodex) attempts.push(() => generateTagsViaCodex(prompt));
+  if (hasClaude) attempts.push(() => generateTagsViaClaude(prompt));
+
+  if (attempts.length === 0) {
+    console.warn('[generateSkillTags] No Agent SDK configured (neither Codex nor Claude)');
+    return [];
+  }
+
+  for (const attempt of attempts) {
+    try {
+      const tags = await attempt();
+      if (tags.length > 0) return tags;
+    } catch (error) {
+      console.error('[generateSkillTags] SDK attempt failed:', error);
+    }
+  }
+
+  return [];
+}
+
+async function generateTagsViaCodex(prompt: string): Promise<string[]> {
+  const codexPath = getCodexBinaryPath();
+  const codexOpts: CodexOptions = {};
+  if (codexPath) {
+    codexOpts.codexPathOverride = codexPath;
+  }
+
+  const codex = new Codex(codexOpts);
+  const thread = codex.startThread({
+    model: 'gpt-5.3-codex',
+    workingDirectory: process.cwd(),
+    sandboxMode: 'danger-full-access',
+    approvalPolicy: 'never',
+    skipGitRepoCheck: true,
+  });
+
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), 30000);
+
+  let collectedText = '';
+  try {
+    const { events } = await thread.runStreamed(prompt, {
+      signal: abortController.signal,
+    });
+
+    for await (const event of events) {
+      if (event.type === 'item.completed' || event.type === 'item.updated') {
+        if (event.item.type === 'agent_message' && event.item.text) {
+          collectedText += event.item.text;
+        }
+      }
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  console.log('[generateSkillTags] Codex raw output:', collectedText);
+  return parseTagsFromText(collectedText);
+}
+
+async function generateTagsViaClaude(prompt: string): Promise<string[]> {
+  const claudeCodePath = getClaudeCodePath();
+  const enhancedEnv = getEnhancedEnv();
+
+  const result: SDKResultMessage = await unstable_v2_prompt(prompt, {
+    model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
+    env: enhancedEnv,
+    pathToClaudeCodeExecutable: claudeCodePath,
+  });
+
+  if (result.subtype === 'success') {
+    console.log('[generateSkillTags] Claude raw output:', result.result);
+    return parseTagsFromText(result.result);
+  }
+  return [];
+}
+
+function parseTagsFromText(text: string): string[] {
+  const match = text.match(/\[[\s\S]*\]/);
+  if (match) {
+    try {
+      const tags = JSON.parse(match[0]) as string[];
+      return tags.filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim());
+    } catch { /* ignore parse error */ }
+  }
+  return [];
+}

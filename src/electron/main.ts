@@ -204,6 +204,17 @@ app.on("ready", async () => {
         return title || "New Session";
     });
 
+    // Generate skill tags for an assistant using the agent SDK
+    ipcMainHandle("generate-skill-tags", async (_: any, persona: string, skillNames: string[], assistantName: string) => {
+        try {
+            const { generateSkillTags } = await import("./api/services/runner.js");
+            return await generateSkillTags(persona, skillNames, assistantName);
+        } catch (error) {
+            console.error("[main] Failed to generate skill tags:", error);
+            return [];
+        }
+    });
+
     // Handle recent cwds request
     ipcMainHandle("get-recent-cwds", (_: any, limit?: number) => {
         const boundedLimit = limit ? Math.min(Math.max(limit, 1), 20) : 8;

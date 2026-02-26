@@ -118,6 +118,7 @@ type AssistantConfig = {
     provider: "claude" | "codex";
     model?: string;
     skillNames?: string[];
+    skillTags?: string[];
     persona?: string;
     defaultCwd?: string;
     bots?: Partial<Record<BotPlatformType, BotPlatformConfig>>;
@@ -359,6 +360,7 @@ type EventPayloadMapping = {
     "update-scheduled-task": ScheduledTask | null;
     "delete-scheduled-task": boolean;
     "read-dir": DirEntry[];
+    "generate-skill-tags": string[];
 }
 
 interface Window {
@@ -422,5 +424,6 @@ interface Window {
         deleteScheduledTask: (id: string) => Promise<boolean>;
         onSchedulerRunTask: (callback: (task: SchedulerRunTaskPayload) => void) => UnsubscribeFunction;
         readDir: (dirPath: string) => Promise<DirEntry[]>;
+        generateSkillTags: (persona: string, skillNames: string[], assistantName: string) => Promise<string[]>;
     }
 }

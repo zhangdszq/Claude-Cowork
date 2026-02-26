@@ -134,6 +134,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
     },
     readDir: (dirPath: string) =>
         ipcInvoke("read-dir", dirPath),
+    generateSkillTags: (persona: string, skillNames: string[], assistantName: string) =>
+        ipcInvoke("generate-skill-tags", persona, skillNames, assistantName),
 } satisfies Window['electron'])
 
 function ipcInvoke<Key extends keyof EventPayloadMapping>(key: Key, ...args: any[]): Promise<EventPayloadMapping[Key]> {

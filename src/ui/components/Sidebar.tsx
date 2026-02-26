@@ -73,7 +73,7 @@ export function Sidebar({
       const targetId = list.some((item) => item.id === currentId) ? currentId : fallbackId;
       const target = list.find((item) => item.id === targetId) ?? list[0];
       if (target) {
-        setSelectedAssistant(target.id, target.skillNames ?? [], target.provider, target.model, target.persona);
+        setSelectedAssistant(target.id, target.skillNames ?? [], target.provider, target.model, target.persona, target.skillTags ?? []);
         // 从 localStorage 恢复该助理的工作区（仅当 cwd 为空时）
         if (!useAppStore.getState().cwd) {
           const savedCwd = loadAssistantCwdLocal(target.id);
@@ -135,7 +135,7 @@ export function Sidebar({
 
   const handleSelectAssistant = (assistant?: AssistantConfig) => {
     if (!assistant) return;
-    setSelectedAssistant(assistant.id, assistant.skillNames ?? [], assistant.provider, assistant.model, assistant.persona);
+    setSelectedAssistant(assistant.id, assistant.skillNames ?? [], assistant.provider, assistant.model, assistant.persona, assistant.skillTags ?? []);
     // 切换助理时从 localStorage 恢复该助理的工作区（没有则清空）
     const savedCwd = loadAssistantCwdLocal(assistant.id);
     setCwd(savedCwd);

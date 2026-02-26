@@ -7,7 +7,7 @@
  * - Token exchange and refresh
  * - Credential storage in user settings
  */
-import { BrowserWindow } from "electron";
+import { BrowserWindow, net } from "electron";
 import { randomBytes, createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
@@ -183,6 +183,7 @@ export function openAILogin(parentWindow?: BrowserWindow): Promise<{ success: bo
     });
 
     let resolved = false;
+    let callbackHandled = false;
     const finish = (result: { success: boolean; email?: string; error?: string }) => {
       if (resolved) return;
       resolved = true;
@@ -192,16 +193,28 @@ export function openAILogin(parentWindow?: BrowserWindow): Promise<{ success: bo
       resolve(result);
     };
 
-    // Intercept navigation to catch the OAuth callback
-    authWindow.webContents.on("will-redirect", async (_event, url) => {
-      await handleCallback(url);
+    // Intercept navigation to catch the OAuth callback.
+    // In Electron 39+ the first parameter is a `details` object with a `url` property;
+    // the second positional `url` is deprecated but still provided.
+    authWindow.webContents.on("will-redirect", (details: any, deprecatedUrl?: string) => {
+      const url: string = typeof details === "string" ? details : (details?.url ?? deprecatedUrl ?? "");
+      if (url.startsWith(REDIRECT_URI)) {
+        if (typeof details?.preventDefault === "function") details.preventDefault();
+        handleCallback(url);
+      }
     });
 
-    authWindow.webContents.on("will-navigate", async (_event, url) => {
-      await handleCallback(url);
+    authWindow.webContents.on("will-navigate", (details: any, deprecatedUrl?: string) => {
+      const url: string = typeof details === "string" ? details : (details?.url ?? deprecatedUrl ?? "");
+      if (url.startsWith(REDIRECT_URI)) {
+        if (typeof details?.preventDefault === "function") details.preventDefault();
+        handleCallback(url);
+      }
     });
 
     async function handleCallback(url: string) {
+      if (callbackHandled) return;
+      callbackHandled = true;
       if (!url.startsWith(REDIRECT_URI)) return;
 
       try {
@@ -278,7 +291,8 @@ async function exchangeCodeForTokens(
   codeVerifier: string
 ): Promise<OpenAIAuthTokens | null> {
   try {
-    const response = await fetch(TOKEN_URL, {
+    // Use Electron net.fetch so the request goes through system proxy
+    const response = await net.fetch(TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -287,7 +301,7 @@ async function exchangeCodeForTokens(
         code,
         code_verifier: codeVerifier,
         redirect_uri: REDIRECT_URI,
-      }),
+      }).toString(),
     });
 
     if (!response.ok) {
@@ -331,14 +345,14 @@ export async function refreshOpenAIToken(): Promise<boolean> {
   }
 
   try {
-    const response = await fetch(TOKEN_URL, {
+    const response = await net.fetch(TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "refresh_token",
         refresh_token: tokens.refreshToken,
         client_id: CLIENT_ID,
-      }),
+      }).toString(),
     });
 
     if (!response.ok) {

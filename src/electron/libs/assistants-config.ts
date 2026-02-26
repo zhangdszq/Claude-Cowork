@@ -9,6 +9,7 @@ export type AssistantConfig = {
   provider: "claude" | "codex";
   model?: string;
   skillNames?: string[];
+  skillTags?: string[];
   persona?: string;
   defaultCwd?: string;
   bots?: Record<string, unknown>;
@@ -85,6 +86,9 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
       skillNames: Array.isArray(item.skillNames)
         ? item.skillNames.filter(Boolean).map((name) => String(name))
         : [],
+      skillTags: Array.isArray(item.skillTags)
+        ? item.skillTags.filter(Boolean).map((tag) => String(tag))
+        : undefined,
       persona: item.persona ? String(item.persona) : undefined,
       bots: item.bots && typeof item.bots === "object" ? item.bots : undefined,
     }));
