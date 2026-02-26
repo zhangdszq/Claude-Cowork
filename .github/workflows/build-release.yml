@@ -55,8 +55,27 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('bun.lockb') }}
+          restore-keys: |
+            node-modules-${{ runner.os }}-
+
+      - name: Cache Electron binary
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/.cache/electron
+            ~/AppData/Local/electron/Cache
+          key: electron-${{ runner.os }}-39.2.7
+
       - name: Install dependencies
         run: bun install
+        env:
+          ELECTRON_GET_TIMEOUT: 300000
 
       # 构建 API sidecar
       - name: Build API sidecar (macOS ARM + Intel)
