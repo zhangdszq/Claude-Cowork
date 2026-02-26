@@ -7,15 +7,15 @@ const macSidecar =
 
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
-  appId: 'com.vipkid.agentcowork',
-  productName: 'VK Cowork',
+  appId: 'com.aiteam.app',
+  productName: 'AI Team',
   files: ['dist-electron', 'dist-react'],
   extraResources: ['dist-electron/preload.cjs'],
   asarUnpack: [
     'node_modules/@openai/codex-sdk/vendor/**/*',
     'node_modules/@anthropic-ai/claude-agent-sdk/vendor/**/*',
   ],
-  icon: './claude-color.png',
+  icon: './app-icon.png',
   mac: {
     target: 'dmg',
     entitlements: 'build/entitlements.mac.plist',

@@ -144,9 +144,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
                 </svg>
               </div>
-              <h1 className="text-2xl font-bold text-ink-900 mb-3">欢迎使用 VK Cowork</h1>
+              <h1 className="text-2xl font-bold text-ink-900 mb-3">欢迎使用 AI Team</h1>
               <p className="text-muted mb-8 leading-relaxed">
-                VK Cowork 是一个强大的 AI 编程助手客户端。<br />
+                AI Team 是一个强大的 AI 编程助手客户端。<br />
                 只需配置 API Token 即可开始使用。
               </p>
               <button
@@ -380,7 +380,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
         {/* Footer */}
         <div className="mt-6 text-center text-xs text-muted-light">
-          VK Cowork
+          AI Team
         </div>
       </div>
     </div>

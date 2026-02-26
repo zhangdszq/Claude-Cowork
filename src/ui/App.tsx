@@ -5,7 +5,6 @@ import { useIPC } from "./hooks/useIPC";
 import { useAppStore } from "./store/useAppStore";
 import type { ServerEvent } from "./types";
 import { Sidebar } from "./components/Sidebar";
-import { StartSessionModal } from "./components/StartSessionModal";
 import { PromptInput, usePromptActions } from "./components/PromptInput";
 import { MessageCard, ProcessGroup } from "./components/EventCard";
 import { MessageSkeleton } from "./components/MessageSkeleton";
@@ -246,7 +245,6 @@ function App() {
   const setPrompt = useAppStore((s) => s.setPrompt);
   const cwd = useAppStore((s) => s.cwd);
   const setCwd = useAppStore((s) => s.setCwd);
-  const pendingStart = useAppStore((s) => s.pendingStart);
   const showSystemInfo = useAppStore((s) => s.showSystemInfo);
 
   // Assistants list for resolving assistant names
@@ -633,6 +631,14 @@ function App() {
     }
   }, [activeSessionId]);
 
+  // 无 session 时（初始化或清空后），用 WorkspacePicker 替代 NewTask 弹框
+  useEffect(() => {
+    if (showStartModal) {
+      setShowStartModal(false);
+      handleNewSession();
+    }
+  }, [showStartModal, setShowStartModal, handleNewSession]);
+
   const handleDeleteSession = useCallback((sessionId: string) => {
     sendEvent({ type: "session.delete", payload: { sessionId } });
   }, [sendEvent]);
@@ -696,6 +702,7 @@ function App() {
         onResizeStart={handleSidebarResizeStart}
         onOpenSkill={handleOpenSkill}
         onOpenMcp={handleOpenMcp}
+        onNoWorkspace={() => setShowWorkspacePicker(true)}
       />
 
       <main
@@ -711,7 +718,7 @@ function App() {
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
           <div className="w-24" /> {/* Spacer for balance */}
-          <span className="text-sm font-medium text-ink-700">{activeSession?.title || "VK Cowork"}</span>
+          <span className="text-sm font-medium text-ink-700">{activeSession?.title || "AI Team"}</span>
           <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             {/* Workspace button */}
             <div className="relative">
@@ -900,19 +907,6 @@ function App() {
 
         {!showWorkspacePicker && !showChangeWorkspacePicker && <PromptInput sendEvent={sendEvent} sidebarWidth={sidebarWidth} rightPanelWidth={showWorkspacePanel ? WORKSPACE_PANEL_WIDTH : 0} />}
       </main>
-
-      {showStartModal && (
-        <StartSessionModal
-          cwd={cwd}
-          prompt={prompt}
-          pendingStart={pendingStart}
-          onCwdChange={setCwd}
-          onPromptChange={setPrompt}
-          onStart={handleStartFromModal}
-          onClose={() => setShowStartModal(false)}
-          assistantName={selectedAssistantName}
-        />
-      )}
 
       {globalError && (
         <div className="fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-error/20 bg-error-light px-4 py-3 shadow-lg">

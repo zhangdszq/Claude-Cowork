@@ -101,6 +101,7 @@ export async function startSession(
     model?: string;
     assistantId?: string;
     assistantSkillNames?: string[];
+    assistantPersona?: string;
   },
   onEvent: StreamCallback
 ): Promise<void> {

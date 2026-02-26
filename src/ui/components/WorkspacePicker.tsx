@@ -42,8 +42,8 @@ export function WorkspacePicker({ currentCwd, onSelect }: WorkspacePickerProps) 
 
         {/* Title & subtitle */}
         <div className="text-center space-y-1.5">
-          <h2 className="text-xl font-semibold text-ink-900">欢迎使用 VK Cowork</h2>
-          <p className="text-sm text-ink-500">选择一个工作区开始与 Claude 对话</p>
+          <h2 className="text-xl font-semibold text-ink-900">欢迎使用 AI Team</h2>
+          <p className="text-sm text-ink-500">选择一个工作区开始与助理对话</p>
         </div>
 
         {/* Recent workspaces */}
@@ -98,7 +98,7 @@ export function WorkspacePicker({ currentCwd, onSelect }: WorkspacePickerProps) 
 
         {/* Bottom tips */}
         <div className="text-center space-y-1 pt-1">
-          <p className="text-xs text-ink-400">工作区是 Claude 可以读写文件的目录</p>
+          <p className="text-xs text-ink-400">工作区是助理可以读写文件的目录</p>
           <p className="text-xs text-ink-400">每个工作区有独立的对话历史</p>
         </div>
       </div>

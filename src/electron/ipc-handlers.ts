@@ -209,12 +209,13 @@ export async function handleClientEvent(event: ClientEvent) {
             cwd: event.payload.cwd,
             title: event.payload.title,
             allowedTools: event.payload.allowedTools,
-            prompt: effectivePrompt,
+            prompt: event.payload.prompt,
             externalSessionId: session.id,
             provider,
             model: event.payload.model,
             assistantId: session.assistantId,
             assistantSkillNames: session.assistantSkillNames,
+            assistantPersona: event.payload.assistantPersona,
           },
           (apiEvent) => {
             // Map API session ID to local session ID

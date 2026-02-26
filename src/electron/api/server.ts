@@ -1,5 +1,5 @@
 /**
- * Embedded API server for VK Cowork
+ * Embedded API server for AI Team
  * This replaces the external sidecar process
  */
 
@@ -35,7 +35,7 @@ honoApp.route('/memory', memoryRoutes);
 // Root endpoint
 honoApp.get('/', (c) => {
   return c.json({
-    name: 'VK Cowork API (Embedded)',
+    name: 'AI Team API (Embedded)',
     version: '0.0.3',
     endpoints: {
       health: '/health',

@@ -23,6 +23,7 @@ interface SidebarProps {
   onResizeStart: (event: MouseEvent<HTMLDivElement>) => void;
   onOpenSkill?: () => void;
   onOpenMcp?: () => void;
+  onNoWorkspace?: () => void;
 }
 
 export function Sidebar({
@@ -32,6 +33,7 @@ export function Sidebar({
   onResizeStart,
   onOpenSkill,
   onOpenMcp,
+  onNoWorkspace,
 }: SidebarProps) {
   const sessions = useAppStore((state) => state.sessions);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
@@ -135,10 +137,15 @@ export function Sidebar({
     if (!assistant) return;
     setSelectedAssistant(assistant.id, assistant.skillNames ?? [], assistant.provider, assistant.model, assistant.persona);
     // 切换助理时从 localStorage 恢复该助理的工作区（没有则清空）
-    setCwd(loadAssistantCwdLocal(assistant.id));
+    const savedCwd = loadAssistantCwdLocal(assistant.id);
+    setCwd(savedCwd);
     // 自动定位到该助理最新的一个会话（sessionList 已按 updatedAt 降序排列）
     const latestSession = sessionList.find((s) => s.assistantId === assistant.id);
     setActiveSessionId(latestSession?.id ?? null);
+    // 若该助理没有保存工作区，提示用户先选择工作区
+    if (!savedCwd) {
+      onNoWorkspace?.();
+    }
   };
 
   const getAssistantInitial = (name: string) => {

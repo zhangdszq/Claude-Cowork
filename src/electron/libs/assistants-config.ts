@@ -1,6 +1,7 @@
-import { app } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { homedir } from "os";
+import { join } from "path";
+import { loadUserSettings } from "./user-settings.js";
 
 export type AssistantConfig = {
   id: string;
@@ -16,27 +17,57 @@ export type AssistantsConfig = {
   defaultAssistantId?: string;
 };
 
-const ASSISTANTS_FILE = join(app.getPath("userData"), "assistants-config.json");
+const VK_COWORK_DIR = join(homedir(), ".vk-cowork");
+const ASSISTANTS_FILE = join(VK_COWORK_DIR, "assistants-config.json");
 
-const DEFAULT_ASSISTANTS: AssistantConfig[] = [
-  {
-    id: "default-assistant",
-    name: "小助理",
-    provider: "claude",
-    skillNames: [],
-    persona: "你是一个通用小助理，乐于帮忙，回答简洁实用。",
-  },
-];
+/**
+ * Determine which provider to use for the default assistant based on what has
+ * been configured.  Codex takes priority when both are available.
+ *
+ * - Codex:  openaiTokens in user-settings  OR  ~/.codex/auth.json exists
+ * - Claude: anthropicAuthToken in user-settings  OR  ANTHROPIC_AUTH_TOKEN env var
+ *
+ * Falls back to "claude" when neither is configured.
+ */
+function resolveDefaultProvider(): "claude" | "codex" {
+  const settings = loadUserSettings();
 
-const DEFAULT_CONFIG: AssistantsConfig = {
-  assistants: DEFAULT_ASSISTANTS,
-  defaultAssistantId: DEFAULT_ASSISTANTS[0]?.id,
-};
+  const hasCodex =
+    !!settings.openaiTokens?.accessToken ||
+    existsSync(join(homedir(), ".codex", "auth.json"));
+
+  const hasClaude =
+    !!settings.anthropicAuthToken ||
+    !!process.env.ANTHROPIC_AUTH_TOKEN;
+
+  if (hasCodex) return "codex";
+  if (hasClaude) return "claude";
+  return "claude";
+}
+
+function buildDefaultAssistants(): AssistantConfig[] {
+  return [
+    {
+      id: "default-assistant",
+      name: "小助理",
+      provider: resolveDefaultProvider(),
+      skillNames: [],
+      persona: "你是一个通用小助理，乐于帮忙，回答简洁实用。",
+    },
+  ];
+}
+
+function buildDefaultConfig(): AssistantsConfig {
+  const assistants = buildDefaultAssistants();
+  return {
+    assistants,
+    defaultAssistantId: assistants[0]?.id,
+  };
+}
 
 function ensureDirectory() {
-  const dir = dirname(ASSISTANTS_FILE);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+  if (!existsSync(VK_COWORK_DIR)) {
+    mkdirSync(VK_COWORK_DIR, { recursive: true });
   }
 }
 
@@ -56,10 +87,8 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
     }));
 
   if (assistants.length === 0) {
-    return {
-      assistants: DEFAULT_ASSISTANTS,
-      defaultAssistantId: DEFAULT_CONFIG.defaultAssistantId,
-    };
+    const defaultConfig = buildDefaultConfig();
+    return defaultConfig;
   }
 
   const preferredDefault = input?.defaultAssistantId;
@@ -74,8 +103,9 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
 export function loadAssistantsConfig(): AssistantsConfig {
   try {
     if (!existsSync(ASSISTANTS_FILE)) {
-      saveAssistantsConfig(DEFAULT_CONFIG);
-      return DEFAULT_CONFIG;
+      const defaultConfig = buildDefaultConfig();
+      saveAssistantsConfig(defaultConfig);
+      return defaultConfig;
     }
     const raw = readFileSync(ASSISTANTS_FILE, "utf8");
     const parsed = JSON.parse(raw) as Partial<AssistantsConfig>;
@@ -85,7 +115,7 @@ export function loadAssistantsConfig(): AssistantsConfig {
     }
     return normalized;
   } catch {
-    return DEFAULT_CONFIG;
+    return buildDefaultConfig();
   }
 }
 

@@ -49,6 +49,14 @@ function startMemoryJanitor(): void {
 const JANITOR_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 h
 
 app.on("ready", async () => {
+    // Ensure app name shows correctly in dev mode (overrides the default "Electron")
+    app.setName("AI Team");
+
+    // Set Dock icon on macOS (required in dev mode; production uses .icns from app bundle)
+    if (process.platform === "darwin" && app.dock) {
+        app.dock.setIcon(getIconPath());
+    }
+
     // Run memory janitor once on startup, then every 24 h
     startMemoryJanitor();
     setInterval(startMemoryJanitor, JANITOR_INTERVAL_MS);
