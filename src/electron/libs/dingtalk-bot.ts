@@ -1234,8 +1234,11 @@ class DingtalkConnection {
     const cmdText = extracted.text.trim();
 
     // /screenshot — take a desktop screenshot and send it back
+    // Match any short message containing screenshot keywords (length < 40 avoids false positives
+    // like "帮我把这张截图发给朋友" which is about an existing image, not taking a new one).
     const isScreenshotCmd =
-      /^(\/screenshot|截屏|截图|帮我截图|截个图|截一下屏|把桌面截图发给我|截图发给我)$/i.test(cmdText);
+      /\/screenshot/i.test(cmdText) ||
+      (cmdText.length < 40 && /截图|截屏/.test(cmdText));
     if (isScreenshotCmd) {
       await this.handleScreenshot(msg);
       return;
@@ -1312,7 +1315,12 @@ class DingtalkConnection {
     const basePersona =
       this.opts.persona?.trim() ||
       `你是 ${this.opts.assistantName}，一个智能助手，请简洁有用地回答问题。`;
-    const system = `${basePersona}\n\n${memoryContext}`;
+    const builtinCmds = `
+## 内置指令说明（重要）
+以下操作由系统直接执行，**你不需要也不能自己模拟**，如果用户提到这些，告知他们直接发关键词即可：
+- **截图**：发送包含"截图"或"截屏"的短消息（< 40字），系统自动截图并发图给用户。你无法自己执行截图，不要假装截图或生成假文件名。
+- **查询我的 ID**：发送 /myid`;
+    const system = `${basePersona}\n\n${memoryContext}\n\n${builtinCmds}`;
 
     let replyText: string;
 
