@@ -1167,6 +1167,24 @@ class DingtalkConnection {
 
     console.log(`[DingTalk] Message (${msg.msgtype}): ${extracted.text.slice(0, 100)}`);
 
+    // ── Built-in /myid command ─────────────────────────────────────────────────
+    const cmdText = extracted.text.trim();
+    if (cmdText === "/myid" || cmdText === "/我的id" || cmdText === "/我的ID") {
+      const staffId = msg.senderStaffId ?? msg.senderId ?? "（未知）";
+      const convId = msg.conversationId ?? "（未知）";
+      const isGroup = msg.conversationType === "2";
+      const reply = [
+        "**你的钉钉 ID 信息**",
+        "",
+        `- **staffId**（填入 ownerStaffIds）：\`${staffId}\``,
+        isGroup ? `- **群 conversationId**（群推送用）：\`${convId}\`` : "",
+        "",
+        "复制上方 ID 填入 Bot 配置 → 高级设置 → 我的 StaffId，即可接收主动推送。",
+      ].filter((l) => l !== undefined && !(isGroup === false && l.includes("群"))).join("\n");
+      await this.sendMarkdown(msg.sessionWebhook, reply).catch(() => {});
+      return;
+    }
+
     // ── Generate and deliver reply ─────────────────────────────────────────────
     try {
       await this.generateAndDeliver(msg, extracted.text, extracted.images);
