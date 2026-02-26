@@ -1230,19 +1230,9 @@ class DingtalkConnection {
 
     console.log(`[DingTalk] Message (${msg.msgtype}): ${extracted.text.slice(0, 100)}`);
 
-    // ── Built-in commands ──────────────────────────────────────────────────────
+    // ── Built-in /myid command (only exact-match commands stay hardcoded) ──────
+    // Everything else (screenshot, find file, etc.) is handled via Claude tool_use.
     const cmdText = extracted.text.trim();
-
-    // /screenshot — take a desktop screenshot and send it back
-    // Match any short message containing screenshot keywords (length < 40 avoids false positives
-    // like "帮我把这张截图发给朋友" which is about an existing image, not taking a new one).
-    const isScreenshotCmd =
-      /\/screenshot/i.test(cmdText) ||
-      (cmdText.length < 40 && /截图|截屏/.test(cmdText));
-    if (isScreenshotCmd) {
-      await this.handleScreenshot(msg);
-      return;
-    }
 
     if (cmdText === "/myid" || cmdText === "/我的id" || cmdText === "/我的ID") {
       const staffId = msg.senderStaffId ?? msg.senderId ?? "（未知）";
@@ -1315,12 +1305,16 @@ class DingtalkConnection {
     const basePersona =
       this.opts.persona?.trim() ||
       `你是 ${this.opts.assistantName}，一个智能助手，请简洁有用地回答问题。`;
-    const builtinCmds = `
-## 内置指令说明（重要）
-以下操作由系统直接执行，**你不需要也不能自己模拟**，如果用户提到这些，告知他们直接发关键词即可：
-- **截图**：发送包含"截图"或"截屏"的短消息（< 40字），系统自动截图并发图给用户。你无法自己执行截图，不要假装截图或生成假文件名。
-- **查询我的 ID**：发送 /myid`;
-    const system = `${basePersona}\n\n${memoryContext}\n\n${builtinCmds}`;
+    const toolsHint = `
+## 可用工具
+你可以调用以下工具来完成用户的请求，无需询问，直接执行即可：
+- **take_screenshot** — 截取当前桌面截图，返回文件路径
+- **send_file** — 把本机文件通过钉钉发送给用户（需先有文件路径）
+- **bash** — 在本机执行 shell 命令（查找文件、读取内容、获取系统信息等）
+
+典型工作流（截图）：先调用 take_screenshot → 拿到路径 → 调用 send_file 发送。
+典型工作流（找文件）：先调用 bash 找到路径 → 再调用 send_file 发送。`;
+    const system = `${basePersona}\n\n${memoryContext}\n\n${toolsHint}`;
 
     let replyText: string;
 
@@ -1345,6 +1339,113 @@ class DingtalkConnection {
     this.persistReply(sessionId, replyText, userText);
 
     await this.sendMarkdown(msg.sessionWebhook, replyText);
+  }
+
+  // ── Tool execution (OpenClaw-style: Claude decides, framework executes) ──────
+
+  private async executeTool(
+    name: string,
+    input: Record<string, unknown>,
+    msg: DingtalkMessage,
+  ): Promise<string> {
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+    const os = await import("os");
+    const path = await import("path");
+    const fs = await import("fs");
+
+    if (name === "take_screenshot") {
+      const filePath = path.join(os.tmpdir(), `vk-shot-${Date.now()}.png`);
+      const platform = process.platform;
+      await this.sendMarkdown(msg.sessionWebhook, "📸 正在截图…").catch(() => {});
+      if (platform === "darwin") {
+        await execAsync(`screencapture -x "${filePath}"`);
+      } else if (platform === "win32") {
+        await execAsync(
+          `powershell -command "Add-Type -AssemblyName System.Windows.Forms; ` +
+          `$b=New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width,[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); ` +
+          `$g=[System.Drawing.Graphics]::FromImage($b); ` +
+          `$g.CopyFromScreen(0,0,0,0,$b.Size); ` +
+          `$b.Save('${filePath}')"`,
+        );
+      } else {
+        await execAsync(`gnome-screenshot -f "${filePath}" 2>/dev/null || scrot "${filePath}"`);
+      }
+      if (!fs.existsSync(filePath)) throw new Error("截图文件未生成");
+      return filePath;
+    }
+
+    if (name === "send_file") {
+      const filePath = String(input.file_path ?? "");
+      if (!filePath || !fs.existsSync(filePath)) {
+        return `文件不存在: ${filePath}`;
+      }
+      const target = msg.senderStaffId ?? msg.senderId ?? "";
+      const result = await sendProactiveMediaDingtalk(this.opts.assistantId, filePath, {
+        targets: target ? [target] : undefined,
+      });
+      // Clean up temp screenshots after sending
+      if (filePath.includes("vk-shot-") && fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+      }
+      return result.ok ? `文件已发送: ${path.basename(filePath)}` : `发送失败: ${result.error}`;
+    }
+
+    if (name === "bash") {
+      const command = String(input.command ?? "").trim();
+      if (!command) return "命令为空";
+      try {
+        const { stdout, stderr } = await execAsync(command, { timeout: 15_000 });
+        const out = (stdout + (stderr ? `\n[stderr] ${stderr}` : "")).trim();
+        return out.slice(0, 3000) || "(no output)";
+      } catch (err) {
+        const e = err as { message?: string; stdout?: string; stderr?: string };
+        return `命令失败: ${e.message}\n${e.stderr ?? ""}`.slice(0, 1000);
+      }
+    }
+
+    return `未知工具: ${name}`;
+  }
+
+  // ── Claude tools definition ───────────────────────────────────────────────────
+
+  private get claudeTools(): Anthropic.Tool[] {
+    return [
+      {
+        name: "take_screenshot",
+        description:
+          "截取当前桌面屏幕截图。返回截图的临时文件路径，之后可用 send_file 发送给用户。",
+        input_schema: { type: "object" as const, properties: {}, required: [] },
+      },
+      {
+        name: "send_file",
+        description:
+          "通过钉钉将本地文件发送给当前对话的用户。支持图片（png/jpg）、PDF、文档等。" +
+          "file_path 必须是本机可读取的完整路径。",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            file_path: { type: "string", description: "要发送的文件的完整本地路径" },
+          },
+          required: ["file_path"],
+        },
+      },
+      {
+        name: "bash",
+        description:
+          "在本机执行 bash 命令（macOS/Linux）或 PowerShell（Windows）。" +
+          "适合：查找文件（find、ls）、读取文本内容（cat）、获取系统信息等。" +
+          "超时 15 秒，输出限制 3000 字符。",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            command: { type: "string", description: "要执行的 shell 命令" },
+          },
+          required: ["command"],
+        },
+      },
+    ];
   }
 
   // ── Claude ───────────────────────────────────────────────────────────────────
@@ -1442,17 +1543,54 @@ class DingtalkConnection {
       }
     }
 
-    // ── Regular (non-streaming) markdown reply ─────────────────────────────────
-    const response = await client.messages.create({
-      model,
-      max_tokens: 2048,
-      system,
-      messages,
-    });
+    // ── Agentic tool-use loop (OpenClaw pattern) ───────────────────────────────
+    // Claude decides which tools to call; we execute and feed results back.
+    const MAX_TOOL_TURNS = 6;
+    let toolTurns = 0;
 
-    return response.content[0].type === "text"
-      ? response.content[0].text
-      : "抱歉，无法生成回复。";
+    while (toolTurns < MAX_TOOL_TURNS) {
+      const response = await client.messages.create({
+        model,
+        max_tokens: 4096,
+        system,
+        messages,
+        tools: this.claudeTools,
+      });
+
+      const toolUseBlocks = response.content.filter(
+        (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+      );
+
+      if (toolUseBlocks.length === 0 || response.stop_reason !== "tool_use") {
+        const textBlock = response.content.find(
+          (b): b is Anthropic.TextBlock => b.type === "text",
+        );
+        return textBlock?.text ?? "抱歉，无法生成回复。";
+      }
+
+      // Append assistant turn with tool calls
+      messages.push({ role: "assistant", content: response.content });
+
+      // Execute each tool and collect results
+      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+      for (const tb of toolUseBlocks) {
+        console.log(`[DingTalk] Tool call: ${tb.name}(${JSON.stringify(tb.input)})`);
+        let result: string;
+        try {
+          result = await this.executeTool(tb.name, tb.input as Record<string, unknown>, msg);
+        } catch (err) {
+          result = `工具执行失败: ${err instanceof Error ? err.message : String(err)}`;
+        }
+        console.log(`[DingTalk] Tool result (${tb.name}): ${result.slice(0, 100)}`);
+        toolResults.push({ type: "tool_result", tool_use_id: tb.id, content: result });
+      }
+
+      // Feed results back to Claude
+      messages.push({ role: "user", content: toolResults });
+      toolTurns++;
+    }
+
+    return "抱歉，工具调用次数超过上限，请换个方式提问。";
   }
 
   // ── Codex ────────────────────────────────────────────────────────────────────
