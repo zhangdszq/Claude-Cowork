@@ -1230,8 +1230,17 @@ class DingtalkConnection {
 
     console.log(`[DingTalk] Message (${msg.msgtype}): ${extracted.text.slice(0, 100)}`);
 
-    // ── Built-in /myid command ─────────────────────────────────────────────────
+    // ── Built-in commands ──────────────────────────────────────────────────────
     const cmdText = extracted.text.trim();
+
+    // /screenshot — take a desktop screenshot and send it back
+    const isScreenshotCmd =
+      /^(\/screenshot|截屏|截图|帮我截图|截个图|截一下屏|把桌面截图发给我|截图发给我)$/i.test(cmdText);
+    if (isScreenshotCmd) {
+      await this.handleScreenshot(msg);
+      return;
+    }
+
     if (cmdText === "/myid" || cmdText === "/我的id" || cmdText === "/我的ID") {
       const staffId = msg.senderStaffId ?? msg.senderId ?? "（未知）";
       const convId = msg.conversationId ?? "（未知）";
@@ -1501,6 +1510,73 @@ class DingtalkConnection {
       appendDailyMemory(
         `\n## [钉钉] ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
       );
+    }
+  }
+
+  // ── Built-in screenshot command ───────────────────────────────────────────────
+
+  private async handleScreenshot(msg: DingtalkMessage): Promise<void> {
+    const os = process.platform;
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+    const path = await import("path");
+    const fs = await import("fs");
+    const tmpDir = (await import("os")).tmpdir();
+    const filePath = path.join(tmpDir, `vk-screenshot-${Date.now()}.png`);
+
+    // Notify user that screenshot is being taken
+    await this.sendMarkdown(msg.sessionWebhook, "📸 正在截图…").catch(() => {});
+
+    try {
+      // OS-specific screenshot commands
+      if (os === "darwin") {
+        await execAsync(`screencapture -x "${filePath}"`);
+      } else if (os === "win32") {
+        // PowerShell screenshot on Windows
+        await execAsync(
+          `powershell -command "Add-Type -AssemblyName System.Windows.Forms; ` +
+          `$screen=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; ` +
+          `$bmp=New-Object System.Drawing.Bitmap($screen.Width,$screen.Height); ` +
+          `$g=[System.Drawing.Graphics]::FromImage($bmp); ` +
+          `$g.CopyFromScreen($screen.Left,$screen.Top,0,0,$screen.Size); ` +
+          `$bmp.Save('${filePath}',[System.Drawing.Imaging.ImageFormat]::Png)"`,
+        );
+      } else {
+        // Linux: try gnome-screenshot, then scrot as fallback
+        await execAsync(`gnome-screenshot -f "${filePath}" 2>/dev/null || scrot "${filePath}"`);
+      }
+
+      if (!fs.existsSync(filePath)) {
+        throw new Error("截图文件未生成");
+      }
+
+      // Upload to DingTalk and send
+      const result = await sendProactiveMediaDingtalk(this.opts.assistantId, filePath, {
+        targets: [msg.senderStaffId ?? msg.senderId ?? ""],
+      });
+
+      if (result.ok) {
+        await this.sendMarkdown(msg.sessionWebhook, "✅ 截图已发送").catch(() => {});
+      } else {
+        await this.sendMarkdown(
+          msg.sessionWebhook,
+          `❌ 截图发送失败：${result.error}`,
+        ).catch(() => {});
+      }
+    } catch (err) {
+      const msg2 = err instanceof Error ? err.message : String(err);
+      console.error("[DingTalk] Screenshot failed:", msg2);
+      await this.sendMarkdown(
+        msg.sessionWebhook,
+        `❌ 截图失败：${msg2}`,
+      ).catch(() => {});
+    } finally {
+      // Clean up temp file
+      try {
+        const fs2 = await import("fs");
+        if (fs2.existsSync(filePath)) fs2.unlinkSync(filePath);
+      } catch { /* ignore */ }
     }
   }
 
