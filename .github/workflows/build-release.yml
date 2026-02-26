@@ -29,12 +29,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14  # Apple Silicon runner
-            platform: mac-arm
-            artifact-name: macos-arm64
-          - os: macos-13  # Apple Intel runner
-            platform: mac-intel
-            artifact-name: macos-x64
+          - os: macos-14  # Apple Silicon runner，构建 Universal Binary（ARM + Intel）
+            platform: mac
+            artifact-name: macos-universal
           - os: ubuntu-latest
             platform: linux
             artifact-name: linux-x64
@@ -62,13 +59,9 @@ jobs:
         run: bun install
 
       # 构建 API sidecar
-      - name: Build API sidecar (macOS ARM)
-        if: matrix.platform == 'mac-arm'
-        run: bun run build:api:mac-arm
-
-      - name: Build API sidecar (macOS Intel)
-        if: matrix.platform == 'mac-intel'
-        run: bun run build:api:mac-intel
+      - name: Build API sidecar (macOS ARM + Intel)
+        if: matrix.platform == 'mac'
+        run: bun run build:api:mac-arm && bun run build:api:mac-intel
 
       - name: Build API sidecar (Linux)
         if: matrix.platform == 'linux'
@@ -79,9 +72,13 @@ jobs:
         run: bun run build:api:windows
 
       # 构建 CLI bundle
+      - name: Build CLI bundle (macOS ARM + Intel)
+        if: matrix.platform == 'mac'
+        run: bun run build:cli:mac-arm && bun run build:cli:mac-intel
+
       - name: Build CLI bundle (Unix)
-        if: matrix.platform != 'windows'
-        run: bun run build:cli:${{ matrix.platform }}
+        if: matrix.platform == 'linux'
+        run: bun run build:cli:linux
 
       - name: Build CLI bundle (Windows)
         if: matrix.platform == 'windows'
@@ -96,15 +93,9 @@ jobs:
         run: bun run transpile:electron
 
       # 打包应用
-      - name: Package (macOS ARM)
-        if: matrix.platform == 'mac-arm'
-        run: npx electron-builder --mac --arm64
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Package (macOS Intel)
-        if: matrix.platform == 'mac-intel'
-        run: npx electron-builder --mac --x64
+      - name: Package (macOS Universal)
+        if: matrix.platform == 'mac'
+        run: npx electron-builder --mac --universal
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
