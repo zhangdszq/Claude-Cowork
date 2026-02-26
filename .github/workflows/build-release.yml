@@ -29,9 +29,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14  # Apple Silicon runner，同时出 ARM64 和 x64 两个 DMG
-            platform: mac
-            artifact-name: macos
+          - os: macos-14   # Apple Silicon (M 芯片) runner
+            platform: mac-arm64
+            arch: arm64
+            artifact-name: macos-arm64
+          - os: macos-13   # Intel runner
+            platform: mac-x64
+            arch: x64
+            artifact-name: macos-x64
           - os: ubuntu-latest
             platform: linux
             artifact-name: linux-x64
@@ -78,9 +83,13 @@ jobs:
           ELECTRON_GET_TIMEOUT: 300000
 
       # 构建 API sidecar
-      - name: Build API sidecar (macOS ARM + Intel)
-        if: matrix.platform == 'mac'
-        run: bun run build:api:mac-arm && bun run build:api:mac-intel
+      - name: Build API sidecar (macOS ARM64)
+        if: matrix.platform == 'mac-arm64'
+        run: bun run build:api:mac-arm
+
+      - name: Build API sidecar (macOS x64)
+        if: matrix.platform == 'mac-x64'
+        run: bun run build:api:mac-intel
 
       - name: Build API sidecar (Linux)
         if: matrix.platform == 'linux'
@@ -91,11 +100,15 @@ jobs:
         run: bun run build:api:windows
 
       # 构建 CLI bundle
-      - name: Build CLI bundle (macOS ARM + Intel)
-        if: matrix.platform == 'mac'
-        run: bun run build:cli:mac-arm && bun run build:cli:mac-intel
+      - name: Build CLI bundle (macOS ARM64)
+        if: matrix.platform == 'mac-arm64'
+        run: bun run build:cli:mac-arm
 
-      - name: Build CLI bundle (Unix)
+      - name: Build CLI bundle (macOS x64)
+        if: matrix.platform == 'mac-x64'
+        run: bun run build:cli:mac-intel
+
+      - name: Build CLI bundle (Linux)
         if: matrix.platform == 'linux'
         run: bun run build:cli:linux
 
@@ -113,14 +126,14 @@ jobs:
 
       # 打包应用
       - name: Package (macOS ARM64)
-        if: matrix.platform == 'mac'
+        if: matrix.platform == 'mac-arm64'
         run: npx electron-builder --mac --arm64
         env:
           BUILD_ARCH: arm64
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Package (macOS x64)
-        if: matrix.platform == 'mac'
+        if: matrix.platform == 'mac-x64'
         run: npx electron-builder --mac --x64
         env:
           BUILD_ARCH: x64
