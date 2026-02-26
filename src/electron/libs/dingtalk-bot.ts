@@ -130,7 +130,7 @@ interface AICardInstance {
 
 const DINGTALK_API = "https://api.dingtalk.com";
 
-/** Access token cache: key = `${appKey}` */
+/** V2 access token cache (for api.dingtalk.com/v1.0/* endpoints) */
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 async function getAccessToken(appKey: string, appSecret: string): Promise<string> {
@@ -152,6 +152,81 @@ async function getAccessToken(appKey: string, appSecret: string): Promise<string
     expiresAt: Date.now() + (data.expireIn ?? 7200) * 1000,
   });
   return data.accessToken;
+}
+
+/** V1 access token cache (for oapi.dingtalk.com/* endpoints, e.g. media/upload) */
+const tokenCacheV1 = new Map<string, { token: string; expiresAt: number }>();
+
+async function getAccessTokenV1(appKey: string, appSecret: string): Promise<string> {
+  const cached = tokenCacheV1.get(appKey);
+  if (cached && Date.now() < cached.expiresAt - 60_000) return cached.token;
+
+  const resp = await fetch(
+    `https://oapi.dingtalk.com/gettoken?appkey=${encodeURIComponent(appKey)}&appsecret=${encodeURIComponent(appSecret)}`,
+  );
+  if (!resp.ok) throw new Error(`DingTalk V1 token fetch failed: HTTP ${resp.status}`);
+
+  const data = (await resp.json()) as { errcode?: number; access_token?: string; expires_in?: number };
+  if (data.errcode !== 0 || !data.access_token) {
+    throw new Error(`DingTalk V1 token error: ${JSON.stringify(data)}`);
+  }
+
+  tokenCacheV1.set(appKey, {
+    token: data.access_token,
+    expiresAt: Date.now() + (data.expires_in ?? 7200) * 1000,
+  });
+  return data.access_token;
+}
+
+/**
+ * Upload a file to DingTalk's media server using the old V1 API.
+ * Returns media_id on success, null on failure.
+ */
+async function uploadMediaV1(
+  appKey: string,
+  appSecret: string,
+  filePath: string,
+  mediaType: "image" | "voice" | "video" | "file",
+): Promise<string | null> {
+  const fs = await import("fs");
+  const path = await import("path");
+
+  try {
+    const token = await getAccessTokenV1(appKey, appSecret);
+    const fileBuffer = await fs.promises.readFile(filePath);
+    const fileName = path.basename(filePath);
+    const boundary = `----DT${Date.now()}`;
+    const CRLF = "\r\n";
+    const body = Buffer.concat([
+      Buffer.from(
+        `--${boundary}${CRLF}` +
+        `Content-Disposition: form-data; name="media"; filename="${fileName}"${CRLF}` +
+        `Content-Type: application/octet-stream${CRLF}${CRLF}`,
+      ),
+      fileBuffer,
+      Buffer.from(`${CRLF}--${boundary}--${CRLF}`),
+    ]);
+
+    const resp = await fetch(
+      `https://oapi.dingtalk.com/media/upload?access_token=${token}&type=${mediaType}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
+        body,
+      },
+    );
+
+    const data = (await resp.json()) as { errcode?: number; media_id?: string; errmsg?: string };
+    if (data.errcode !== 0 || !data.media_id) {
+      console.error(`[DingTalk] Media upload V1 failed: ${JSON.stringify(data)}`);
+      return null;
+    }
+    console.log(`[DingTalk] Media uploaded (V1): ${data.media_id}`);
+    return data.media_id;
+  } catch (err) {
+    console.error("[DingTalk] Media upload V1 error:", err);
+    return null;
+  }
 }
 
 async function createAICard(
@@ -769,43 +844,10 @@ export async function sendProactiveMediaDingtalk(
     };
   }
 
-  // Upload to DingTalk media server
-  let mediaId: string;
-  try {
-    const token = await getAccessToken(botOpts.appKey, botOpts.appSecret);
-    const fileName = path.basename(filePath);
-    const fileBuffer = await fs.promises.readFile(filePath);
-
-    // Build multipart form data manually (no FormData class needed)
-    const boundary = `----DingTalkUpload${Date.now()}`;
-    const CRLF = "\r\n";
-    const pre =
-      `--${boundary}${CRLF}` +
-      `Content-Disposition: form-data; name="media"; filename="${fileName}"${CRLF}` +
-      `Content-Type: application/octet-stream${CRLF}${CRLF}`;
-    const post = `${CRLF}--${boundary}--${CRLF}`;
-    const body = Buffer.concat([
-      Buffer.from(pre),
-      fileBuffer,
-      Buffer.from(post),
-    ]);
-
-    const uploadUrl = `https://oapi.dingtalk.com/media/upload?access_token=${token}&type=${detectedType}`;
-    const uploadResp = await fetch(uploadUrl, {
-      method: "POST",
-      headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
-      body,
-    });
-
-    const uploadData = (await uploadResp.json()) as { errcode?: number; media_id?: string };
-    if (uploadData.errcode !== 0 || !uploadData.media_id) {
-      return { ok: false, error: `媒体上传失败: ${JSON.stringify(uploadData)}` };
-    }
-    mediaId = uploadData.media_id;
-    console.log(`[DingTalk] Media uploaded: ${mediaId} (${detectedType})`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `媒体上传异常: ${msg}` };
+  // Upload to DingTalk media server (must use V1 token for oapi.dingtalk.com)
+  const mediaId = await uploadMediaV1(botOpts.appKey, botOpts.appSecret, filePath, detectedType);
+  if (!mediaId) {
+    return { ok: false, error: "媒体上传失败，请检查应用权限（oapi.dingtalk.com/media/upload）" };
   }
 
   // Send to each target
@@ -1381,15 +1423,103 @@ class DingtalkConnection {
       if (!filePath || !fs.existsSync(filePath)) {
         return `文件不存在: ${filePath}`;
       }
-      const target = msg.senderStaffId ?? msg.senderId ?? "";
-      const result = await sendProactiveMediaDingtalk(this.opts.assistantId, filePath, {
-        targets: target ? [target] : undefined,
-      });
-      // Clean up temp screenshots after sending
-      if (filePath.includes("vk-shot-") && fs.existsSync(filePath)) {
-        try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+
+      const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+      const mediaType: "image" | "voice" | "video" | "file" =
+        ["jpg", "jpeg", "png", "gif", "bmp"].includes(ext) ? "image" :
+        ["mp3", "amr", "wav"].includes(ext) ? "voice" :
+        ["mp4", "avi", "mov"].includes(ext) ? "video" : "file";
+
+      const cleanup = () => {
+        if (filePath.includes("vk-shot-") && fs.existsSync(filePath)) {
+          try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+        }
+      };
+
+      // 1. Upload to DingTalk media server (V1 API, correct token)
+      const mediaId = await uploadMediaV1(
+        this.opts.appKey, this.opts.appSecret, filePath, mediaType,
+      );
+      if (!mediaId) {
+        cleanup();
+        return `媒体上传失败，请检查应用权限或网络（oapi.dingtalk.com）`;
       }
-      return result.ok ? `文件已发送: ${path.basename(filePath)}` : `发送失败: ${result.error}`;
+
+      // 2a. Send via sessionWebhook if still valid (simplest, most reliable)
+      const webhookExpired =
+        msg.sessionWebhookExpiredTime && Date.now() > msg.sessionWebhookExpiredTime;
+      if (!webhookExpired && msg.sessionWebhook) {
+        try {
+          const token = await getAccessToken(this.opts.appKey, this.opts.appSecret);
+          const body = mediaType === "image"
+            ? { msgtype: "image", image: { media_id: mediaId } }
+            : mediaType === "voice"
+            ? { msgtype: "voice", voice: { media_id: mediaId, duration: 1 } }
+            : { msgtype: "file", file: { media_id: mediaId } };
+
+          const resp = await fetch(msg.sessionWebhook, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-acs-dingtalk-access-token": token,
+            },
+            body: JSON.stringify(body),
+          });
+          cleanup();
+          if (resp.ok) return `文件已发送: ${path.basename(filePath)}`;
+          const errText = await resp.text();
+          console.error(`[DingTalk] Session webhook send failed: ${errText}`);
+          // Fall through to proactive API
+        } catch (err) {
+          console.error("[DingTalk] Session webhook send error:", err);
+          // Fall through to proactive API
+        }
+      }
+
+      // 2b. Fall back to proactive API
+      const robotCode = this.opts.robotCode ?? this.opts.appKey;
+      const target = msg.senderStaffId ?? msg.senderId ?? "";
+      const isGroup = msg.conversationType === "2";
+      const resolvedTarget = resolveOriginalPeerId(target || msg.conversationId || "");
+
+      const url = isGroup
+        ? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
+        : `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
+
+      const msgKey = mediaType === "image" ? "sampleImageMsg"
+        : mediaType === "voice" ? "sampleAudio"
+        : "sampleFile";
+      const msgParam = mediaType === "image"
+        ? JSON.stringify({ photoURL: mediaId })
+        : mediaType === "voice"
+        ? JSON.stringify({ mediaId, duration: "1" })
+        : JSON.stringify({ mediaId, fileName: path.basename(filePath), fileType: ext || "bin" });
+
+      const payload: Record<string, unknown> = { robotCode, msgKey, msgParam };
+      if (isGroup) {
+        payload.openConversationId = resolvedTarget;
+      } else {
+        payload.userIds = [resolvedTarget];
+      }
+
+      try {
+        const token = await getAccessToken(this.opts.appKey, this.opts.appSecret);
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-acs-dingtalk-access-token": token,
+          },
+          body: JSON.stringify(payload),
+        });
+        cleanup();
+        if (resp.ok) return `文件已发送: ${path.basename(filePath)}`;
+        const errText = await resp.text();
+        return `发送失败 (HTTP ${resp.status}): ${errText.slice(0, 200)}`;
+      } catch (err) {
+        cleanup();
+        return `发送异常: ${err instanceof Error ? err.message : String(err)}`;
+      }
     }
 
     if (name === "bash") {
