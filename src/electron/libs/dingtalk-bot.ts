@@ -290,6 +290,85 @@ function markProcessed(key: string): void {
   }
 }
 
+// ─── Peer-ID registry ────────────────────────────────────────────────────────
+// DingTalk conversationIds are base64-encoded and case-sensitive.
+// The framework may lowercase session keys internally, so we preserve originals.
+
+const peerIdMap = new Map<string, string>();
+
+function registerPeerId(originalId: string): void {
+  if (!originalId) return;
+  peerIdMap.set(originalId.toLowerCase(), originalId);
+}
+
+function resolveOriginalPeerId(id: string): string {
+  if (!id) return id;
+  return peerIdMap.get(id.toLowerCase()) ?? id;
+}
+
+// ─── Proactive-risk registry ──────────────────────────────────────────────────
+// Tracks targets where proactive send failed with a permission error.
+// High-risk targets are skipped for 7 days to avoid repeated failure noise.
+
+type ProactiveRiskLevel = "low" | "medium" | "high";
+
+interface ProactiveRiskEntry {
+  level: ProactiveRiskLevel;
+  reason: string;
+  observedAtMs: number;
+}
+
+const PROACTIVE_RISK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const proactiveRiskStore = new Map<string, ProactiveRiskEntry>();
+
+function proactiveRiskKey(accountId: string, targetId: string): string {
+  return `${accountId}:${targetId.trim()}`;
+}
+
+function recordProactiveRisk(accountId: string, targetId: string, reason: string): void {
+  if (!accountId || !targetId.trim()) return;
+  proactiveRiskStore.set(proactiveRiskKey(accountId, targetId), {
+    level: "high",
+    reason,
+    observedAtMs: Date.now(),
+  });
+}
+
+function getProactiveRisk(accountId: string, targetId: string): ProactiveRiskEntry | null {
+  if (!accountId || !targetId.trim()) return null;
+  const key = proactiveRiskKey(accountId, targetId);
+  const entry = proactiveRiskStore.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.observedAtMs > PROACTIVE_RISK_TTL_MS) {
+    proactiveRiskStore.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function clearProactiveRisk(accountId: string, targetId: string): void {
+  proactiveRiskStore.delete(proactiveRiskKey(accountId, targetId));
+}
+
+function isProactivePermissionError(code: string | null): boolean {
+  if (!code) return false;
+  return (
+    code.startsWith("Forbidden.AccessDenied") ||
+    code === "invalidParameter.userIds.invalid" ||
+    code === "invalidParameter.userIds.empty" ||
+    code === "invalidParameter.openConversationId.invalid" ||
+    code === "invalidParameter.robotCode.empty"
+  );
+}
+
+function extractErrorCode(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  if (typeof d.code === "string" && d.code.trim()) return d.code.trim();
+  if (typeof d.subCode === "string" && d.subCode.trim()) return d.subCode.trim();
+  return null;
+}
+
 // ─── Access control ───────────────────────────────────────────────────────────
 
 function isAllowed(msg: DingtalkMessage, opts: DingtalkBotOptions): boolean {
@@ -430,15 +509,97 @@ export function getDingtalkBotStatus(assistantId: string): DingtalkBotStatus {
 // ─── Proactive (outbound) messaging ──────────────────────────────────────────
 
 export interface SendProactiveOptions {
-  /** Staff IDs to send to. Falls back to ownerStaffIds configured on the bot. */
-  staffIds?: string[];
+  /**
+   * Explicit target(s) to send to. Supports:
+   *  - staffId / userId  → private message (oToMessages/batchSend)
+   *  - conversationId starting with "cid" → group message (groupMessages/send)
+   *  - "user:<staffId>" or "group:<conversationId>" prefix to force type
+   * Falls back to ownerStaffIds from bot config when omitted.
+   */
+  targets?: string[];
   title?: string;
 }
 
+export interface SendProactiveMediaOptions extends SendProactiveOptions {
+  mediaType?: "image" | "voice" | "video" | "file";
+}
+
+/** @internal strip user:/group: prefix and detect explicit type */
+function stripTargetPrefix(target: string): { targetId: string; isExplicitUser: boolean } {
+  if (target.startsWith("user:")) return { targetId: target.slice(5), isExplicitUser: true };
+  if (target.startsWith("group:")) return { targetId: target.slice(6), isExplicitUser: false };
+  return { targetId: target, isExplicitUser: false };
+}
+
+/** @internal detect markdown by content heuristics (same as soimy) */
+function isMarkdownText(text: string): boolean {
+  return /^[#*>-]|[*_`#[\]]/.test(text) || text.includes("\n");
+}
+
+/** @internal core proactive send for a single resolved target */
+async function sendProactiveToTarget(
+  botOpts: DingtalkBotOptions,
+  target: string,
+  text: string,
+  title: string,
+): Promise<void> {
+  const token = await getAccessToken(botOpts.appKey, botOpts.appSecret);
+  const robotCode = botOpts.robotCode ?? botOpts.appKey;
+  const { targetId: rawId, isExplicitUser } = stripTargetPrefix(target);
+  const targetId = resolveOriginalPeerId(rawId);
+  const isGroup = !isExplicitUser && targetId.startsWith("cid");
+
+  const useMarkdown = isMarkdownText(text);
+  const msgKey = useMarkdown ? "sampleMarkdown" : "sampleText";
+  const msgParam = useMarkdown
+    ? JSON.stringify({ title, text })
+    : JSON.stringify({ content: text });
+
+  const url = isGroup
+    ? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
+    : `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
+
+  const payload: Record<string, unknown> = { robotCode, msgKey, msgParam };
+  if (isGroup) {
+    payload.openConversationId = targetId;
+  } else {
+    payload.userIds = [targetId];
+  }
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-acs-dingtalk-access-token": token,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    let errData: unknown;
+    try { errData = JSON.parse(errText); } catch { errData = null; }
+    const errCode = extractErrorCode(errData);
+
+    if (isProactivePermissionError(errCode)) {
+      recordProactiveRisk(botOpts.assistantId, targetId, errCode ?? "permission-error");
+    }
+    throw new Error(`HTTP ${resp.status} code=${errCode ?? "?"}: ${errText.slice(0, 200)}`);
+  }
+
+  clearProactiveRisk(botOpts.assistantId, targetId);
+  console.log(`[DingTalk] Proactive send OK → ${isGroup ? "group" : "user"} ${targetId}`);
+}
+
 /**
- * Proactively send a markdown message to one or more DingTalk users.
- * Requires the bot to be connected (to obtain appKey/appSecret) OR
- * pass credentials directly.
+ * Proactively send a text/markdown message to DingTalk.
+ *
+ * Target resolution priority:
+ *  1. opts.targets — explicit list (staffId, conversationId, or user:/group: prefix)
+ *  2. ownerStaffIds — configured on the bot
+ *
+ * Targets flagged as "high risk" (past permission failures) are skipped to avoid
+ * log spam, similar to soimy's proactive-risk-registry behaviour.
  */
 export async function sendProactiveDingtalkMessage(
   assistantId: string,
@@ -451,51 +612,221 @@ export async function sendProactiveDingtalkMessage(
   }
 
   const botOpts = conn.getOptions();
-  const robotCode = botOpts.robotCode ?? botOpts.appKey;
-  const staffIds = opts?.staffIds?.length
-    ? opts.staffIds
+  const rawTargets: string[] = opts?.targets?.length
+    ? opts.targets
     : (botOpts.ownerStaffIds ?? []);
 
-  if (staffIds.length === 0) {
-    return { ok: false, error: "未配置接收者 staffId（ownerStaffIds），无法主动推送" };
+  if (rawTargets.length === 0) {
+    return { ok: false, error: "未指定接收者，也未配置 ownerStaffIds" };
   }
 
-  try {
-    const token = await getAccessToken(botOpts.appKey, botOpts.appSecret);
-    const resp = await fetch(`${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-acs-dingtalk-access-token": token,
-      },
-      body: JSON.stringify({
-        robotCode,
-        userIds: staffIds,
-        msgKey: "sampleMarkdown",
-        msgParam: JSON.stringify({
-          title: opts?.title ?? botOpts.assistantName,
-          text,
-        }),
-      }),
-    });
+  const titleFallback = opts?.title ?? botOpts.assistantName;
+  const title = isMarkdownText(text)
+    ? text.split("\n")[0].replace(/^[#*\s>-]+/, "").slice(0, 20) || titleFallback
+    : titleFallback;
 
-    if (!resp.ok) {
-      const errText = await resp.text();
-      console.error(`[DingTalk] Proactive send failed: HTTP ${resp.status} ${errText}`);
-      return { ok: false, error: `发送失败 HTTP ${resp.status}: ${errText.slice(0, 200)}` };
+  const errors: string[] = [];
+  for (const target of rawTargets) {
+    const { targetId: rawId } = stripTargetPrefix(target);
+    const resolvedId = resolveOriginalPeerId(rawId);
+    const risk = getProactiveRisk(assistantId, resolvedId);
+    if (risk?.level === "high") {
+      console.warn(`[DingTalk] Skipping high-risk target ${resolvedId}: ${risk.reason}`);
+      errors.push(`${resolvedId}: skipped (high-risk: ${risk.reason})`);
+      continue;
     }
 
-    console.log(`[DingTalk] Proactive message sent to ${staffIds.join(",")}`);
-    return { ok: true };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: msg };
+    try {
+      await sendProactiveToTarget(botOpts, target, text, title);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[DingTalk] Proactive send failed for ${target}: ${msg}`);
+      errors.push(`${target}: ${msg}`);
+    }
   }
+
+  if (errors.length === rawTargets.length) {
+    return { ok: false, error: errors.join("; ") };
+  }
+  return { ok: true };
 }
 
 /**
- * Send a proactive message to the owner of EVERY connected bot.
- * Useful for broadcast notifications (e.g. "screenshot analysis done").
+ * Upload a local file to DingTalk's media server and then send it proactively.
+ * Supports image / voice / video / file (doc, pdf, etc.).
+ *
+ * Uses the old V1 upload API (oapi.dingtalk.com/media/upload) which returns a
+ * media_id that can then be embedded in a proactive message.
+ */
+export async function sendProactiveMediaDingtalk(
+  assistantId: string,
+  filePath: string,
+  opts?: SendProactiveMediaOptions,
+): Promise<{ ok: boolean; error?: string }> {
+  const conn = pool.get(assistantId);
+  if (!conn) {
+    return { ok: false, error: `钉钉 Bot (${assistantId}) 未连接` };
+  }
+
+  const botOpts = conn.getOptions();
+  const rawTargets: string[] = opts?.targets?.length
+    ? opts.targets
+    : (botOpts.ownerStaffIds ?? []);
+
+  if (rawTargets.length === 0) {
+    return { ok: false, error: "未指定接收者，也未配置 ownerStaffIds" };
+  }
+
+  // Detect media type from extension if not specified
+  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+  const detectedType: "image" | "voice" | "video" | "file" =
+    opts?.mediaType ??
+    (["jpg", "jpeg", "png", "gif", "bmp"].includes(ext)
+      ? "image"
+      : ["mp3", "amr", "wav"].includes(ext)
+      ? "voice"
+      : ["mp4", "avi", "mov"].includes(ext)
+      ? "video"
+      : "file");
+
+  const SIZE_LIMITS: Record<string, number> = {
+    image: 20 * 1024 * 1024,
+    voice: 2 * 1024 * 1024,
+    video: 20 * 1024 * 1024,
+    file: 20 * 1024 * 1024,
+  };
+
+  // Check file size before uploading
+  const fs = await import("fs");
+  const path = await import("path");
+
+  let fileSize: number;
+  try {
+    const stat = await fs.promises.stat(filePath);
+    fileSize = stat.size;
+  } catch {
+    return { ok: false, error: `文件不存在或无权访问: ${filePath}` };
+  }
+
+  if (fileSize > SIZE_LIMITS[detectedType]) {
+    return {
+      ok: false,
+      error: `文件过大: ${(fileSize / 1024 / 1024).toFixed(1)}MB 超过 ${detectedType} 限制`,
+    };
+  }
+
+  // Upload to DingTalk media server
+  let mediaId: string;
+  try {
+    const token = await getAccessToken(botOpts.appKey, botOpts.appSecret);
+    const fileName = path.basename(filePath);
+    const fileBuffer = await fs.promises.readFile(filePath);
+
+    // Build multipart form data manually (no FormData class needed)
+    const boundary = `----DingTalkUpload${Date.now()}`;
+    const CRLF = "\r\n";
+    const pre =
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="media"; filename="${fileName}"${CRLF}` +
+      `Content-Type: application/octet-stream${CRLF}${CRLF}`;
+    const post = `${CRLF}--${boundary}--${CRLF}`;
+    const body = Buffer.concat([
+      Buffer.from(pre),
+      fileBuffer,
+      Buffer.from(post),
+    ]);
+
+    const uploadUrl = `https://oapi.dingtalk.com/media/upload?access_token=${token}&type=${detectedType}`;
+    const uploadResp = await fetch(uploadUrl, {
+      method: "POST",
+      headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
+      body,
+    });
+
+    const uploadData = (await uploadResp.json()) as { errcode?: number; media_id?: string };
+    if (uploadData.errcode !== 0 || !uploadData.media_id) {
+      return { ok: false, error: `媒体上传失败: ${JSON.stringify(uploadData)}` };
+    }
+    mediaId = uploadData.media_id;
+    console.log(`[DingTalk] Media uploaded: ${mediaId} (${detectedType})`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `媒体上传异常: ${msg}` };
+  }
+
+  // Send to each target
+  const robotCode = botOpts.robotCode ?? botOpts.appKey;
+  const errors: string[] = [];
+
+  for (const target of rawTargets) {
+    const { targetId: rawId, isExplicitUser } = stripTargetPrefix(target);
+    const targetId = resolveOriginalPeerId(rawId);
+    const isGroup = !isExplicitUser && targetId.startsWith("cid");
+
+    const url = isGroup
+      ? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
+      : `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
+
+    let msgKey: string;
+    let msgParam: string;
+    if (detectedType === "image") {
+      msgKey = "sampleImageMsg";
+      msgParam = JSON.stringify({ photoURL: mediaId });
+    } else if (detectedType === "voice") {
+      msgKey = "sampleAudio";
+      msgParam = JSON.stringify({ mediaId, duration: "0" });
+    } else {
+      const fileName = filePath.split("/").pop() ?? "file";
+      const fileExt = ext || (detectedType === "video" ? "mp4" : "bin");
+      msgKey = "sampleFile";
+      msgParam = JSON.stringify({ mediaId, fileName, fileType: fileExt });
+    }
+
+    const payload: Record<string, unknown> = { robotCode, msgKey, msgParam };
+    if (isGroup) {
+      payload.openConversationId = targetId;
+    } else {
+      payload.userIds = [targetId];
+    }
+
+    try {
+      const token = await getAccessToken(botOpts.appKey, botOpts.appSecret);
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-acs-dingtalk-access-token": token,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!resp.ok) {
+        const errText = await resp.text();
+        let errData: unknown;
+        try { errData = JSON.parse(errText); } catch { errData = null; }
+        const errCode = extractErrorCode(errData);
+        if (isProactivePermissionError(errCode)) {
+          recordProactiveRisk(botOpts.assistantId, targetId, errCode ?? "permission-error");
+        }
+        throw new Error(`HTTP ${resp.status} code=${errCode ?? "?"}: ${errText.slice(0, 200)}`);
+      }
+      clearProactiveRisk(botOpts.assistantId, targetId);
+      console.log(`[DingTalk] Proactive media sent → ${isGroup ? "group" : "user"} ${targetId}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`${target}: ${msg}`);
+    }
+  }
+
+  if (errors.length === rawTargets.length) {
+    return { ok: false, error: errors.join("; ") };
+  }
+  return { ok: true };
+}
+
+/**
+ * Broadcast a message to the owner of every connected bot.
+ * Useful for app-level notifications (e.g. task completed).
  */
 export async function broadcastDingtalkMessage(
   text: string,
@@ -791,6 +1122,12 @@ class DingtalkConnection {
     } catch {
       return;
     }
+
+    // ── Register peer IDs for proactive reply (soimy pattern) ─────────────────
+    // Preserve original case-sensitive conversationId & senderId for later use.
+    if (msg.conversationId) registerPeerId(msg.conversationId);
+    const senderId = msg.senderStaffId ?? msg.senderId;
+    if (senderId) registerPeerId(senderId);
 
     // ── Deduplication ──────────────────────────────────────────────────────────
     const dedupKey = msg.msgId

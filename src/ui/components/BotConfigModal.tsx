@@ -651,8 +651,8 @@ export function BotConfigModal({
                                   value={form.dingtalk.allowFrom} onChange={(e) => updateDingtalk({ allowFrom: e.target.value })} />
                               </FormField>
                             )}
-                            <FormField label="我的 StaffId（主动推送）" hint="填入你的钉钉 staffId，机器人才能主动发消息给你（逗号分隔支持多人）">
-                              <input className={INPUT_CLASS} placeholder="staff_xxxxx"
+                            <FormField label="我的 StaffId（主动推送）" hint="填入你的钉钉 staffId，机器人才能主动发消息给你。也支持群 conversationId（cid...）或 user:/group: 前缀。逗号分隔多人。">
+                              <input className={INPUT_CLASS} placeholder="staff_xxxxx 或 cidXXX"
                                 value={form.dingtalk.ownerStaffIds} onChange={(e) => updateDingtalk({ ownerStaffIds: e.target.value })} />
                             </FormField>
                             <FormField label="最大重连次数" hint="（默认 10）">

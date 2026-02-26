@@ -285,8 +285,16 @@ type StartDingtalkBotInput = {
 type SendProactiveDingtalkInput = {
     assistantId: string;
     text: string;
-    staffIds?: string[];
+    /** Target IDs: staffId, conversationId (cid...), or "user:<id>" / "group:<id>" prefix */
+    targets?: string[];
     title?: string;
+};
+
+type SendProactiveMediaDingtalkInput = {
+    assistantId: string;
+    filePath: string;
+    targets?: string[];
+    mediaType?: "image" | "voice" | "video" | "file";
 };
 
 type SendProactiveDingtalkResult = {
@@ -334,6 +342,7 @@ type EventPayloadMapping = {
     "stop-dingtalk-bot": void;
     "get-dingtalk-bot-status": DingtalkBotStatusResult;
     "send-proactive-dingtalk": SendProactiveDingtalkResult;
+    "send-proactive-dingtalk-media": SendProactiveDingtalkResult;
     "is-sidecar-running": boolean;
     // OpenAI Codex OAuth
     "openai-login": OpenAILoginResult;
@@ -395,6 +404,7 @@ interface Window {
         getDingtalkBotStatus: (assistantId: string) => Promise<DingtalkBotStatusResult>;
         onDingtalkBotStatus: (cb: (assistantId: string, status: DingtalkBotStatus, detail?: string) => void) => UnsubscribeFunction;
         sendProactiveDingtalk: (input: SendProactiveDingtalkInput) => Promise<SendProactiveDingtalkResult>;
+        sendProactiveMediaDingtalk: (input: SendProactiveMediaDingtalkInput) => Promise<SendProactiveDingtalkResult>;
         // OpenAI Codex OAuth
         openaiLogin: () => Promise<OpenAILoginResult>;
         openaiLogout: () => Promise<{ success: boolean }>;

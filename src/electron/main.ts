@@ -17,6 +17,7 @@ import {
   onDingtalkBotStatusChange,
   setSessionStore,
   sendProactiveDingtalkMessage,
+  sendProactiveMediaDingtalk,
   type DingtalkBotOptions,
 } from "./libs/dingtalk-bot.js";
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
@@ -275,10 +276,17 @@ app.on("ready", async () => {
         return { status: getDingtalkBotStatus(assistantId) as DingtalkBotStatus };
     });
 
-    ipcMainHandle("send-proactive-dingtalk", async (_: any, input: { assistantId: string; text: string; staffIds?: string[]; title?: string }) => {
+    ipcMainHandle("send-proactive-dingtalk", async (_: any, input: { assistantId: string; text: string; targets?: string[]; title?: string }) => {
         return await sendProactiveDingtalkMessage(input.assistantId, input.text, {
-            staffIds: input.staffIds,
+            targets: input.targets,
             title: input.title,
+        });
+    });
+
+    ipcMainHandle("send-proactive-dingtalk-media", async (_: any, input: { assistantId: string; filePath: string; targets?: string[]; mediaType?: "image" | "voice" | "video" | "file" }) => {
+        return await sendProactiveMediaDingtalk(input.assistantId, input.filePath, {
+            targets: input.targets,
+            mediaType: input.mediaType,
         });
     });
 
