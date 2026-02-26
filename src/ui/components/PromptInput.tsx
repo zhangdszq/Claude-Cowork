@@ -411,9 +411,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
     return (session?.messages?.length ?? 0) > 0;
   });
   const provider = useAppStore((state) => state.provider);
-  const codexModelStore = useAppStore((state) => state.codexModel);
-  const modelDisplayName = provider === "codex" ? "Codex" : "Claude";
-  void codexModelStore;
+  void provider;
 
   // Skills state
   const [skills, setSkills] = useState<SkillInfo[]>([]);

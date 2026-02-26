@@ -2,12 +2,10 @@ import { memo, useEffect, useRef, useState } from "react";
 import type {
   SDKAssistantMessage,
   SDKMessage,
-  SDKResultMessage,
   SDKUserMessage
 } from "@anthropic-ai/claude-agent-sdk";
-import type { StreamMessage, SkillLoadedMessage } from "../types";
+import type { StreamMessage } from "../types";
 import MDContent from "../render/markdown";
-import { SkillLoadedCard } from "./SkillLoadedCard";
 
 type MessageContent = SDKAssistantMessage["message"]["content"][number];
 type ToolResultContent = SDKUserMessage["message"]["content"][number];
@@ -58,47 +56,6 @@ const StatusDot = ({ variant = "accent", isActive = false, isVisible = true }: {
   );
 };
 
-const SessionResult = ({ message }: { message: SDKResultMessage }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const formatMinutes = (ms: number | undefined) => typeof ms !== "number" ? "-" : `${(ms / 60000).toFixed(2)} min`;
-  const formatUsd = (usd: number | undefined) => typeof usd !== "number" ? "-" : usd.toFixed(2);
-  const formatMillions = (tokens: number | undefined) => typeof tokens !== "number" ? "-" : `${(tokens / 1_000_000).toFixed(4)} M`;
-
-  return (
-    <div className="flex flex-col mt-4 rounded-xl border border-ink-900/10 bg-surface-secondary overflow-hidden">
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="flex items-center justify-between px-4 py-2.5 text-left cursor-pointer hover:bg-surface-tertiary transition-colors"
-      >
-        <span className="header text-accent">Session Result</span>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-accent font-medium">${formatUsd(message.total_cost_usd)}</span>
-          <svg viewBox="0 0 24 24" className={`h-4 w-4 text-muted transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`} fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M6 9l6 6 6-6" />
-          </svg>
-        </div>
-      </button>
-      <div className={`grid transition-all duration-200 ease-in-out ${isExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
-        <div className="overflow-hidden">
-          <div className="px-4 py-3 border-t border-ink-900/5 space-y-2">
-            <div className="flex flex-wrap items-center gap-2 text-[14px]">
-              <span className="font-normal">Duration</span>
-              <span className="inline-flex items-center rounded-full bg-surface-tertiary px-2.5 py-0.5 text-ink-700 text-[13px]">{formatMinutes(message.duration_ms)}</span>
-              <span className="font-normal">API</span>
-              <span className="inline-flex items-center rounded-full bg-surface-tertiary px-2.5 py-0.5 text-ink-700 text-[13px]">{formatMinutes(message.duration_api_ms)}</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 text-[14px]">
-              <span className="font-normal">Usage</span>
-              <span className="inline-flex items-center rounded-full bg-accent/10 px-2.5 py-0.5 text-accent text-[13px]">Cost ${formatUsd(message.total_cost_usd)}</span>
-              <span className="inline-flex items-center rounded-full bg-surface-tertiary px-2.5 py-0.5 text-ink-700 text-[13px]">Input {formatMillions(message.usage?.input_tokens)}</span>
-              <span className="inline-flex items-center rounded-full bg-surface-tertiary px-2.5 py-0.5 text-ink-700 text-[13px]">Output {formatMillions(message.usage?.output_tokens)}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 export function isMarkdown(text: string): boolean {
   if (!text || typeof text !== "string") return false;
@@ -525,50 +482,6 @@ const AskUserQuestionCard = ({
   );
 };
 
-const SystemInfoCard = ({ message, showIndicator = false }: { message: SDKMessage; showIndicator?: boolean }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-  
-  if (message.type !== "system" || !("subtype" in message) || message.subtype !== "init") return null;
-  
-  const systemMsg = message as any;
-  
-  const InfoItem = ({ name, value }: { name: string; value: string }) => (
-    <div className="text-[14px]">
-      <span className="mr-4 font-normal">{name}</span>
-      <span className="font-light">{value}</span>
-    </div>
-  );
-  
-  return (
-    <div className="flex flex-col rounded-xl border border-ink-900/10 bg-surface-secondary overflow-hidden">
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="flex items-center justify-between px-4 py-2.5 text-left cursor-pointer hover:bg-surface-tertiary transition-colors"
-      >
-        <div className="header text-accent flex items-center gap-2">
-          <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
-          System Init
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-muted truncate max-w-[200px]">{systemMsg.model || "-"}</span>
-          <svg viewBox="0 0 24 24" className={`h-4 w-4 text-muted transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`} fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M6 9l6 6 6-6" />
-          </svg>
-        </div>
-      </button>
-      <div className={`grid transition-all duration-200 ease-in-out ${isExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
-        <div className="overflow-hidden">
-          <div className="px-4 py-2 border-t border-ink-900/5 space-y-1">
-            <InfoItem name="Session ID" value={systemMsg.session_id || "-"} />
-            <InfoItem name="Model Name" value={systemMsg.model || "-"} />
-            <InfoItem name="Permission Mode" value={systemMsg.permissionMode || "-"} />
-            <InfoItem name="Working Directory" value={systemMsg.cwd || "-"} />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 const UserMessageCard = ({ message, showIndicator = false }: { message: { type: "user_prompt"; prompt: string }; showIndicator?: boolean }) => (
   <div className="flex flex-col mt-4">
@@ -584,7 +497,6 @@ export const MessageCard = memo(function MessageCard({
   message,
   isLast = false,
   isRunning = false,
-  showSystemInfo = false,
   onAskUserQuestionAnswer,
   assistantName,
 }: {

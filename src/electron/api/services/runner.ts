@@ -8,7 +8,7 @@ import {
 } from '@openai/codex-sdk';
 import type { Session } from '../types.js';
 import { recordMessage, updateSession, addPendingPermission } from './session.js';
-import { buildMemoryContext } from '../../libs/memory-store.js';
+import { buildSmartMemoryContext } from '../../libs/memory-store.js';
 import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync } from 'fs';
@@ -178,11 +178,11 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
   const claudeCodePath = getClaudeCodePath();
   const enhancedEnv = getEnhancedEnv();
 
-  // Inject memory context into prompt (only for new sessions, not resume)
+  // Inject smart memory context into prompt (only for new sessions, not resume)
   let effectivePrompt = prompt;
   if (!resumeSessionId) {
     try {
-      const memoryCtx = buildMemoryContext();
+      const memoryCtx = buildSmartMemoryContext(prompt);
       if (memoryCtx) {
         effectivePrompt = memoryCtx + '\n\n' + prompt;
         console.log('[Runner] Memory context injected, length:', memoryCtx.length);
@@ -488,11 +488,11 @@ export async function* runCodex(options: RunnerOptions): AsyncGenerator<ServerEv
 
   const DEFAULT_CWD = process.cwd();
 
-  // Inject memory context into prompt (only for new sessions, not resume)
+  // Inject smart memory context into prompt (only for new sessions, not resume)
   let effectivePrompt = prompt;
   if (!session.claudeSessionId) {
     try {
-      const memoryCtx = buildMemoryContext();
+      const memoryCtx = buildSmartMemoryContext(prompt);
       if (memoryCtx) {
         effectivePrompt = memoryCtx + '\n\n' + prompt;
         console.log('[CodexRunner] Memory context injected, length:', memoryCtx.length);

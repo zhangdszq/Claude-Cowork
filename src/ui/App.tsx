@@ -248,7 +248,6 @@ function App() {
   const setCwd = useAppStore((s) => s.setCwd);
   const pendingStart = useAppStore((s) => s.pendingStart);
   const showSystemInfo = useAppStore((s) => s.showSystemInfo);
-  const setShowSystemInfo = useAppStore((s) => s.setShowSystemInfo);
 
   // Assistants list for resolving assistant names
   const [assistantsList, setAssistantsList] = useState<AssistantConfig[]>([]);

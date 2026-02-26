@@ -15,6 +15,9 @@ import {
   readLongTermMemory, readDailyMemory, buildMemoryContext,
   writeLongTermMemory, appendDailyMemory, writeDailyMemory,
   listDailyMemories, getMemoryDir, getMemorySummary,
+  runMemoryJanitor, refreshRootAbstract,
+  readSessionState, writeSessionState, clearSessionState,
+  readAbstract,
 } from "./libs/memory-store.js";
 import { 
   loadScheduledTasks, 
@@ -30,7 +33,26 @@ import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSy
 import { join } from "path";
 import { homedir } from "os";
 
+// ─── Memory janitor: run on startup + every 24 h ─────────────
+function startMemoryJanitor(): void {
+    try {
+        const result = runMemoryJanitor();
+        if (result.archived > 0) {
+            console.log(`[MemoryJanitor] Archived ${result.archived} expired item(s).`);
+        }
+        refreshRootAbstract();
+    } catch (e) {
+        console.warn("[MemoryJanitor] Failed:", e);
+    }
+}
+
+const JANITOR_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 h
+
 app.on("ready", async () => {
+    // Run memory janitor once on startup, then every 24 h
+    startMemoryJanitor();
+    setInterval(startMemoryJanitor, JANITOR_INTERVAL_MS);
+
     // Ensure Codex auth.json is in sync with stored tokens
     ensureCodexAuthSync();
 
@@ -67,6 +89,29 @@ app.on("ready", async () => {
     // Initialize scheduler
     setSchedulerWindow(mainWindow);
     startScheduler();
+
+    // Register weekly L2→L1 memory compaction task (once, idempotent)
+    try {
+        const existing = loadScheduledTasks();
+        const hasCompact = existing.some(t => t.id?.startsWith("memory-compact-"));
+        if (!hasCompact) {
+            addScheduledTask({
+                name: "记忆压缩 L2→L1",
+                enabled: true,
+                prompt: `请执行每周记忆压缩任务：
+1. 读取 ~/.vk-cowork/memory/daily/ 目录下最近 7 天的日志文件（L2）
+2. 将本周的关键事件、决策、和洞察提炼，追加到 ~/.vk-cowork/memory/insights/${new Date().toISOString().slice(0, 7)}.md（L1）
+3. 更新 ~/.vk-cowork/memory/insights/.abstract 索引
+完成后汇报压缩了哪些内容。`,
+                scheduleType: "daily",
+                dailyTime: "03:00",
+                dailyDays: [1], // 每周一凌晨 3 点
+            });
+            console.log("[Memory] Weekly L2→L1 compaction task registered.");
+        }
+    } catch (e) {
+        console.warn("[Memory] Failed to register compaction task:", e);
+    }
 
     ipcMainHandle("getStaticData", () => {
         return getStaticData();
@@ -172,6 +217,8 @@ app.on("ready", async () => {
         if (target === "long-term") return { content: readLongTermMemory() };
         if (target === "daily") return { content: readDailyMemory(date ?? new Date().toISOString().slice(0, 10)) };
         if (target === "context") return { content: buildMemoryContext() };
+        if (target === "session-state") return { content: readSessionState() };
+        if (target === "abstract") return { content: readAbstract() };
         return { content: "", memoryDir: getMemoryDir() };
     });
 
@@ -179,6 +226,8 @@ app.on("ready", async () => {
         if (target === "long-term") { writeLongTermMemory(content); return { success: true }; }
         if (target === "daily-append") { appendDailyMemory(content, date); return { success: true }; }
         if (target === "daily") { writeDailyMemory(content, date ?? new Date().toISOString().slice(0, 10)); return { success: true }; }
+        if (target === "session-state") { writeSessionState(content); return { success: true }; }
+        if (target === "session-state-clear") { clearSessionState(); return { success: true }; }
         return { success: false, error: "Unknown target" };
     });
 

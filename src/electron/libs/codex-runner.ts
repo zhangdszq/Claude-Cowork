@@ -11,7 +11,7 @@ import {
 } from "@openai/codex-sdk";
 import type { ServerEvent } from "../types.js";
 import type { Session } from "./session-store.js";
-import { buildMemoryContext } from "./memory-store.js";
+import { buildSmartMemoryContext } from "./memory-store.js";
 import { app } from "electron";
 import { join } from "path";
 import { existsSync } from "fs";
@@ -274,11 +274,11 @@ export async function runCodex(
   const { prompt, session, model, onEvent, onSessionUpdate } = options;
   const abortController = new AbortController();
 
-  // Inject memory context for new sessions
+  // Inject smart memory context for new sessions
   let effectivePrompt = prompt;
   if (!session.claudeSessionId) {
     try {
-      const memoryCtx = buildMemoryContext();
+      const memoryCtx = buildSmartMemoryContext(prompt);
       if (memoryCtx) {
         effectivePrompt = memoryCtx + "\n\n" + prompt;
         console.log("[CodexRunner/fallback] Memory context injected, length:", memoryCtx.length);
