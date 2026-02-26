@@ -86,7 +86,18 @@ type FormState = {
   feishu: { appId: string; appSecret: string; domain: "feishu" | "lark" };
   wecom: { corpId: string; agentId: string; secret: string };
   discord: { token: string };
-  dingtalk: { appKey: string; appSecret: string };
+  dingtalk: {
+    appKey: string;
+    appSecret: string;
+    robotCode: string;
+    messageType: "markdown" | "card";
+    cardTemplateId: string;
+    cardTemplateKey: string;
+    dmPolicy: "open" | "allowlist";
+    groupPolicy: "open" | "allowlist";
+    allowFrom: string;
+    maxConnectionAttempts: string;
+  };
 };
 
 function buildDefaultForm(): FormState {
@@ -95,7 +106,18 @@ function buildDefaultForm(): FormState {
     feishu: { appId: "", appSecret: "", domain: "feishu" },
     wecom: { corpId: "", agentId: "", secret: "" },
     discord: { token: "" },
-    dingtalk: { appKey: "", appSecret: "" },
+    dingtalk: {
+      appKey: "",
+      appSecret: "",
+      robotCode: "",
+      messageType: "markdown",
+      cardTemplateId: "",
+      cardTemplateKey: "msgContent",
+      dmPolicy: "open",
+      groupPolicy: "open",
+      allowFrom: "",
+      maxConnectionAttempts: "10",
+    },
   };
 }
 
@@ -119,7 +141,18 @@ function botsToForm(bots: Partial<Record<BotPlatformType, BotPlatformConfig>>): 
   }
   const dt = bots.dingtalk;
   if (dt?.platform === "dingtalk") {
-    form.dingtalk = { appKey: dt.appKey ?? "", appSecret: dt.appSecret ?? "" };
+    form.dingtalk = {
+      appKey: dt.appKey ?? "",
+      appSecret: dt.appSecret ?? "",
+      robotCode: dt.robotCode ?? "",
+      messageType: dt.messageType ?? "markdown",
+      cardTemplateId: dt.cardTemplateId ?? "",
+      cardTemplateKey: dt.cardTemplateKey ?? "msgContent",
+      dmPolicy: dt.dmPolicy ?? "open",
+      groupPolicy: dt.groupPolicy ?? "open",
+      allowFrom: (dt.allowFrom ?? []).join(","),
+      maxConnectionAttempts: String(dt.maxConnectionAttempts ?? 10),
+    };
   }
   return form;
 }
@@ -141,7 +174,22 @@ function formToPlatformConfig(
   if (platform === "discord") {
     return { platform: "discord", token: form.discord.token, connected };
   }
-  return { platform: "dingtalk", appKey: form.dingtalk.appKey, appSecret: form.dingtalk.appSecret, connected };
+  return {
+    platform: "dingtalk",
+    appKey: form.dingtalk.appKey,
+    appSecret: form.dingtalk.appSecret,
+    robotCode: form.dingtalk.robotCode || undefined,
+    messageType: form.dingtalk.messageType,
+    cardTemplateId: form.dingtalk.cardTemplateId || undefined,
+    cardTemplateKey: form.dingtalk.cardTemplateKey || undefined,
+    dmPolicy: form.dingtalk.dmPolicy,
+    groupPolicy: form.dingtalk.groupPolicy,
+    allowFrom: form.dingtalk.allowFrom
+      ? form.dingtalk.allowFrom.split(",").map((s) => s.trim()).filter(Boolean)
+      : undefined,
+    maxConnectionAttempts: parseInt(form.dingtalk.maxConnectionAttempts, 10) || undefined,
+    connected,
+  };
 }
 
 const INPUT_CLASS =
@@ -273,8 +321,8 @@ export function BotConfigModal({
         onSave(nextBots);
       } else {
         // Connect
-        const { appKey, appSecret } = form.dingtalk;
-        if (!appKey || !appSecret) {
+        const dt = form.dingtalk;
+        if (!dt.appKey || !dt.appSecret) {
           setTestResult({ success: false, message: "请先填写 AppKey 和 AppSecret" });
           return;
         }
@@ -282,13 +330,23 @@ export function BotConfigModal({
         setTestResult(null);
         try {
           const result = await window.electron.startDingtalkBot({
-            appKey,
-            appSecret,
+            appKey: dt.appKey,
+            appSecret: dt.appSecret,
+            robotCode: dt.robotCode || undefined,
             assistantId,
             assistantName,
             provider,
             model,
             defaultCwd,
+            messageType: dt.messageType,
+            cardTemplateId: dt.cardTemplateId || undefined,
+            cardTemplateKey: dt.cardTemplateKey || undefined,
+            dmPolicy: dt.dmPolicy,
+            groupPolicy: dt.groupPolicy,
+            allowFrom: dt.allowFrom
+              ? dt.allowFrom.split(",").map((s) => s.trim()).filter(Boolean)
+              : undefined,
+            maxConnectionAttempts: parseInt(dt.maxConnectionAttempts, 10) || undefined,
           });
           if (result.status === "error") {
             setTestResult({ success: false, message: result.detail ?? "连接失败" });
@@ -321,6 +379,8 @@ export function BotConfigModal({
     setForm((f) => ({ ...f, discord: { ...f.discord, ...u } }));
   const updateDingtalk = (u: Partial<FormState["dingtalk"]>) =>
     setForm((f) => ({ ...f, dingtalk: { ...f.dingtalk, ...u } }));
+
+  const [dingtalkAdvanced, setDingtalkAdvanced] = useState(false);
 
   const connectedCount = Object.values(bots).filter((b) => b?.connected).length;
 
@@ -521,6 +581,73 @@ export function BotConfigModal({
                           <input type="password" className={INPUT_CLASS} placeholder="xxxx"
                             value={form.dingtalk.appSecret} onChange={(e) => updateDingtalk({ appSecret: e.target.value })} />
                         </FormField>
+
+                        {/* Reply mode */}
+                        <FormField label="回复模式">
+                          <select className={INPUT_CLASS} value={form.dingtalk.messageType}
+                            onChange={(e) => updateDingtalk({ messageType: e.target.value as "markdown" | "card" })}>
+                            <option value="markdown">Markdown（普通格式）</option>
+                            <option value="card">AI 互动卡片（流式输出）</option>
+                          </select>
+                        </FormField>
+
+                        {form.dingtalk.messageType === "card" && (
+                          <>
+                            <FormField label="Robot Code" hint="（通常与 AppKey 相同）">
+                              <input className={INPUT_CLASS} placeholder="dingxxxxxxxx（留空则用 AppKey）"
+                                value={form.dingtalk.robotCode} onChange={(e) => updateDingtalk({ robotCode: e.target.value })} />
+                            </FormField>
+                            <FormField label="Card Template ID">
+                              <input className={INPUT_CLASS} placeholder="xxxxx-xxxxx-xxxxx.schema"
+                                value={form.dingtalk.cardTemplateId} onChange={(e) => updateDingtalk({ cardTemplateId: e.target.value })} />
+                            </FormField>
+                            <FormField label="Card Template Key" hint="（默认 msgContent）">
+                              <input className={INPUT_CLASS} placeholder="msgContent"
+                                value={form.dingtalk.cardTemplateKey} onChange={(e) => updateDingtalk({ cardTemplateKey: e.target.value })} />
+                            </FormField>
+                          </>
+                        )}
+
+                        {/* Advanced settings toggle */}
+                        <button
+                          type="button"
+                          onClick={() => setDingtalkAdvanced((v) => !v)}
+                          className="flex items-center gap-1.5 text-xs text-muted hover:text-ink-700 transition-colors mt-1"
+                        >
+                          <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 transition-transform ${dingtalkAdvanced ? "rotate-90" : ""}`} fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M9 18l6-6-6-6" />
+                          </svg>
+                          高级设置（访问控制 / 重连策略）
+                        </button>
+
+                        {dingtalkAdvanced && (
+                          <div className="flex flex-col gap-3 pl-3 border-l-2 border-ink-900/8">
+                            <FormField label="私聊策略 (dmPolicy)">
+                              <select className={INPUT_CLASS} value={form.dingtalk.dmPolicy}
+                                onChange={(e) => updateDingtalk({ dmPolicy: e.target.value as "open" | "allowlist" })}>
+                                <option value="open">open — 任何人可私聊</option>
+                                <option value="allowlist">allowlist — 仅白名单用户</option>
+                              </select>
+                            </FormField>
+                            <FormField label="群聊策略 (groupPolicy)">
+                              <select className={INPUT_CLASS} value={form.dingtalk.groupPolicy}
+                                onChange={(e) => updateDingtalk({ groupPolicy: e.target.value as "open" | "allowlist" })}>
+                                <option value="open">open — 任何群可使用</option>
+                                <option value="allowlist">allowlist — 仅白名单群</option>
+                              </select>
+                            </FormField>
+                            {(form.dingtalk.dmPolicy === "allowlist" || form.dingtalk.groupPolicy === "allowlist") && (
+                              <FormField label="白名单 ID" hint="（逗号分隔，Staff ID 或 ConversationId）">
+                                <input className={INPUT_CLASS} placeholder="userId1,userId2,..."
+                                  value={form.dingtalk.allowFrom} onChange={(e) => updateDingtalk({ allowFrom: e.target.value })} />
+                              </FormField>
+                            )}
+                            <FormField label="最大重连次数" hint="（默认 10）">
+                              <input type="number" min="1" max="100" className={INPUT_CLASS} placeholder="10"
+                                value={form.dingtalk.maxConnectionAttempts} onChange={(e) => updateDingtalk({ maxConnectionAttempts: e.target.value })} />
+                            </FormField>
+                          </div>
+                        )}
                       </>
                     )}
 

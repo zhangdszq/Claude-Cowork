@@ -37,6 +37,30 @@ export type DingtalkBotConfig = {
   platform: "dingtalk";
   appKey: string;
   appSecret: string;
+  /** For Card API and media download — defaults to appKey */
+  robotCode?: string;
+  corpId?: string;
+  agentId?: string;
+  /** Reply mode: "markdown" (default) or "card" (AI streaming card) */
+  messageType?: "markdown" | "card";
+  /** Required when messageType="card" */
+  cardTemplateId?: string;
+  /** Card template content field key — defaults to "msgContent" */
+  cardTemplateKey?: string;
+  /** Private chat policy */
+  dmPolicy?: "open" | "allowlist";
+  /** Group chat policy */
+  groupPolicy?: "open" | "allowlist";
+  /** Allowlisted staff IDs or conversation IDs */
+  allowFrom?: string[];
+  /** Max reconnect attempts (default: 10) */
+  maxConnectionAttempts?: number;
+  /** Initial reconnect delay ms (default: 1000) */
+  initialReconnectDelay?: number;
+  /** Max reconnect delay ms (default: 60000) */
+  maxReconnectDelay?: number;
+  /** Jitter factor 0–1 (default: 0.3) */
+  reconnectJitter?: number;
   connected: boolean;
 };
 

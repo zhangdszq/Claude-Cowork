@@ -9,7 +9,7 @@ import type { ClientEvent } from "./types.js";
 import "./libs/claude-settings.js";
 import { loadUserSettings, saveUserSettings, type UserSettings } from "./libs/user-settings.js";
 import { loadAssistantsConfig, saveAssistantsConfig, type AssistantsConfig } from "./libs/assistants-config.js";
-import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig } from "./libs/bot-config.js";
+import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig, type DingtalkBotConfig } from "./libs/bot-config.js";
 import {
   startDingtalkBot,
   stopDingtalkBot,
@@ -70,12 +70,25 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
                 await startDingtalkBot({
                     appKey: dingtalk.appKey,
                     appSecret: dingtalk.appSecret,
+                    robotCode: dingtalk.robotCode,
+                    corpId: dingtalk.corpId,
+                    agentId: dingtalk.agentId,
                     assistantId: assistant.id,
                     assistantName: assistant.name,
                     persona: assistant.persona,
                     provider: assistant.provider,
                     model: assistant.model,
                     defaultCwd: assistant.defaultCwd,
+                    messageType: dingtalk.messageType,
+                    cardTemplateId: dingtalk.cardTemplateId,
+                    cardTemplateKey: dingtalk.cardTemplateKey,
+                    dmPolicy: dingtalk.dmPolicy,
+                    groupPolicy: dingtalk.groupPolicy,
+                    allowFrom: dingtalk.allowFrom,
+                    maxConnectionAttempts: dingtalk.maxConnectionAttempts,
+                    initialReconnectDelay: dingtalk.initialReconnectDelay,
+                    maxReconnectDelay: dingtalk.maxReconnectDelay,
+                    reconnectJitter: dingtalk.reconnectJitter,
                 });
                 console.log(`[AutoConnect] DingTalk bot connected for: ${assistant.name}`);
             } catch (err) {
