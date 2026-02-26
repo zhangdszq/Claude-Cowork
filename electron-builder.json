@@ -9,7 +9,8 @@
         "dist-electron/preload.cjs"
     ],
     "asarUnpack": [
-        "node_modules/@openai/codex-sdk/vendor/**/*"
+        "node_modules/@openai/codex-sdk/vendor/**/*",
+        "node_modules/@anthropic-ai/claude-agent-sdk/vendor/**/*"
     ],
     "icon": "./claude-color.png",
     "mac": {
@@ -19,6 +20,7 @@
         "hardenedRuntime": true,
         "gatekeeperAssess": false,
         "notarize": false,
+        "x64ArchFiles": "**/vendor/**",
         "extraResources": [
             {
                 "from": "src-api/dist/agent-api-aarch64-apple-darwin",
