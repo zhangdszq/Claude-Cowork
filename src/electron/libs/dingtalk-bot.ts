@@ -306,6 +306,36 @@ function resolveOriginalPeerId(id: string): string {
   return peerIdMap.get(id.toLowerCase()) ?? id;
 }
 
+// ─── Last-seen conversations ──────────────────────────────────────────────────
+// Tracks every conversation (private or group) that has interacted with each bot.
+// Used as automatic fallback targets for proactive sends (scenario 2).
+
+interface LastSeenEntry {
+  target: string;       // staffId (private) or conversationId (group)
+  isGroup: boolean;
+  lastSeenAt: number;
+}
+
+// key: assistantId → Map<target, entry>
+const lastSeenConversations = new Map<string, Map<string, LastSeenEntry>>();
+
+function recordLastSeen(assistantId: string, target: string, isGroup: boolean): void {
+  if (!assistantId || !target) return;
+  let byAssistant = lastSeenConversations.get(assistantId);
+  if (!byAssistant) {
+    byAssistant = new Map();
+    lastSeenConversations.set(assistantId, byAssistant);
+  }
+  byAssistant.set(target, { target, isGroup, lastSeenAt: Date.now() });
+}
+
+/** Return all targets that have ever chatted with this bot, newest first */
+export function getLastSeenTargets(assistantId: string): LastSeenEntry[] {
+  const byAssistant = lastSeenConversations.get(assistantId);
+  if (!byAssistant) return [];
+  return Array.from(byAssistant.values()).sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+}
+
 // ─── Proactive-risk registry ──────────────────────────────────────────────────
 // Tracks targets where proactive send failed with a permission error.
 // High-risk targets are skipped for 7 days to avoid repeated failure noise.
@@ -612,12 +642,27 @@ export async function sendProactiveDingtalkMessage(
   }
 
   const botOpts = conn.getOptions();
-  const rawTargets: string[] = opts?.targets?.length
-    ? opts.targets
-    : (botOpts.ownerStaffIds ?? []);
 
-  if (rawTargets.length === 0) {
-    return { ok: false, error: "未指定接收者，也未配置 ownerStaffIds" };
+  let rawTargets: string[];
+  if (opts?.targets?.length) {
+    rawTargets = opts.targets;
+  } else if (botOpts.ownerStaffIds?.length) {
+    rawTargets = botOpts.ownerStaffIds;
+  } else {
+    // Scenario 2: fall back to every conversation that has chatted with this bot
+    const lastSeen = getLastSeenTargets(assistantId);
+    if (lastSeen.length === 0) {
+      return {
+        ok: false,
+        error:
+          "未指定接收者，也未配置 ownerStaffIds，且该 Bot 尚未收到过任何消息。" +
+          "请先让对方发一条消息，或在配置中填写 ownerStaffIds。",
+      };
+    }
+    rawTargets = lastSeen.map((e) => e.target);
+    console.log(
+      `[DingTalk] Proactive: auto-targeting ${rawTargets.length} last-seen conversation(s): ${rawTargets.join(", ")}`,
+    );
   }
 
   const titleFallback = opts?.title ?? botOpts.assistantName;
@@ -669,12 +714,21 @@ export async function sendProactiveMediaDingtalk(
   }
 
   const botOpts = conn.getOptions();
-  const rawTargets: string[] = opts?.targets?.length
-    ? opts.targets
-    : (botOpts.ownerStaffIds ?? []);
 
-  if (rawTargets.length === 0) {
-    return { ok: false, error: "未指定接收者，也未配置 ownerStaffIds" };
+  let rawTargets: string[];
+  if (opts?.targets?.length) {
+    rawTargets = opts.targets;
+  } else if (botOpts.ownerStaffIds?.length) {
+    rawTargets = botOpts.ownerStaffIds;
+  } else {
+    const lastSeen = getLastSeenTargets(assistantId);
+    if (lastSeen.length === 0) {
+      return {
+        ok: false,
+        error: "未指定接收者，也未配置 ownerStaffIds，且该 Bot 尚未收到过任何消息。",
+      };
+    }
+    rawTargets = lastSeen.map((e) => e.target);
   }
 
   // Detect media type from extension if not specified
@@ -1128,6 +1182,15 @@ class DingtalkConnection {
     if (msg.conversationId) registerPeerId(msg.conversationId);
     const senderId = msg.senderStaffId ?? msg.senderId;
     if (senderId) registerPeerId(senderId);
+
+    // ── Record last-seen conversation for automatic proactive targeting ─────────
+    const isGroup = msg.conversationType === "2";
+    const proactiveTarget = isGroup
+      ? (msg.conversationId ?? null)
+      : (msg.senderStaffId ?? msg.senderId ?? null);
+    if (proactiveTarget) {
+      recordLastSeen(this.opts.assistantId, proactiveTarget, isGroup);
+    }
 
     // ── Deduplication ──────────────────────────────────────────────────────────
     const dedupKey = msg.msgId

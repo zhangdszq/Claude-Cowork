@@ -18,6 +18,7 @@ import {
   setSessionStore,
   sendProactiveDingtalkMessage,
   sendProactiveMediaDingtalk,
+  getLastSeenTargets,
   type DingtalkBotOptions,
 } from "./libs/dingtalk-bot.js";
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
@@ -288,6 +289,10 @@ app.on("ready", async () => {
             targets: input.targets,
             mediaType: input.mediaType,
         });
+    });
+
+    ipcMainHandle("get-dingtalk-last-seen", (_: any, assistantId: string) => {
+        return getLastSeenTargets(assistantId);
     });
 
     // Forward DingTalk bot status changes to renderer

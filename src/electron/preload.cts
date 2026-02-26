@@ -95,6 +95,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("send-proactive-dingtalk", input),
     sendProactiveMediaDingtalk: (input: SendProactiveMediaDingtalkInput) =>
         ipcInvoke("send-proactive-dingtalk-media", input),
+    getDingtalkLastSeen: (assistantId: string) =>
+        ipcInvoke("get-dingtalk-last-seen", assistantId),
     onDingtalkBotStatus: (cb: (assistantId: string, status: DingtalkBotStatus, detail?: string) => void) => {
         const handler = (_: Electron.IpcRendererEvent, payload: { assistantId: string; status: DingtalkBotStatus; detail?: string }) => {
             cb(payload.assistantId, payload.status, payload.detail);

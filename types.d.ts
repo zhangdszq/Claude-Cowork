@@ -343,6 +343,7 @@ type EventPayloadMapping = {
     "get-dingtalk-bot-status": DingtalkBotStatusResult;
     "send-proactive-dingtalk": SendProactiveDingtalkResult;
     "send-proactive-dingtalk-media": SendProactiveDingtalkResult;
+    "get-dingtalk-last-seen": Array<{ target: string; isGroup: boolean; lastSeenAt: number }>;
     "is-sidecar-running": boolean;
     // OpenAI Codex OAuth
     "openai-login": OpenAILoginResult;
@@ -405,6 +406,7 @@ interface Window {
         onDingtalkBotStatus: (cb: (assistantId: string, status: DingtalkBotStatus, detail?: string) => void) => UnsubscribeFunction;
         sendProactiveDingtalk: (input: SendProactiveDingtalkInput) => Promise<SendProactiveDingtalkResult>;
         sendProactiveMediaDingtalk: (input: SendProactiveMediaDingtalkInput) => Promise<SendProactiveDingtalkResult>;
+        getDingtalkLastSeen: (assistantId: string) => Promise<Array<{ target: string; isGroup: boolean; lastSeenAt: number }>>;
         // OpenAI Codex OAuth
         openaiLogin: () => Promise<OpenAILoginResult>;
         openaiLogout: () => Promise<{ success: boolean }>;
