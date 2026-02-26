@@ -29,11 +29,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14   # Apple Silicon (M 芯片) runner
+          - os: macos-14   # Apple Silicon (M 芯片) runner，构建 arm64
             platform: mac-arm64
             arch: arm64
             artifact-name: macos-arm64
-          - os: macos-13   # Intel runner
+          - os: macos-14   # 同一 runner 交叉编译 x64
             platform: mac-x64
             arch: x64
             artifact-name: macos-x64
