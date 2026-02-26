@@ -4,6 +4,7 @@ type WizardStep = "welcome" | "api" | "codex" | "complete";
 
 interface OnboardingWizardProps {
   onComplete: () => void;
+  initialStep?: WizardStep;
 }
 
 // Step indicator
@@ -49,8 +50,8 @@ function StepIndicator({ currentStep }: { currentStep: WizardStep }) {
   );
 }
 
-export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
-  const [step, setStep] = useState<WizardStep>("welcome");
+export function OnboardingWizard({ onComplete, initialStep }: OnboardingWizardProps) {
+  const [step, setStep] = useState<WizardStep>(initialStep ?? "welcome");
   
   // API config state
   const [baseUrl, setBaseUrl] = useState("");

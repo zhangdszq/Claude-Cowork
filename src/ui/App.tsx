@@ -203,14 +203,21 @@ function App() {
   const [showOnboarding, setShowOnboarding] = useState(() => {
     return !localStorage.getItem(ONBOARDING_COMPLETE_KEY);
   });
+  const [onboardingInitialStep, setOnboardingInitialStep] = useState<"welcome" | "codex">("welcome");
 
-  // 若 localStorage 标志未设置，但配置文件中已有 API Token，则自动跳过引导
+  // 启动时检查已有配置，决定是否跳过或从哪一步开始引导
   useEffect(() => {
     if (!showOnboarding) return;
     window.electron.getUserSettings().then((settings) => {
-      if (settings.anthropicAuthToken) {
+      const hasAnthropic = !!settings.anthropicAuthToken;
+      const hasCodex = !!settings.openaiTokens?.accessToken;
+      if (hasAnthropic && hasCodex) {
+        // 两个都配置了，完全跳过
         localStorage.setItem(ONBOARDING_COMPLETE_KEY, "true");
         setShowOnboarding(false);
+      } else if (hasAnthropic) {
+        // 已有 Anthropic Token，直接从 Codex 步骤开始
+        setOnboardingInitialStep("codex");
       }
     }).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -692,7 +699,7 @@ function App() {
 
   // Show onboarding wizard for new users
   if (showOnboarding) {
-    return <OnboardingWizard onComplete={handleOnboardingComplete} />;
+    return <OnboardingWizard onComplete={handleOnboardingComplete} initialStep={onboardingInitialStep} />;
   }
 
   return (
