@@ -1429,15 +1429,96 @@ class DingtalkConnection {
         ["mp3", "amr", "wav"].includes(ext) ? "voice" :
         ["mp4", "avi", "mov"].includes(ext) ? "video" : "file";
 
+      const SIZE_LIMITS: Record<string, number> = {
+        image: 20 * 1024 * 1024,
+        voice: 2 * 1024 * 1024,
+        video: 20 * 1024 * 1024,
+        file: 20 * 1024 * 1024,
+      };
+
+      // Temp files created by compression (need cleanup regardless)
+      const tempFiles: string[] = [];
       const cleanup = () => {
-        if (filePath.includes("vk-shot-") && fs.existsSync(filePath)) {
-          try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+        const toDelete = filePath.includes("vk-shot-") ? [filePath, ...tempFiles] : tempFiles;
+        for (const f of toDelete) {
+          try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
         }
       };
 
+      // Check file size and auto-compress if needed
+      let sendPath = filePath;
+      const stat = fs.statSync(filePath);
+      const limit = SIZE_LIMITS[mediaType];
+
+      if (stat.size > limit) {
+        const os2 = await import("os");
+        const sizeMB = (stat.size / 1024 / 1024).toFixed(1);
+
+        if (mediaType === "image") {
+          // Compress image with sips (macOS built-in) or convert quality to ~70%
+          const compressedPath = path.join(os2.tmpdir(), `vk-compressed-${Date.now()}.jpg`);
+          tempFiles.push(compressedPath);
+          try {
+            if (process.platform === "darwin") {
+              // sips: resize to max 2000px wide and convert to jpg
+              await execAsync(
+                `sips -s format jpeg -s formatOptions 70 -Z 2000 "${filePath}" --out "${compressedPath}"`,
+              );
+            } else {
+              // fallback: ImageMagick
+              await execAsync(
+                `convert "${filePath}" -resize 2000x2000> -quality 70 "${compressedPath}"`,
+              );
+            }
+            const newStat = fs.statSync(compressedPath);
+            if (newStat.size <= limit) {
+              console.log(`[DingTalk] Image compressed: ${sizeMB}MB → ${(newStat.size/1024/1024).toFixed(1)}MB`);
+              sendPath = compressedPath;
+            } else {
+              cleanup();
+              return `图片压缩后仍超过 20MB（${(newStat.size/1024/1024).toFixed(1)}MB），无法发送。建议先裁剪或降低分辨率。`;
+            }
+          } catch {
+            cleanup();
+            return `图片 ${sizeMB}MB 超过 20MB 限制，压缩失败，请先手动压缩。`;
+          }
+        } else if (mediaType === "voice" && stat.size > SIZE_LIMITS.voice) {
+          cleanup();
+          return `语音文件 ${sizeMB}MB 超过 2MB 限制，请裁剪后再发。`;
+        } else {
+          // For video/file > 20MB: zip it first
+          const zipPath = path.join(
+            (await import("os")).tmpdir(),
+            `vk-${path.basename(filePath)}-${Date.now()}.zip`,
+          );
+          tempFiles.push(zipPath);
+          try {
+            await execAsync(`cd "${path.dirname(filePath)}" && zip "${zipPath}" "${path.basename(filePath)}"`);
+            const zipStat = fs.statSync(zipPath);
+            if (zipStat.size <= SIZE_LIMITS.file) {
+              console.log(`[DingTalk] File zipped: ${sizeMB}MB → ${(zipStat.size/1024/1024).toFixed(1)}MB`);
+              sendPath = zipPath;
+            } else {
+              cleanup();
+              return `文件 ${sizeMB}MB 压缩后仍超过 20MB（${(zipStat.size/1024/1024).toFixed(1)}MB）。` +
+                `建议用网盘分享链接代替，或通过 bash 工具上传到 OSS/对象存储后发链接。`;
+            }
+          } catch {
+            cleanup();
+            return `文件 ${sizeMB}MB 超过 20MB 限制，且 zip 压缩失败，建议改用网盘分享。`;
+          }
+        }
+      }
+
       // 1. Upload to DingTalk media server (V1 API, correct token)
+      const sendExt = sendPath.split(".").pop()?.toLowerCase() ?? ext;
+      const sendMediaType: "image" | "voice" | "video" | "file" =
+        ["jpg", "jpeg", "png", "gif", "bmp"].includes(sendExt) ? "image" :
+        ["mp3", "amr", "wav"].includes(sendExt) ? "voice" :
+        ["mp4", "avi", "mov"].includes(sendExt) ? "video" : "file";
+
       const mediaId = await uploadMediaV1(
-        this.opts.appKey, this.opts.appSecret, filePath, mediaType,
+        this.opts.appKey, this.opts.appSecret, sendPath, sendMediaType,
       );
       if (!mediaId) {
         cleanup();
@@ -1450,9 +1531,9 @@ class DingtalkConnection {
       if (!webhookExpired && msg.sessionWebhook) {
         try {
           // session webhook supports media_id directly for image/voice/file
-          const body = mediaType === "image"
+          const body = sendMediaType === "image"
             ? { msgtype: "image", image: { media_id: mediaId } }
-            : mediaType === "voice"
+            : sendMediaType === "voice"
             ? { msgtype: "voice", voice: { media_id: mediaId, duration: 1 } }
             : { msgtype: "file", file: { media_id: mediaId } };
 
@@ -1463,9 +1544,9 @@ class DingtalkConnection {
           });
           const respText = await resp.text();
           if (resp.ok) {
-            console.log(`[DingTalk] File sent via session webhook: ${path.basename(filePath)}`);
+            console.log(`[DingTalk] File sent via session webhook: ${path.basename(sendPath)}`);
             cleanup();
-            return `文件已发送: ${path.basename(filePath)}`;
+            return `文件已发送: ${path.basename(sendPath)}`;
           }
           console.error(`[DingTalk] Session webhook send failed (${resp.status}): ${respText}`);
           // Fall through to proactive API
@@ -1493,8 +1574,8 @@ class DingtalkConnection {
       const fileName = path.basename(filePath);
       const fileExt = ext || "png";
       // Use sampleAudio for voice; sampleFile for everything else (including images)
-      const msgKey = mediaType === "voice" ? "sampleAudio" : "sampleFile";
-      const msgParam = mediaType === "voice"
+      const msgKey = sendMediaType === "voice" ? "sampleAudio" : "sampleFile";
+      const msgParam = sendMediaType === "voice"
         ? JSON.stringify({ mediaId, duration: "1" })
         : JSON.stringify({ mediaId, fileName, fileType: fileExt });
 
@@ -1518,8 +1599,9 @@ class DingtalkConnection {
         const respText = await resp.text();
         cleanup();
         if (resp.ok) {
-          console.log(`[DingTalk] File sent via proactive API: ${fileName}`);
-          return `文件已发送: ${fileName}`;
+          console.log(`[DingTalk] File sent via proactive API: ${path.basename(sendPath)}`);
+          cleanup();
+          return `文件已发送: ${path.basename(sendPath)}`;
         }
         return `发送失败 (HTTP ${resp.status}): ${respText.slice(0, 200)}`;
       } catch (err) {
@@ -1557,8 +1639,10 @@ class DingtalkConnection {
       {
         name: "send_file",
         description:
-          "通过钉钉将本地文件发送给当前对话的用户。支持图片（png/jpg）、PDF、文档等。" +
-          "file_path 必须是本机可读取的完整路径。",
+          "通过钉钉将本地文件发送给当前对话的用户。支持图片（png/jpg）、PDF、文档、视频等。" +
+          "file_path 必须是本机可读取的完整路径。" +
+          "超出大小限制时会自动处理：图片自动压缩（macOS sips），其他文件自动 zip 压缩。" +
+          "压缩后仍超限才会报错。",
         input_schema: {
           type: "object" as const,
           properties: {
