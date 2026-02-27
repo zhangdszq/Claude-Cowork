@@ -14,71 +14,17 @@
 import WebSocket from "ws";
 import Anthropic from "@anthropic-ai/sdk";
 import { Codex, type CodexOptions, type ThreadOptions } from "@openai/codex-sdk";
+import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 import { EventEmitter } from "events";
-import { networkInterfaces } from "os";
+import { networkInterfaces, homedir } from "os";
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
 import { buildSmartMemoryContext, appendDailyMemory } from "./memory-store.js";
+import { getEnhancedEnv, getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
-import { addScheduledTask, loadScheduledTasks, deleteScheduledTask } from "./scheduler.js";
-
-// ─── Tool Registry (OpenClaw-style extensible tool system) ───────────────────
-
-/** Context passed to every tool execution */
-interface ToolContext {
-  msg: DingtalkMessage;
-  /** Send an interim progress message to the current conversation */
-  sendProgress: (text: string) => Promise<void>;
-}
-
-/** A single registered tool */
-interface ToolEntry {
-  schema: Anthropic.Tool;
-  /** Short one-line hint shown in the system prompt */
-  hint: string;
-  execute: (input: Record<string, unknown>, ctx: ToolContext) => Promise<string>;
-}
-
-/**
- * Extensible tool registry — mirrors OpenClaw's createOpenClawTools() pattern.
- * Tools are registered once per bot instance and passed to every Claude API call.
- */
-class ToolRegistry {
-  private entries = new Map<string, ToolEntry>();
-
-  register(entry: ToolEntry): this {
-    this.entries.set(entry.schema.name, entry);
-    return this;
-  }
-
-  get schemas(): Anthropic.Tool[] {
-    return [...this.entries.values()].map((e) => e.schema);
-  }
-
-  /** Multiline hint block injected into the Claude system prompt */
-  get toolHint(): string {
-    if (this.entries.size === 0) return "";
-    return [
-      "## 可用工具",
-      "你可以调用以下工具完成用户请求，无需询问，直接执行：",
-      ...[...this.entries.values()].map((e) => `- **${e.schema.name}** — ${e.hint}`),
-      "",
-      "工具调用流程示例：截图 → take_screenshot → 得到路径 → send_file 发送",
-      "工具调用流程示例：查找文件 → bash(find ...) → 得到路径 → send_file 发送",
-    ].join("\n");
-  }
-
-  async run(
-    name: string,
-    input: Record<string, unknown>,
-    ctx: ToolContext,
-  ): Promise<string> {
-    const entry = this.entries.get(name);
-    if (!entry) return `未知工具: ${name}`;
-    return entry.execute(input, ctx);
-  }
-}
+import { createSharedMcpServer } from "./shared-mcp.js";
 
 function getLocalIp(): string {
   const nets = networkInterfaces();
@@ -308,129 +254,6 @@ async function uploadMediaV1(
 // ─── Web utilities ────────────────────────────────────────────────────────────
 
 /** Strip HTML tags and decode common HTML entities */
-function stripHtml(html: string): string {
-  return html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
-
-/**
- * Fetch a URL and return readable text content.
- * HTML pages are cleaned to plain text; other content is returned as-is.
- */
-async function webFetch(url: string, maxChars = 8_000): Promise<string> {
-  const resp = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
-
-  const contentType = resp.headers.get("content-type") ?? "";
-  const text = await resp.text();
-  if (contentType.includes("text/html")) {
-    return stripHtml(text).slice(0, maxChars);
-  }
-  return text.slice(0, maxChars);
-}
-
-/**
- * Search the web via DuckDuckGo.
- * Tries the Instant Answer API first; falls back to HTML result scraping.
- */
-async function webSearch(query: string, maxResults = 5): Promise<string> {
-  // 1. DuckDuckGo Instant Answer API (facts / definitions)
-  try {
-    const iaUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const resp = await fetch(iaUrl, {
-      headers: { "User-Agent": "VK-Cowork-Bot/1.0" },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (resp.ok) {
-      const data = (await resp.json()) as {
-        AbstractText?: string;
-        AbstractURL?: string;
-        Answer?: string;
-        Results?: Array<{ Text?: string; FirstURL?: string }>;
-        RelatedTopics?: Array<{ Text?: string; FirstURL?: string; Topics?: unknown[] }>;
-      };
-      const parts: string[] = [];
-      if (data.Answer) parts.push(`**答案**: ${data.Answer}`);
-      if (data.AbstractText) {
-        parts.push(`**摘要**: ${data.AbstractText}`);
-        if (data.AbstractURL) parts.push(`来源: ${data.AbstractURL}`);
-      }
-      if (data.Results && data.Results.length > 0) {
-        parts.push("\n**搜索结果**:");
-        for (const r of data.Results.slice(0, maxResults)) {
-          if (r.Text && r.FirstURL) parts.push(`- ${r.Text.slice(0, 200)}\n  ${r.FirstURL}`);
-        }
-      }
-      const flatTopics = (data.RelatedTopics ?? []).filter((t) => t.Text && t.FirstURL);
-      if (flatTopics.length > 0) {
-        parts.push("\n**相关话题**:");
-        for (const t of flatTopics.slice(0, maxResults)) {
-          parts.push(`- ${(t.Text ?? "").slice(0, 200)}\n  ${t.FirstURL}`);
-        }
-      }
-      if (parts.length > 0) return parts.join("\n");
-    }
-  } catch {
-    /* fall through to HTML scraping */
-  }
-
-  // 2. DuckDuckGo HTML scraping fallback
-  const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const resp = await fetch(searchUrl, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!resp.ok) throw new Error(`Search failed: HTTP ${resp.status}`);
-
-  const html = await resp.text();
-  const titleRe = /<a class="result__a"[^>]*>([\s\S]*?)<\/a>/g;
-  const snippetRe = /<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
-  const urlRe = /uddg=([^&"]+)/g;
-
-  const titles: string[] = [];
-  const snippets: string[] = [];
-  const urls: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = titleRe.exec(html)) !== null) titles.push(stripHtml(m[1]).slice(0, 120));
-  while ((m = snippetRe.exec(html)) !== null) snippets.push(stripHtml(m[1]).slice(0, 250));
-  while ((m = urlRe.exec(html)) !== null) {
-    try { urls.push(decodeURIComponent(m[1])); } catch { urls.push(m[1]); }
-  }
-
-  const count = Math.min(maxResults, titles.length);
-  if (count === 0) {
-    return `未找到"${query}"相关结果，建议使用 web_fetch 直接访问相关网址。`;
-  }
-  const results: string[] = [];
-  for (let i = 0; i < count; i++) {
-    const snippet = snippets[i] ? `\n${snippets[i]}` : "";
-    const url = urls[i] ? `\n${urls[i]}` : "";
-    results.push(`**${i + 1}. ${titles[i]}**${snippet}${url}`);
-  }
-  return `🔍 搜索"${query}"结果：\n\n${results.join("\n\n")}`;
-}
-
 async function createAICard(
   accessToken: string,
   robotCode: string,
@@ -1307,7 +1130,7 @@ async function updateBotSessionTitle(
   }
 }
 
-// ─── Anthropic client cache ───────────────────────────────────────────────────
+// ─── Anthropic client cache (used only for card streaming mode) ───────────────
 
 /** Per-assistantId client cache; cleared when API settings change */
 const anthropicClients = new Map<string, { client: Anthropic; apiKey: string; baseURL: string }>();
@@ -1332,6 +1155,36 @@ function getAnthropicClient(assistantId: string): Anthropic {
   return client;
 }
 
+// ─── Claude session ID registry (for query() resume) ─────────────────────────
+
+/** Maps assistantId → Claude SDK session ID for conversation resume */
+const botClaudeSessionIds = new Map<string, string>();
+
+function getBotClaudeSessionId(assistantId: string): string | undefined {
+  return botClaudeSessionIds.get(assistantId);
+}
+
+function setBotClaudeSessionId(assistantId: string, sessionId: string): void {
+  botClaudeSessionIds.set(assistantId, sessionId);
+}
+
+/** Build env vars for query() — includes user's API key from settings */
+function buildQueryEnv(): Record<string, string | undefined> {
+  const settings = loadUserSettings();
+  const apiKey =
+    settings.anthropicAuthToken ||
+    process.env.ANTHROPIC_API_KEY ||
+    process.env.ANTHROPIC_AUTH_TOKEN ||
+    "";
+  const baseURL = settings.anthropicBaseUrl || "";
+
+  return {
+    ...getEnhancedEnv(),
+    ...(apiKey ? { ANTHROPIC_API_KEY: apiKey, ANTHROPIC_AUTH_TOKEN: apiKey } : {}),
+    ...(baseURL ? { ANTHROPIC_BASE_URL: baseURL } : {}),
+  };
+}
+
 // ─── DingtalkConnection ───────────────────────────────────────────────────────
 
 class DingtalkConnection {
@@ -1342,16 +1195,12 @@ class DingtalkConnection {
   private everConnected = false;
   private reconnectAttempts = 0;
 
-  /** Extensible tool registry — all Claude tool calls go through here */
-  private tools!: ToolRegistry;
   /** In-flight message IDs (per-instance) — prevents parallel processing of the same message */
   private inflight = new Set<string>();
   /** Inbound message counters for observability */
-  private inboundStats = { received: 0, processed: 0, skipped: 0, toolCalls: 0 };
+  private inboundStats = { received: 0, processed: 0, skipped: 0 };
 
-  constructor(public opts: DingtalkBotOptions) {
-    this.tools = this.initTools();
-  }
+  constructor(public opts: DingtalkBotOptions) {}
 
   getOptions(): DingtalkBotOptions {
     return this.opts;
@@ -1645,7 +1494,7 @@ class DingtalkConnection {
     // ── Generate and deliver reply ─────────────────────────────────────────────
     this.inboundStats.processed++;
     console.log(
-      `[DingTalk][${this.opts.assistantName}] Processing (rcv=${this.inboundStats.received} proc=${this.inboundStats.processed} skip=${this.inboundStats.skipped} tools=${this.inboundStats.toolCalls})`,
+      `[DingTalk][${this.opts.assistantName}] Processing (rcv=${this.inboundStats.received} proc=${this.inboundStats.processed} skip=${this.inboundStats.skipped})`,
     );
     try {
       await this.generateAndDeliver(msg, extracted.text);
@@ -1701,7 +1550,6 @@ class DingtalkConnection {
       this.opts.persona?.trim() ||
       `你是 ${this.opts.assistantName}，一个智能助手，请简洁有用地回答问题。`;
 
-    // Strict output rules: no internal monologue, no step-by-step narration.
     const outputRules = `## 回复规范（必须遵守）
 - 直接给出结果，不要叙述你的思考过程或执行步骤
 - 调用工具时保持沉默，只在工具全部完成后给出一句话结论
@@ -1709,637 +1557,109 @@ class DingtalkConnection {
 - 禁止把工具调用的中间状态、路径、API 返回值等细节写进最终回复
 - 如果任务失败，简短说明原因即可，无需描述每个步骤`;
 
-    // Use message's createAt timestamp as authoritative "now" — immune to local clock skew
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const msgNow = msg.createAt ?? Date.now();
     const nowStr = new Date(msgNow).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
     const currentTimeContext = `## 当前时间\n消息发送时间：${nowStr}（时区：${tz}）\n创建定时任务时，若需要相对时间（如"X分钟后"），请使用 delay_minutes 参数，服务器会自动计算。`;
 
-    const system = [basePersona, outputRules, currentTimeContext, memoryContext, this.tools.toolHint]
+    const system = [basePersona, outputRules, currentTimeContext, memoryContext]
       .filter(Boolean)
       .join("\n\n");
 
     let replyText: string;
 
     if (provider === "codex") {
-      replyText = await this.runCodex(system, history, userText);
+      replyText = await this.runCodexSession(system, history, userText);
     } else {
-      replyText = await this.runClaude(
-        system,
-        history,
-        userText,
-        msg,
-        sessionId,
-      );
-      // Card mode handles sending internally; return early
-      if (replyText === "__CARD_DELIVERED__") {
-        return;
+      // Card streaming mode — direct Anthropic SDK, no tools, streaming display
+      if (this.opts.messageType === "card" && this.opts.cardTemplateId) {
+        const cardResult = await this.runClaudeCard(system, history, userText, msg, sessionId);
+        if (cardResult === "__CARD_DELIVERED__") return;
+        replyText = cardResult;
+      } else {
+        // Agent SDK query() path — shared MCP (tools) + per-session MCP (send_message/send_file)
+        replyText = await this.runClaudeQuery(system, userText, msg);
       }
     }
 
     history.push({ role: "assistant", content: replyText });
     this.persistReply(sessionId, replyText, userText);
 
-    // Async title update after reply — uses full history for better context
     updateBotSessionTitle(sessionId, history, `[钉钉]`).catch(() => {});
 
     await this.sendMarkdown(msg.sessionWebhook, replyText);
   }
 
-  // ── Tool registry factory (OpenClaw-style: register once, run via ToolRegistry) ─
+  /** Claude query() path via Agent SDK with shared MCP + per-session MCP */
+  private async runClaudeQuery(
+    system: string,
+    userText: string,
+    msg: DingtalkMessage,
+  ): Promise<string> {
+    const sessionMcp = this.createSessionMcp(msg);
+    const sharedMcp = createSharedMcpServer();
+    const claudeSessionId = getBotClaudeSessionId(this.opts.assistantId);
+    const claudeCodePath = getClaudeCodePath();
 
-  private initTools(): ToolRegistry {
-    const registry = new ToolRegistry();
-    // Capture `this` for closures
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-
-    // ── take_screenshot ────────────────────────────────────────────────────
-    registry.register({
-      hint: "截取当前桌面截图，返回临时文件路径（之后用 send_file 发送）",
-      schema: {
-        name: "take_screenshot",
-        description: "截取当前桌面屏幕截图。返回截图的临时文件路径，之后可用 send_file 发送给用户。",
-        input_schema: { type: "object" as const, properties: {}, required: [] },
-      },
-      async execute(_input, ctx) {
-        const { exec } = await import("child_process");
-        const { promisify } = await import("util");
-        const execAsync = promisify(exec);
-        const os = await import("os");
-        const path = await import("path");
-        const fs = await import("fs");
-
-        const filePath = path.join(os.tmpdir(), `vk-shot-${Date.now()}.png`);
-        await ctx.sendProgress("📸 正在截图…");
-
-        const platform = process.platform;
-        if (platform === "darwin") {
-          await execAsync(`screencapture -x "${filePath}"`);
-        } else if (platform === "win32") {
-          await execAsync(
-            `powershell -command "Add-Type -AssemblyName System.Windows.Forms; ` +
-            `$b=New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width,[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); ` +
-            `$g=[System.Drawing.Graphics]::FromImage($b); ` +
-            `$g.CopyFromScreen(0,0,0,0,$b.Size); ` +
-            `$b.Save('${filePath}')"`,
-          );
-        } else {
-          await execAsync(`gnome-screenshot -f "${filePath}" 2>/dev/null || scrot "${filePath}"`);
-        }
-        if (!fs.existsSync(filePath)) throw new Error("截图文件未生成");
-        return filePath;
+    let finalText = "";
+    const q = query({
+      prompt: userText,
+      options: {
+        systemPrompt: system,
+        resume: claudeSessionId,
+        cwd: this.opts.defaultCwd ?? homedir(),
+        mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
+        allowDangerouslySkipPermissions: true,
+        pathToClaudeCodeExecutable: claudeCodePath,
+        env: buildQueryEnv(),
       },
     });
 
-    // ── send_file ────────────────────────────────────────────────────────
-    registry.register({
-      hint: "将本机文件通过钉钉发送给当前用户（支持图/PDF/视频，自动压缩超大文件）",
-      schema: {
-        name: "send_file",
-        description:
-          "通过钉钉将本地文件发送给当前对话的用户。支持图片（png/jpg）、PDF、文档、视频等。" +
-          "file_path 必须是本机可读取的完整路径。" +
-          "超出大小限制时会自动处理：图片自动压缩（macOS sips），其他文件自动 zip 压缩。" +
-          "压缩后仍超限才会返回提示。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            file_path: { type: "string", description: "要发送的文件的完整本地路径" },
-          },
-          required: ["file_path"],
-        },
-      },
-      async execute(input, ctx) {
-        const msg = ctx.msg;
-        const { exec } = await import("child_process");
-        const { promisify } = await import("util");
-        const execAsync = promisify(exec);
-        const path = await import("path");
-        const fs = await import("fs");
+    for await (const message of q) {
+      if (message.type === "result" && message.subtype === "success") {
+        finalText = message.result;
+        setBotClaudeSessionId(this.opts.assistantId, message.session_id);
+      }
+    }
 
-        const filePath = String(input.file_path ?? "");
-        if (!filePath || !fs.existsSync(filePath)) return `文件不存在: ${filePath}`;
-
-        const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-        const mediaType: "image" | "voice" | "video" | "file" =
-          ["jpg", "jpeg", "png", "gif", "bmp"].includes(ext) ? "image" :
-          ["mp3", "amr", "wav"].includes(ext) ? "voice" :
-          ["mp4", "avi", "mov"].includes(ext) ? "video" : "file";
-
-        const SIZE_LIMITS: Record<string, number> = {
-          image: 20 * 1024 * 1024,
-          voice: 2 * 1024 * 1024,
-          video: 20 * 1024 * 1024,
-          file: 20 * 1024 * 1024,
-        };
-
-        const tempFiles: string[] = [];
-        const cleanup = () => {
-          const toDelete = filePath.includes("vk-shot-") ? [filePath, ...tempFiles] : tempFiles;
-          for (const f of toDelete) {
-            try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
-          }
-        };
-
-        let sendPath = filePath;
-        const stat = fs.statSync(filePath);
-        const limit = SIZE_LIMITS[mediaType];
-
-        if (stat.size > limit) {
-          const os2 = await import("os");
-          const sizeMB = (stat.size / 1024 / 1024).toFixed(1);
-
-          if (mediaType === "image") {
-            const compressedPath = path.join(os2.tmpdir(), `vk-compressed-${Date.now()}.jpg`);
-            tempFiles.push(compressedPath);
-            try {
-              if (process.platform === "darwin") {
-                await execAsync(
-                  `sips -s format jpeg -s formatOptions 70 -Z 2000 "${filePath}" --out "${compressedPath}"`,
-                );
-              } else {
-                await execAsync(
-                  `convert "${filePath}" -resize 2000x2000> -quality 70 "${compressedPath}"`,
-                );
-              }
-              const newStat = fs.statSync(compressedPath);
-              if (newStat.size <= limit) {
-                console.log(`[DingTalk] Image compressed: ${sizeMB}MB → ${(newStat.size / 1024 / 1024).toFixed(1)}MB`);
-                sendPath = compressedPath;
-              } else {
-                cleanup();
-                return `图片压缩后仍超过 20MB（${(newStat.size / 1024 / 1024).toFixed(1)}MB），建议先裁剪或降低分辨率。`;
-              }
-            } catch {
-              cleanup();
-              return `图片 ${sizeMB}MB 超过 20MB 限制，压缩失败，请先手动压缩。`;
-            }
-          } else if (mediaType === "voice") {
-            cleanup();
-            return `语音文件 ${sizeMB}MB 超过 2MB 限制，请裁剪后再发。`;
-          } else {
-            const zipPath = path.join(
-              (await import("os")).tmpdir(),
-              `vk-${path.basename(filePath)}-${Date.now()}.zip`,
-            );
-            tempFiles.push(zipPath);
-            try {
-              await execAsync(`cd "${path.dirname(filePath)}" && zip "${zipPath}" "${path.basename(filePath)}"`);
-              const zipStat = fs.statSync(zipPath);
-              if (zipStat.size <= SIZE_LIMITS.file) {
-                console.log(`[DingTalk] File zipped: ${sizeMB}MB → ${(zipStat.size / 1024 / 1024).toFixed(1)}MB`);
-                sendPath = zipPath;
-              } else {
-                cleanup();
-                return `文件 ${sizeMB}MB 压缩后仍超过 20MB，建议用网盘分享链接代替，或通过 bash 上传 OSS 后发链接。`;
-              }
-            } catch {
-              cleanup();
-              return `文件 ${sizeMB}MB 超过 20MB 限制，且 zip 压缩失败，建议改用网盘分享。`;
-            }
-          }
-        }
-
-        // Upload to DingTalk media server (V1 API — requires V1 token)
-        const sendExt = sendPath.split(".").pop()?.toLowerCase() ?? ext;
-        const sendMediaType: "image" | "voice" | "video" | "file" =
-          ["jpg", "jpeg", "png", "gif", "bmp"].includes(sendExt) ? "image" :
-          ["mp3", "amr", "wav"].includes(sendExt) ? "voice" :
-          ["mp4", "avi", "mov"].includes(sendExt) ? "video" : "file";
-
-        const mediaId = await uploadMediaV1(self.opts.appKey, self.opts.appSecret, sendPath, sendMediaType);
-        if (!mediaId) {
-          cleanup();
-          return `媒体上传失败，请检查应用权限（oapi.dingtalk.com）`;
-        }
-
-        // Try sessionWebhook first — add V2 token header (soimy always adds it for media)
-        const webhookExpired = msg.sessionWebhookExpiredTime && Date.now() > msg.sessionWebhookExpiredTime;
-        if (!webhookExpired && msg.sessionWebhook) {
-          try {
-            const webhookToken = await getAccessToken(self.opts.appKey, self.opts.appSecret);
-            const body = sendMediaType === "image"
-              ? { msgtype: "image", image: { media_id: mediaId } }
-              : sendMediaType === "voice"
-              ? { msgtype: "voice", voice: { media_id: mediaId, duration: 1 } }
-              : { msgtype: "file", file: { media_id: mediaId } };
-
-            const resp = await fetch(msg.sessionWebhook, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "x-acs-dingtalk-access-token": webhookToken,
-              },
-              body: JSON.stringify(body),
-            });
-            const respText = await resp.text();
-            if (resp.ok) {
-              console.log(`[DingTalk][send_file] webhook ok: ${path.basename(sendPath)}`);
-              cleanup();
-              return `文件已发送: ${path.basename(sendPath)}`;
-            }
-            console.error(`[DingTalk][send_file] webhook fail (${resp.status}): ${respText}`);
-          } catch (err) {
-            console.error("[DingTalk][send_file] webhook error:", err);
-          }
-        }
-
-        // Fallback: proactive API — soimy pattern: pass mediaId directly as photoURL for images
-        const robotCode = self.opts.robotCode ?? self.opts.appKey;
-        const sender = msg.senderStaffId ?? msg.senderId ?? "";
-        const isGroup = msg.conversationType === "2";
-        const resolvedTarget = resolveOriginalPeerId(sender || msg.conversationId || "");
-        const apiUrl = isGroup
-          ? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
-          : `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
-
-        const fileName = path.basename(filePath);
-        const fileExt = ext || "bin";
-        let msgKey: string;
-        let msgParam: string;
-        if (sendMediaType === "voice") {
-          msgKey = "sampleAudio";
-          msgParam = JSON.stringify({ mediaId, duration: "1" });
-        } else if (sendMediaType === "image") {
-          msgKey = "sampleImageMsg";
-          msgParam = JSON.stringify({ photoURL: mediaId });
-        } else {
-          msgKey = "sampleFile";
-          msgParam = JSON.stringify({ mediaId, fileName, fileType: fileExt });
-        }
-
-        const payload: Record<string, unknown> = { robotCode, msgKey, msgParam };
-        if (isGroup) payload.openConversationId = resolvedTarget;
-        else payload.userIds = [resolvedTarget];
-
-        try {
-          const token = await getAccessToken(self.opts.appKey, self.opts.appSecret);
-          const resp = await fetch(apiUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-acs-dingtalk-access-token": token },
-            body: JSON.stringify(payload),
-          });
-          const respText = await resp.text();
-          cleanup();
-          if (resp.ok) return `文件已发送: ${path.basename(sendPath)}`;
-          return `发送失败 (HTTP ${resp.status}): ${respText.slice(0, 200)}`;
-        } catch (err) {
-          cleanup();
-          return `发送异常: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    // ── bash ────────────────────────────────────────────────────────────
-    registry.register({
-      hint: "在本机执行 shell 命令（查找文件、读取内容等，超时 15s）",
-      schema: {
-        name: "bash",
-        description:
-          "在本机执行 bash 命令（macOS/Linux）或 PowerShell（Windows）。" +
-          "适合：查找文件（find、ls）、读取文本（cat）、获取系统信息等。超时 15 秒，输出限 3000 字符。",
-        input_schema: {
-          type: "object" as const,
-          properties: { command: { type: "string", description: "要执行的 shell 命令" } },
-          required: ["command"],
-        },
-      },
-      async execute(input) {
-        const { exec } = await import("child_process");
-        const { promisify } = await import("util");
-        const execAsync = promisify(exec);
-        const command = String(input.command ?? "").trim();
-        if (!command) return "命令为空";
-        try {
-          const { stdout, stderr } = await execAsync(command, { timeout: 15_000 });
-          const out = (stdout + (stderr ? `\n[stderr] ${stderr}` : "")).trim();
-          return out.slice(0, 3000) || "(no output)";
-        } catch (err) {
-          const e = err as { message?: string; stderr?: string };
-          return `命令失败: ${e.message ?? ""}\n${e.stderr ?? ""}`.slice(0, 1000);
-        }
-      },
-    });
-
-    // ── send_message ─────────────────────────────────────────────────────
-    registry.register({
-      hint: "向当前对话发送一条进度通知或中间结果消息（支持 Markdown）",
-      schema: {
-        name: "send_message",
-        description:
-          "向当前钉钉对话立即发送一条文本/Markdown 消息。适合在执行长任务时告知用户进度，" +
-          "或在最终回复前推送中间结果。注意：你的最终文字回复也会自动发送，请勿重复内容。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            text: { type: "string", description: "要发送的消息内容（支持 Markdown）" },
-          },
-          required: ["text"],
-        },
-      },
-      async execute(input, ctx) {
-        const text = String(input.text ?? "").trim();
-        if (!text) return "消息内容为空";
-        await ctx.sendProgress(text);
-        return "消息已发送";
-      },
-    });
-
-    // ── web_fetch ────────────────────────────────────────────────────────
-    registry.register({
-      hint: "抓取网页 URL 内容，返回可读文本（HTML 自动清除标签）",
-      schema: {
-        name: "web_fetch",
-        description:
-          "抓取指定 URL 的内容并以纯文本返回。HTML 页面会自动清除标签，返回可读正文。" +
-          "可用于查看文章、文档、API 响应等。默认最多返回 8000 字符。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            url: { type: "string", description: "要抓取的 HTTP/HTTPS URL" },
-            max_chars: { type: "number", description: "最多返回字符数，默认 8000，最大 20000" },
-          },
-          required: ["url"],
-        },
-      },
-      async execute(input) {
-        const url = String(input.url ?? "").trim();
-        if (!url) return "URL 不能为空";
-        const maxChars = Math.min(Number(input.max_chars ?? 8_000), 20_000);
-        try {
-          return await webFetch(url, maxChars);
-        } catch (err) {
-          return `抓取失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    // ── web_search ────────────────────────────────────────────────────────
-    registry.register({
-      hint: "用 DuckDuckGo 搜索网络，返回 top-N 结果摘要和链接",
-      schema: {
-        name: "web_search",
-        description:
-          "通过 DuckDuckGo 搜索网络，返回 top 5 搜索结果（标题、摘要、URL）。" +
-          "如需查看某个结果的详细内容，再用 web_fetch 工具抓取对应 URL。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            query: { type: "string", description: "搜索关键词或问题" },
-            max_results: { type: "number", description: "最多返回结果数，默认 5，最大 10" },
-          },
-          required: ["query"],
-        },
-      },
-      async execute(input) {
-        const query = String(input.query ?? "").trim();
-        if (!query) return "搜索词不能为空";
-        const maxResults = Math.min(Number(input.max_results ?? 5), 10);
-        try {
-          return await webSearch(query, maxResults);
-        } catch (err) {
-          return `搜索失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    // ── read_file ─────────────────────────────────────────────────────────
-    registry.register({
-      hint: "读取本机文本文件内容（最多 10000 字符）",
-      schema: {
-        name: "read_file",
-        description:
-          "读取本机上的文本文件内容并返回。适合查看配置文件、日志、代码等文本文件。" +
-          "最多返回 10000 字符。不支持二进制文件（图片/PDF 等请用 send_file）。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            path: { type: "string", description: "文件的完整本地路径" },
-            max_chars: { type: "number", description: "最多读取字符数，默认 10000，最大 50000" },
-          },
-          required: ["path"],
-        },
-      },
-      async execute(input) {
-        const filePath = String(input.path ?? "").trim();
-        if (!filePath) return "文件路径不能为空";
-        const maxChars = Math.min(Number(input.max_chars ?? 10_000), 50_000);
-        try {
-          const fs = await import("fs");
-          if (!fs.existsSync(filePath)) return `文件不存在: ${filePath}`;
-          if (!fs.statSync(filePath).isFile()) return `路径不是文件: ${filePath}`;
-          const content = fs.readFileSync(filePath, "utf-8");
-          const truncated = content.slice(0, maxChars);
-          const suffix = content.length > maxChars ? `\n…(已截断，共 ${content.length} 字符)` : "";
-          return truncated + suffix;
-        } catch (err) {
-          return `读取失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    // ── write_file ────────────────────────────────────────────────────────
-    registry.register({
-      hint: "将文本内容写入本机文件（可新建或覆盖，支持追加模式）",
-      schema: {
-        name: "write_file",
-        description:
-          "将文本内容写入本机文件。父目录不存在时自动创建。" +
-          "可用于保存笔记、生成报告、写入配置等。写入后返回文件路径和字节数。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            path: { type: "string", description: "要写入的文件完整路径" },
-            content: { type: "string", description: "要写入的文本内容" },
-            append: { type: "boolean", description: "是否追加模式，默认 false（覆盖）" },
-          },
-          required: ["path", "content"],
-        },
-      },
-      async execute(input) {
-        const filePath = String(input.path ?? "").trim();
-        const content = String(input.content ?? "");
-        const append = Boolean(input.append);
-        if (!filePath) return "文件路径不能为空";
-        try {
-          const fs = await import("fs");
-          const path = await import("path");
-          const dir = path.dirname(filePath);
-          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(filePath, content, { encoding: "utf-8", flag: append ? "a" : "w" });
-          const stat = fs.statSync(filePath);
-          return `${append ? "追加" : "写入"}成功: ${filePath}（${stat.size} 字节）`;
-        } catch (err) {
-          return `写入失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    // ── create_scheduled_task ────────────────────────────────────────────────
-    registry.register({
-      hint: "创建定时任务，支持单次(once)、间隔(interval)、每日(daily)三种类型，任务到期后自动执行 prompt",
-      schema: {
-        name: "create_scheduled_task",
-        description:
-          "创建一个定时任务。任务到期时会自动启动 AI 会话执行 prompt。\n\n" +
-          "scheduleType 选择规则（必须严格遵守）：\n" +
-          "- once：用户说「X 分钟/小时后」「明天 X 点」「X 号 X 点」等一次性时间 → 单次执行\n" +
-          "- interval：用户说「每隔 X 分钟/小时」「每 X 分钟重复」等周期性 → 间隔重复，必填 intervalValue + intervalUnit\n" +
-          "- daily：用户说「每天 X 点」「每周一/三/五 X 点」→ 每日固定时间，必填 dailyTime\n\n" +
-          "once 类型时间填写规则（二选一）：\n" +
-          "- 相对时间（推荐）：填 delay_minutes（相对现在的分钟数），服务器自动计算准确时间。「5分钟后」→ delay_minutes=5，「2小时后」→ delay_minutes=120\n" +
-          "- 绝对时间：填 scheduledTime，格式 'YYYY-MM-DDTHH:MM:SS'（本地时间，不加Z）\n\n" +
-          "示例：\n" +
-          "「2分钟后提醒我」→ once，delay_minutes=2\n" +
-          "「每2分钟检查邮件」→ interval，intervalValue=2，intervalUnit=minutes\n" +
-          "「每天早上9点汇报」→ daily，dailyTime='09:00'",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            name: { type: "string", description: "任务名称，简短描述任务用途" },
-            prompt: { type: "string", description: "任务执行时发送给 AI 的指令内容" },
-            scheduleType: { type: "string", enum: ["once", "interval", "daily"], description: "调度类型：once=单次、interval=间隔重复、daily=每日固定时间" },
-            delay_minutes: { type: "number", description: "【once 类型专用，推荐使用】从现在起延迟执行的分钟数，服务器自动换算为准确时间。优先级高于 scheduledTime。" },
-            scheduledTime: { type: "string", description: "单次执行的本地绝对时间，格式 'YYYY-MM-DDTHH:MM:SS'（不加 Z），仅当无法用 delay_minutes 表达时才填" },
-            intervalValue: { type: "number", description: "间隔数值，scheduleType=interval 时必填" },
-            intervalUnit: { type: "string", enum: ["minutes", "hours", "days", "weeks"], description: "间隔单位，scheduleType=interval 时必填" },
-            dailyTime: { type: "string", description: "每日执行时间，格式 HH:MM，scheduleType=daily 时必填" },
-            dailyDays: {
-              type: "array",
-              items: { type: "number" },
-              description: "指定星期几执行（0=周日，1=周一…6=周六），不填则每天执行，scheduleType=daily 时可选",
-            },
-            cwd: { type: "string", description: "任务执行时的工作目录（可选）" },
-          },
-          required: ["name", "prompt", "scheduleType"],
-        },
-      },
-      execute: async (input, ctx) => {
-        try {
-          const scheduleType = String(input.scheduleType) as "once" | "interval" | "daily";
-          const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-          // Use message's createAt as authoritative reference time (immune to server clock skew)
-          const refNow = ctx.msg.createAt ?? Date.now();
-
-          // For once type: resolve the scheduled time server-side to avoid clock skew
-          let scheduledTime: string | undefined;
-          if (scheduleType === "once") {
-            if (input.delay_minutes != null && Number(input.delay_minutes) > 0) {
-              // Preferred path: relative delay anchored to message send time — always accurate
-              scheduledTime = new Date(refNow + Number(input.delay_minutes) * 60 * 1000).toISOString();
-            } else if (input.scheduledTime) {
-              // Absolute time path: validate it's in the future relative to message time
-              const parsed = new Date(String(input.scheduledTime));
-              if (isNaN(parsed.getTime())) {
-                return `创建失败：scheduledTime 格式无效（${input.scheduledTime}）。请改用 delay_minutes 指定延迟分钟数。`;
-              }
-              if (parsed.getTime() <= refNow) {
-                const nowStr = new Date(refNow).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
-                return `创建失败：指定时间 ${parsed.toLocaleString("zh-CN", { timeZone: tz, hour12: false })} 已经过去（消息发送时间：${nowStr}）。\n请改用 delay_minutes 参数指定从现在起延迟的分钟数，例如 delay_minutes=2 表示2分钟后。`;
-              }
-              scheduledTime = parsed.toISOString();
-            } else {
-              return `创建失败：once 类型必须提供 delay_minutes（推荐）或 scheduledTime。`;
-            }
-          }
-
-          const task = addScheduledTask({
-            name: String(input.name ?? ""),
-            prompt: String(input.prompt ?? ""),
-            enabled: true,
-            scheduleType,
-            assistantId: self.opts.assistantId,
-            cwd: input.cwd ? String(input.cwd) : undefined,
-            scheduledTime,
-            intervalValue: input.intervalValue ? Number(input.intervalValue) : undefined,
-            intervalUnit: input.intervalUnit ? (String(input.intervalUnit) as "minutes" | "hours" | "days" | "weeks") : undefined,
-            dailyTime: input.dailyTime ? String(input.dailyTime) : undefined,
-            dailyDays: Array.isArray(input.dailyDays) ? (input.dailyDays as number[]) : undefined,
-          });
-
-          const nextRunStr = task.nextRun
-            ? new Date(task.nextRun).toLocaleString("zh-CN", { timeZone: tz, hour12: false })
-            : "未知";
-
-          return `定时任务已创建！\n- 名称：${task.name}\n- 类型：${task.scheduleType}\n- 下次执行：${nextRunStr}\n- 任务 ID：${task.id}`;
-        } catch (err) {
-          return `创建失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    // ── list_scheduled_tasks ─────────────────────────────────────────────────
-    registry.register({
-      hint: "列出所有定时任务，包含任务名称、类型、下次执行时间和状态",
-      schema: {
-        name: "list_scheduled_tasks",
-        description: "获取所有已创建的定时任务列表，返回名称、调度类型、启用状态和下次执行时间。",
-        input_schema: { type: "object" as const, properties: {}, required: [] },
-      },
-      execute: async (_input, _ctx) => {
-        try {
-          const tasks = loadScheduledTasks();
-          if (tasks.length === 0) return "当前没有任何定时任务。";
-
-          const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-          const fmt = (iso: string) => new Date(iso).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
-
-          const lines = tasks.map((t) => {
-            const status = t.enabled ? "✅ 启用" : "⏸ 停用";
-            const nextRun = t.nextRun ? fmt(t.nextRun) : "无";
-            let schedule = "";
-            if (t.scheduleType === "once") schedule = `单次 @ ${t.scheduledTime ? fmt(t.scheduledTime) : "未知"}`;
-            else if (t.scheduleType === "interval") schedule = `每 ${t.intervalValue} ${t.intervalUnit}`;
-            else if (t.scheduleType === "daily") schedule = `每天 ${t.dailyTime}${t.dailyDays?.length ? `（周${t.dailyDays.join("/")}）` : ""}`;
-
-            return `- **${t.name}** [${status}]\n  调度：${schedule}\n  下次：${nextRun}\n  ID：\`${t.id}\``;
-          });
-
-          return `**定时任务列表（共 ${tasks.length} 个）**\n\n${lines.join("\n\n")}`;
-        } catch (err) {
-          return `获取失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    // ── delete_scheduled_task ────────────────────────────────────────────────
-    registry.register({
-      hint: "根据任务 ID 删除定时任务",
-      schema: {
-        name: "delete_scheduled_task",
-        description: "删除指定 ID 的定时任务。可先用 list_scheduled_tasks 查看任务 ID。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            task_id: { type: "string", description: "要删除的任务 ID" },
-          },
-          required: ["task_id"],
-        },
-      },
-      execute: async (input, _ctx) => {
-        try {
-          const taskId = String(input.task_id ?? "");
-          if (!taskId) return "任务 ID 不能为空";
-
-          const tasks = loadScheduledTasks();
-          const task = tasks.find((t) => t.id === taskId);
-          if (!task) return `未找到 ID 为 ${taskId} 的任务`;
-
-          const success = deleteScheduledTask(taskId);
-          return success ? `已删除定时任务：${task.name}` : `删除失败，请重试`;
-        } catch (err) {
-          return `删除失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    return registry;
+    return finalText || "抱歉，无法生成回复。";
   }
 
-  // ── Claude ───────────────────────────────────────────────────────────────────
+  /** Per-session MCP server with send_message + send_file tools bound to current msg context */
+  private createSessionMcp(msg: DingtalkMessage) {
+    // Capture opts reference for use in tool closures
+    const self = this;
 
-  private async runClaude(
+    const sendMessageTool = tool(
+      "send_message",
+      "向当前钉钉对话立即发送一条文本/Markdown 消息。适合在执行长任务时告知用户进度，" +
+        "或在最终回复前推送中间结果。注意：你的最终文字回复也会自动发送，请勿重复内容。",
+      { text: z.string().describe("要发送的消息内容（支持 Markdown）") },
+      async (input) => {
+        const text = String(input.text ?? "").trim();
+        if (!text) return { content: [{ type: "text" as const, text: "消息内容为空" }] };
+        await self.sendMarkdown(msg.sessionWebhook, text).catch(() => {});
+        return { content: [{ type: "text" as const, text: "消息已发送" }] };
+      },
+    );
+
+    const sendFileTool = tool(
+      "send_file",
+      "通过钉钉将本地文件发送给当前对话的用户。支持图片（png/jpg）、PDF、文档、视频等。" +
+        "file_path 必须是本机可读取的完整路径。" +
+        "超出大小限制时会自动处理：图片自动压缩（macOS sips），其他文件自动 zip 压缩。",
+      { file_path: z.string().describe("要发送的文件的完整本地路径") },
+      async (input) => {
+        const result = await self.doSendFile(String(input.file_path ?? ""), msg);
+        return { content: [{ type: "text" as const, text: result }] };
+      },
+    );
+
+    return createSdkMcpServer({ name: "dingtalk-session", tools: [sendMessageTool, sendFileTool] });
+  }
+
+  /** Card streaming mode — direct Anthropic SDK, no tools */
+  private async runClaudeCard(
     system: string,
     history: ConvMessage[],
     userText: string,
@@ -2349,131 +1669,69 @@ class DingtalkConnection {
     const client = getAnthropicClient(this.opts.assistantId);
     const model = this.opts.model || "claude-opus-4-5";
 
-    // Build message list (history already includes current user message)
     const messages: Anthropic.MessageParam[] = history.slice(0, -1).map((m) => ({
       role: m.role,
       content: m.content,
     }));
-
     messages.push({ role: "user", content: userText });
 
-    // ── Card streaming mode ────────────────────────────────────────────────────
-    const useCard =
-      this.opts.messageType === "card" &&
-      !!this.opts.cardTemplateId;
+    try {
+      const accessToken = await getAccessToken(this.opts.appKey, this.opts.appSecret);
+      const card = await createAICard(
+        accessToken,
+        this.opts.robotCode ?? this.opts.appKey,
+        this.opts.cardTemplateId!,
+        this.opts.cardTemplateKey ?? "msgContent",
+        msg,
+        "🤔 正在思考…",
+      );
 
-    if (useCard) {
-      try {
-        const accessToken = await getAccessToken(this.opts.appKey, this.opts.appSecret);
-        const card = await createAICard(
-          accessToken,
-          this.opts.robotCode ?? this.opts.appKey,
-          this.opts.cardTemplateId!,
-          this.opts.cardTemplateKey ?? "msgContent",
-          msg,
-          "🤔 正在思考…",
-        );
+      let accum = "";
+      let lastUpdate = 0;
+      const THROTTLE_MS = 500;
 
-        let accum = "";
-        let lastUpdate = 0;
-        const THROTTLE_MS = 500;
+      const stream = client.messages.stream({
+        model,
+        max_tokens: 2048,
+        system,
+        messages,
+      });
 
-        const stream = client.messages.stream({
-          model,
-          max_tokens: 2048,
-          system,
-          messages,
-        });
-
-        for await (const event of stream as AsyncIterable<Anthropic.MessageStreamEvent>) {
-          if (
-            event.type === "content_block_delta" &&
-            event.delta.type === "text_delta"
-          ) {
-            accum += event.delta.text;
-            const now = Date.now();
-            if (now - lastUpdate >= THROTTLE_MS) {
-              lastUpdate = now;
-              await streamAICard(card, accessToken, accum, false).catch(() => {});
-            }
+      for await (const event of stream as AsyncIterable<Anthropic.MessageStreamEvent>) {
+        if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+          accum += event.delta.text;
+          const now = Date.now();
+          if (now - lastUpdate >= THROTTLE_MS) {
+            lastUpdate = now;
+            await streamAICard(card, accessToken, accum, false).catch(() => {});
           }
         }
-
-        const finalText = accum.trim() || "抱歉，无法生成回复。";
-        await streamAICard(card, accessToken, finalText, true).catch(() => {});
-
-        history.push({ role: "assistant", content: finalText });
-        this.persistReply(sessionId, finalText, userText);
-
-        updateBotSessionTitle(sessionId, history, `[钉钉]`).catch(() => {});
-
-        return "__CARD_DELIVERED__";
-      } catch (err) {
-        console.error("[DingTalk] Card mode failed, falling back to markdown:", err);
-        // Fall through to regular markdown reply
       }
-    }
 
-    // ── Agentic tool-use loop (OpenClaw pattern) ───────────────────────────────
-    // Claude decides which tools to call; ToolRegistry dispatches and executes them.
-    const MAX_TOOL_TURNS = 8;
-    let toolTurns = 0;
-    const toolSchemas = this.tools.schemas;
-    const ctx: ToolContext = {
-      msg,
-      sendProgress: (text: string) => this.sendMarkdown(msg.sessionWebhook, text).catch(() => {}),
-    };
+      const finalText = accum.trim() || "抱歉，无法生成回复。";
+      await streamAICard(card, accessToken, finalText, true).catch(() => {});
 
-    while (toolTurns < MAX_TOOL_TURNS) {
+      history.push({ role: "assistant", content: finalText });
+      this.persistReply(sessionId, finalText, userText);
+      updateBotSessionTitle(sessionId, history, `[钉钉]`).catch(() => {});
+
+      return "__CARD_DELIVERED__";
+    } catch (err) {
+      console.error("[DingTalk] Card mode failed, falling back to markdown:", err);
+      // Fall through — caller will use the return value as replyText
       const response = await client.messages.create({
         model,
         max_tokens: 4096,
         system,
         messages,
-        tools: toolSchemas.length > 0 ? toolSchemas : undefined,
       });
-
-      const toolUseBlocks = response.content.filter(
-        (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
-      );
-
-      if (toolUseBlocks.length === 0 || response.stop_reason !== "tool_use") {
-        const textBlock = response.content.find(
-          (b): b is Anthropic.TextBlock => b.type === "text",
-        );
-        return textBlock?.text ?? "抱歉，无法生成回复。";
-      }
-
-      // Append assistant turn (includes tool_use blocks)
-      messages.push({ role: "assistant", content: response.content });
-
-      // Execute each tool and collect results
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-      for (const tb of toolUseBlocks) {
-        this.inboundStats.toolCalls++;
-        const inputPreview = JSON.stringify(tb.input).slice(0, 120);
-        console.log(`[DingTalk][tool] ${tb.name}(${inputPreview})`);
-        let result: string;
-        try {
-          result = await this.tools.run(tb.name, tb.input as Record<string, unknown>, ctx);
-        } catch (err) {
-          result = `工具执行失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-        console.log(`[DingTalk][tool] ${tb.name} → ${result.slice(0, 150)}`);
-        toolResults.push({ type: "tool_result", tool_use_id: tb.id, content: result });
-      }
-
-      // Feed results back to Claude for next reasoning step
-      messages.push({ role: "user", content: toolResults });
-      toolTurns++;
+      const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === "text");
+      return textBlock?.text ?? "抱歉，无法生成回复。";
     }
-
-    return "抱歉，工具调用次数超过上限，请换个方式提问。";
   }
 
-  // ── Codex ────────────────────────────────────────────────────────────────────
-
-  private async runCodex(
+  /** Codex provider session */
+  private async runCodexSession(
     system: string,
     history: ConvMessage[],
     userText: string,
@@ -2510,6 +1768,181 @@ class DingtalkConnection {
       }
     }
     return textParts.join("").trim() || "抱歉，无法生成回复。";
+  }
+
+  /** File upload and send via DingTalk — extracted from old ToolRegistry send_file */
+  private async doSendFile(filePath: string, msg: DingtalkMessage): Promise<string> {
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+    const path = await import("path");
+    const fs = await import("fs");
+
+    if (!filePath || !fs.existsSync(filePath)) return `文件不存在: ${filePath}`;
+
+    const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+    const mediaType: "image" | "voice" | "video" | "file" =
+      ["jpg", "jpeg", "png", "gif", "bmp"].includes(ext) ? "image" :
+      ["mp3", "amr", "wav"].includes(ext) ? "voice" :
+      ["mp4", "avi", "mov"].includes(ext) ? "video" : "file";
+
+    const SIZE_LIMITS: Record<string, number> = {
+      image: 20 * 1024 * 1024,
+      voice: 2 * 1024 * 1024,
+      video: 20 * 1024 * 1024,
+      file: 20 * 1024 * 1024,
+    };
+
+    const tempFiles: string[] = [];
+    const cleanup = () => {
+      const toDelete = filePath.includes("vk-shot-") ? [filePath, ...tempFiles] : tempFiles;
+      for (const f of toDelete) {
+        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
+      }
+    };
+
+    let sendPath = filePath;
+    const stat = fs.statSync(filePath);
+    const limit = SIZE_LIMITS[mediaType];
+
+    if (stat.size > limit) {
+      const os2 = await import("os");
+      const sizeMB = (stat.size / 1024 / 1024).toFixed(1);
+
+      if (mediaType === "image") {
+        const compressedPath = path.join(os2.tmpdir(), `vk-compressed-${Date.now()}.jpg`);
+        tempFiles.push(compressedPath);
+        try {
+          if (process.platform === "darwin") {
+            await execAsync(`sips -s format jpeg -s formatOptions 70 -Z 2000 "${filePath}" --out "${compressedPath}"`);
+          } else {
+            await execAsync(`convert "${filePath}" -resize 2000x2000> -quality 70 "${compressedPath}"`);
+          }
+          const newStat = fs.statSync(compressedPath);
+          if (newStat.size <= limit) {
+            console.log(`[DingTalk] Image compressed: ${sizeMB}MB → ${(newStat.size / 1024 / 1024).toFixed(1)}MB`);
+            sendPath = compressedPath;
+          } else {
+            cleanup();
+            return `图片压缩后仍超过 20MB（${(newStat.size / 1024 / 1024).toFixed(1)}MB），建议先裁剪或降低分辨率。`;
+          }
+        } catch {
+          cleanup();
+          return `图片 ${sizeMB}MB 超过 20MB 限制，压缩失败，请先手动压缩。`;
+        }
+      } else if (mediaType === "voice") {
+        cleanup();
+        return `语音文件 ${sizeMB}MB 超过 2MB 限制，请裁剪后再发。`;
+      } else {
+        const zipPath = path.join(
+          (await import("os")).tmpdir(),
+          `vk-${path.basename(filePath)}-${Date.now()}.zip`,
+        );
+        tempFiles.push(zipPath);
+        try {
+          await execAsync(`cd "${path.dirname(filePath)}" && zip "${zipPath}" "${path.basename(filePath)}"`);
+          const zipStat = fs.statSync(zipPath);
+          if (zipStat.size <= SIZE_LIMITS.file) {
+            console.log(`[DingTalk] File zipped: ${sizeMB}MB → ${(zipStat.size / 1024 / 1024).toFixed(1)}MB`);
+            sendPath = zipPath;
+          } else {
+            cleanup();
+            return `文件 ${sizeMB}MB 压缩后仍超过 20MB，建议用网盘分享链接代替，或通过 bash 上传 OSS 后发链接。`;
+          }
+        } catch {
+          cleanup();
+          return `文件 ${sizeMB}MB 超过 20MB 限制，且 zip 压缩失败，建议改用网盘分享。`;
+        }
+      }
+    }
+
+    // Upload to DingTalk media server (V1 API — requires V1 token)
+    const sendExt = sendPath.split(".").pop()?.toLowerCase() ?? ext;
+    const sendMediaType: "image" | "voice" | "video" | "file" =
+      ["jpg", "jpeg", "png", "gif", "bmp"].includes(sendExt) ? "image" :
+      ["mp3", "amr", "wav"].includes(sendExt) ? "voice" :
+      ["mp4", "avi", "mov"].includes(sendExt) ? "video" : "file";
+
+    const mediaId = await uploadMediaV1(this.opts.appKey, this.opts.appSecret, sendPath, sendMediaType);
+    if (!mediaId) {
+      cleanup();
+      return `媒体上传失败，请检查应用权限（oapi.dingtalk.com）`;
+    }
+
+    // Try sessionWebhook first
+    const webhookExpired = msg.sessionWebhookExpiredTime && Date.now() > msg.sessionWebhookExpiredTime;
+    if (!webhookExpired && msg.sessionWebhook) {
+      try {
+        const webhookToken = await getAccessToken(this.opts.appKey, this.opts.appSecret);
+        const body = sendMediaType === "image"
+          ? { msgtype: "image", image: { media_id: mediaId } }
+          : sendMediaType === "voice"
+          ? { msgtype: "voice", voice: { media_id: mediaId, duration: 1 } }
+          : { msgtype: "file", file: { media_id: mediaId } };
+
+        const resp = await fetch(msg.sessionWebhook, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-acs-dingtalk-access-token": webhookToken,
+          },
+          body: JSON.stringify(body),
+        });
+        const respText = await resp.text();
+        if (resp.ok) {
+          console.log(`[DingTalk][send_file] webhook ok: ${path.basename(sendPath)}`);
+          cleanup();
+          return `文件已发送: ${path.basename(sendPath)}`;
+        }
+        console.error(`[DingTalk][send_file] webhook fail (${resp.status}): ${respText}`);
+      } catch (err) {
+        console.error("[DingTalk][send_file] webhook error:", err);
+      }
+    }
+
+    // Fallback: proactive API
+    const robotCode = this.opts.robotCode ?? this.opts.appKey;
+    const sender = msg.senderStaffId ?? msg.senderId ?? "";
+    const isGroup = msg.conversationType === "2";
+    const resolvedTarget = resolveOriginalPeerId(sender || msg.conversationId || "");
+    const apiUrl = isGroup
+      ? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
+      : `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
+
+    const fileName = path.basename(filePath);
+    const fileExt = ext || "bin";
+    let msgKey: string;
+    let msgParam: string;
+    if (sendMediaType === "voice") {
+      msgKey = "sampleAudio";
+      msgParam = JSON.stringify({ mediaId, duration: "1" });
+    } else if (sendMediaType === "image") {
+      msgKey = "sampleImageMsg";
+      msgParam = JSON.stringify({ photoURL: mediaId });
+    } else {
+      msgKey = "sampleFile";
+      msgParam = JSON.stringify({ mediaId, fileName, fileType: fileExt });
+    }
+
+    const payload: Record<string, unknown> = { robotCode, msgKey, msgParam };
+    if (isGroup) payload.openConversationId = resolvedTarget;
+    else payload.userIds = [resolvedTarget];
+
+    try {
+      const token = await getAccessToken(this.opts.appKey, this.opts.appSecret);
+      const resp = await fetch(apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-acs-dingtalk-access-token": token },
+        body: JSON.stringify(payload),
+      });
+      const respText = await resp.text();
+      cleanup();
+      if (resp.ok) return `文件已发送: ${path.basename(sendPath)}`;
+      return `发送失败 (HTTP ${resp.status}): ${respText.slice(0, 200)}`;
+    } catch (err) {
+      cleanup();
+      return `发送异常: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   // ── Persist reply ────────────────────────────────────────────────────────────

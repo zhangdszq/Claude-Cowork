@@ -1,8 +1,16 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
-import { app, BrowserWindow } from "electron";
+import { app } from "electron";
+import type { ClientEvent } from "../types.js";
+import { loadAssistantsConfig } from "./assistants-config.js";
 
 // Types
+export interface ScheduledTaskHookFilter {
+  assistantId?: string;
+  titlePattern?: string;
+  onlyOnError?: boolean;
+}
+
 export interface ScheduledTask {
   id: string;
   name: string;
@@ -13,7 +21,7 @@ export interface ScheduledTask {
   skillPath?: string;
   assistantId?: string;
   // Schedule configuration
-  scheduleType: "once" | "interval" | "daily";
+  scheduleType: "once" | "interval" | "daily" | "heartbeat" | "hook";
   // For "once" type
   scheduledTime?: string;  // ISO date string
   // For "interval" type
@@ -22,6 +30,12 @@ export interface ScheduledTask {
   // For "daily" type — fixed clock time, optional day-of-week filter
   dailyTime?: string;    // "HH:MM"
   dailyDays?: number[];  // 0=Sun…6=Sat; empty = every day
+  // For "heartbeat" type — periodic self-check
+  heartbeatInterval?: number;  // minutes, default 30
+  suppressIfShort?: boolean;   // hide session if response < 80 chars or contains <no-action>
+  // For "hook" type — triggered by internal events, not time-based
+  hookEvent?: "startup" | "session.complete";
+  hookFilter?: ScheduledTaskHookFilter;
   lastRun?: string;  // ISO date string
   nextRun?: string;  // ISO date string
   // Metadata
@@ -31,6 +45,14 @@ export interface ScheduledTask {
 
 export interface SchedulerState {
   tasks: ScheduledTask[];
+}
+
+// ─── SessionRunner injection ──────────────────────────────────
+type SessionRunner = (event: ClientEvent) => Promise<void>;
+let sessionRunner: SessionRunner | null = null;
+
+export function setSchedulerSessionRunner(fn: SessionRunner): void {
+  sessionRunner = fn;
 }
 
 // File path
@@ -118,6 +140,9 @@ export function deleteScheduledTask(id: string): boolean {
 export function calculateNextRun(task: ScheduledTask): string | undefined {
   if (!task.enabled) return undefined;
   
+  // Hook tasks are event-driven, not time-based
+  if (task.scheduleType === "hook") return undefined;
+
   const now = new Date();
   
   if (task.scheduleType === "once") {
@@ -126,6 +151,15 @@ export function calculateNextRun(task: ScheduledTask): string | undefined {
     return scheduled > now ? task.scheduledTime : undefined;
   }
   
+  if (task.scheduleType === "heartbeat") {
+    const intervalMinutes = task.heartbeatInterval ?? 30;
+    const lastRun = task.lastRun ? new Date(task.lastRun) : now;
+    const nextRun = new Date(lastRun.getTime() + intervalMinutes * 60 * 1000);
+    return nextRun <= now
+      ? new Date(now.getTime() + intervalMinutes * 60 * 1000).toISOString()
+      : nextRun.toISOString();
+  }
+
   if (task.scheduleType === "interval") {
     if (!task.intervalValue || !task.intervalUnit) return undefined;
     
@@ -200,15 +234,74 @@ export function calculateNextRun(task: ScheduledTask): string | undefined {
   return undefined;
 }
 
-// Scheduler manager
-let schedulerInterval: NodeJS.Timeout | null = null;
-let mainWindow: BrowserWindow | null = null;
+// ─── Run a single scheduled task via sessionRunner ───────────
+function runScheduledTask(task: ScheduledTask): void {
+  // Update last run time
+  updateScheduledTask(task.id, { lastRun: new Date().toISOString() });
+  
+  // For "once" tasks, disable after running
+  if (task.scheduleType === "once") {
+    updateScheduledTask(task.id, { enabled: false });
+  }
 
-export function setSchedulerWindow(window: BrowserWindow) {
-  mainWindow = window;
+  if (!sessionRunner) {
+    console.warn(`[Scheduler] sessionRunner not set, cannot run task: ${task.name}`);
+    return;
+  }
+
+  // Look up assistant config to get skills, persona, provider, model
+  const config = loadAssistantsConfig();
+  const assistant = task.assistantId
+    ? config.assistants.find(a => a.id === task.assistantId)
+    : config.assistants.find(a => a.id === config.defaultAssistantId) ?? config.assistants[0];
+
+  const isHeartbeat = task.scheduleType === "heartbeat";
+  const title = isHeartbeat
+    ? `[心跳] ${task.name}`
+    : `定时任务: ${task.name}`;
+
+  sessionRunner({
+    type: "session.start",
+    payload: {
+      title,
+      prompt: task.prompt,
+      cwd: task.cwd || assistant?.defaultCwd,
+      assistantId: assistant?.id,
+      assistantSkillNames: assistant?.skillNames ?? [],
+      assistantPersona: assistant?.persona,
+      provider: assistant?.provider ?? "claude",
+      model: assistant?.model,
+    },
+  }).catch(e => console.error(`[Scheduler] Failed to start session for task "${task.name}":`, e));
 }
 
-export function startScheduler() {
+// ─── Run hook tasks triggered by an internal event ───────────
+export function runHookTasks(
+  hookEvent: "startup" | "session.complete",
+  context?: { assistantId?: string; status?: string }
+): void {
+  if (!sessionRunner) return;
+
+  const tasks = loadScheduledTasks().filter(
+    t => t.enabled && t.scheduleType === "hook" && t.hookEvent === hookEvent
+  );
+
+  for (const task of tasks) {
+    const f = task.hookFilter;
+    if (f?.assistantId && context?.assistantId !== f.assistantId) continue;
+    if (f?.onlyOnError && context?.status !== "error") continue;
+    if (f?.titlePattern) {
+      // titlePattern filter is checked in ipc-handlers where we have the session title
+    }
+    console.log(`[Scheduler] Running hook task "${task.name}" for event: ${hookEvent}`);
+    runScheduledTask(task);
+  }
+}
+
+// ─── Scheduler loop ──────────────────────────────────────────
+let schedulerInterval: NodeJS.Timeout | null = null;
+
+export function startScheduler(): void {
   if (schedulerInterval) return;
   
   console.log("[Scheduler] Starting scheduler...");
@@ -222,7 +315,7 @@ export function startScheduler() {
   checkAndRunTasks();
 }
 
-export function stopScheduler() {
+export function stopScheduler(): void {
   if (schedulerInterval) {
     clearInterval(schedulerInterval);
     schedulerInterval = null;
@@ -230,44 +323,21 @@ export function stopScheduler() {
   }
 }
 
-function checkAndRunTasks() {
+function checkAndRunTasks(): void {
   const tasks = loadScheduledTasks();
   const now = new Date();
   
   for (const task of tasks) {
+    // Hook tasks are event-driven, skip in time-based loop
+    if (task.scheduleType === "hook") continue;
     if (!task.enabled || !task.nextRun) continue;
     
     const nextRun = new Date(task.nextRun);
     
-    // If it's time to run (within 1 minute window)
     if (nextRun <= now) {
-      console.log(`[Scheduler] Running task: ${task.name}`);
+      console.log(`[Scheduler] Running task: ${task.name} (${task.scheduleType})`);
       runScheduledTask(task);
     }
-  }
-}
-
-function runScheduledTask(task: ScheduledTask) {
-  // Update last run time
-  const updatedTask = updateScheduledTask(task.id, {
-    lastRun: new Date().toISOString(),
-  });
-  
-  // For "once" tasks, disable after running
-  if (task.scheduleType === "once") {
-    updateScheduledTask(task.id, { enabled: false });
-  }
-  
-  // Send event to renderer to start the session
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("scheduler:run-task", {
-      taskId: task.id,
-      name: task.name,
-      prompt: task.prompt,
-      cwd: task.cwd,
-      skillPath: task.skillPath,
-      assistantId: task.assistantId,
-    });
   }
 }
 

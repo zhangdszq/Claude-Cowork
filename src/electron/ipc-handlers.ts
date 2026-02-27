@@ -18,6 +18,7 @@ import { app } from 'electron';
 import { join } from 'path';
 import { existsSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
+import { loadScheduledTasks, runHookTasks } from './libs/scheduler.js';
 
 // Local session store for persistence (SQLite)
 const DB_PATH = join(app.getPath('userData'), 'sessions.db');
@@ -86,6 +87,48 @@ function emit(event: ServerEvent) {
   if (event.type === 'session.status' && 'payload' in event) {
     const { sessionId, status } = event.payload as { sessionId: string; status: string };
     sessions.updateSession(sessionId, { status: status as any });
+
+    // When a session finishes, check for heartbeat suppression and hook triggers
+    if (status === 'idle' || status === 'error') {
+      const session = sessions.getSession(sessionId);
+
+      // ── Heartbeat suppression ──────────────────────────────
+      // If this is a heartbeat session, check if the response was trivial
+      if (session?.title?.startsWith('[心跳]') && (session as any).suppressIfShort !== false) {
+        try {
+          const history = sessions.getSessionHistory(sessionId);
+          const assistantMessages = (history?.messages ?? []).filter(
+            (m: any) => m.type === 'assistant'
+          );
+          const lastAssistant = assistantMessages[assistantMessages.length - 1] as any;
+          const text: string = lastAssistant?.message?.content
+            ?.filter((c: any) => c.type === 'text')
+            ?.map((c: any) => String(c.text))
+            ?.join('') ?? '';
+
+          if (text.length < 80 || text.includes('<no-action>')) {
+            sessions.updateSession(sessionId, { hidden: true });
+            // Notify frontend to remove this session from its list
+            broadcast({ type: 'session.deleted', payload: { sessionId } });
+            return; // Skip the normal broadcast of session.status
+          }
+        } catch (e) {
+          console.warn('[IPC] Heartbeat suppression check failed:', e);
+        }
+      }
+
+      // ── session.complete hook triggers ────────────────────
+      setImmediate(() => {
+        try {
+          runHookTasks('session.complete', {
+            assistantId: session?.assistantId,
+            status,
+          });
+        } catch (e) {
+          console.warn('[IPC] session.complete hook error:', e);
+        }
+      });
+    }
   }
   if (event.type === 'stream.message' && 'payload' in event) {
     const { sessionId, message } = event.payload as { sessionId: string; message: any };

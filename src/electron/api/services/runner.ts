@@ -1,4 +1,5 @@
 import { query, type SDKMessage, type PermissionResult, unstable_v2_prompt, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
+import { createSharedMcpServer } from '../../libs/shared-mcp.js';
 import {
   Codex,
   type ThreadEvent,
@@ -208,6 +209,7 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
         includePartialMessages: true,
         allowDangerouslySkipPermissions: true,
         settingSources: ['user', 'project', 'local'],
+        mcpServers: { 'vk-shared': createSharedMcpServer() },
         canUseTool: async (toolName, input, { signal, toolUseID }) => {
           // For AskUserQuestion, we need to wait for user response
           if (toolName === 'AskUserQuestion') {

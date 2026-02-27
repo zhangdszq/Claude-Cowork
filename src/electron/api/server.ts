@@ -14,7 +14,10 @@ import { agentRoutes } from './routes/agent.js';
 import { healthRoutes } from './routes/health.js';
 import { sessionRoutes } from './routes/session.js';
 import { memoryRoutes } from './routes/memory.js';
+import { webhookRoutes, setWebhookSessionRunner } from './routes/webhook.js';
 import { initSessionStore, shutdownSessionStore } from './services/session.js';
+
+export { setWebhookSessionRunner };
 
 const honoApp = new Hono();
 
@@ -31,17 +34,19 @@ honoApp.route('/health', healthRoutes);
 honoApp.route('/agent', agentRoutes);
 honoApp.route('/session', sessionRoutes);
 honoApp.route('/memory', memoryRoutes);
+honoApp.route('/webhook', webhookRoutes);
 
 // Root endpoint
 honoApp.get('/', (c) => {
   return c.json({
     name: 'AI Team API (Embedded)',
-    version: '0.0.3',
+    version: '0.0.4',
     endpoints: {
       health: '/health',
       agent: '/agent',
       session: '/session',
       memory: '/memory',
+      webhook: '/webhook/:assistantId',
     },
   });
 });

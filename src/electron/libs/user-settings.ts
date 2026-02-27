@@ -17,6 +17,8 @@ export interface UserSettings {
   proxyUrl?: string;  // e.g., http://127.0.0.1:7890 or socks5://127.0.0.1:1080
   // OpenAI Codex OAuth tokens
   openaiTokens?: OpenAITokens;
+  // Webhook auth token — set to require Authorization: Bearer <token> on /webhook routes
+  webhookToken?: string;
 }
 
 const SETTINGS_FILE = join(app.getPath("userData"), "user-settings.json");

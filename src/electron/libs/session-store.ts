@@ -20,6 +20,7 @@ export type Session = {
   model?: string;
   assistantId?: string;
   assistantSkillNames?: string[];
+  hidden?: boolean;
   pendingPermissions: Map<string, PendingPermission>;
   abortController?: AbortController;
 };
@@ -36,6 +37,7 @@ export type StoredSession = {
   model?: string;
   assistantId?: string;
   assistantSkillNames?: string[];
+  hidden?: boolean;
   createdAt: number;
   updatedAt: number;
 };
@@ -113,8 +115,9 @@ export class SessionStore {
   listSessions(): StoredSession[] {
     const rows = this.db
       .prepare(
-        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, created_at, updated_at
+        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, hidden, created_at, updated_at
          from sessions
+         where hidden is null or hidden = 0
          order by updated_at desc`
       )
       .all() as Array<Record<string, unknown>>;
@@ -130,6 +133,7 @@ export class SessionStore {
       model: row.model ? String(row.model) : undefined,
       assistantId: row.assistant_id ? String(row.assistant_id) : undefined,
       assistantSkillNames: parseSkillNames(row.assistant_skill_names),
+      hidden: Boolean(row.hidden),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at)
     }));
@@ -233,6 +237,7 @@ export class SessionStore {
       model: "model",
       assistantId: "assistant_id",
       assistantSkillNames: "assistant_skill_names",
+      hidden: "hidden",
     } as const;
 
     for (const key of Object.keys(updates) as Array<keyof typeof updatable>) {
@@ -242,6 +247,8 @@ export class SessionStore {
       const value = updates[key];
       if (key === "assistantSkillNames") {
         values.push(value === undefined ? null : JSON.stringify(value));
+      } else if (key === "hidden") {
+        values.push(value === undefined ? null : (value ? 1 : 0));
       } else {
         values.push(value === undefined ? null : (value as string));
       }
@@ -280,6 +287,7 @@ export class SessionStore {
     try { this.db.exec(`alter table sessions add column model text`); } catch { /* already exists */ }
     try { this.db.exec(`alter table sessions add column assistant_id text`); } catch { /* already exists */ }
     try { this.db.exec(`alter table sessions add column assistant_skill_names text`); } catch { /* already exists */ }
+    try { this.db.exec(`alter table sessions add column hidden integer default 0`); } catch { /* already exists */ }
     this.db.exec(
       `create table if not exists messages (
         id text primary key,
@@ -295,7 +303,7 @@ export class SessionStore {
   private loadSessions(): void {
     const rows = this.db
       .prepare(
-        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names
+        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, hidden
          from sessions`
       )
       .all();
@@ -312,6 +320,7 @@ export class SessionStore {
         model: row.model ? String(row.model) : undefined,
         assistantId: row.assistant_id ? String(row.assistant_id) : undefined,
         assistantSkillNames: parseSkillNames(row.assistant_skill_names),
+        hidden: Boolean(row.hidden),
         pendingPermissions: new Map()
       };
       this.sessions.set(session.id, session);

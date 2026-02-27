@@ -11,158 +11,18 @@
  * - Message deduplication
  */
 import * as lark from "@larksuiteoapi/node-sdk";
-import Anthropic from "@anthropic-ai/sdk";
 import { Codex, type CodexOptions, type ThreadOptions } from "@openai/codex-sdk";
+import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 import { EventEmitter } from "events";
+import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
 import { buildSmartMemoryContext, appendDailyMemory } from "./memory-store.js";
+import { getEnhancedEnv, getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
-
-// ─── Tool Registry (mirrors DingTalk) ─────────────────────────────────────────
-
-interface ToolContext {
-  senderId: string;
-  chatId: string;
-  messageId: string;
-  sendProgress: (text: string) => Promise<void>;
-}
-
-interface ToolEntry {
-  schema: Anthropic.Tool;
-  hint: string;
-  execute: (input: Record<string, unknown>, ctx: ToolContext) => Promise<string>;
-}
-
-class ToolRegistry {
-  private entries = new Map<string, ToolEntry>();
-
-  register(entry: ToolEntry): this {
-    this.entries.set(entry.schema.name, entry);
-    return this;
-  }
-
-  get schemas(): Anthropic.Tool[] {
-    return [...this.entries.values()].map((e) => e.schema);
-  }
-
-  get toolHint(): string {
-    if (this.entries.size === 0) return "";
-    return [
-      "## 可用工具",
-      "你可以调用以下工具完成用户请求，无需询问，直接执行：",
-      ...[...this.entries.values()].map((e) => `- **${e.schema.name}** — ${e.hint}`),
-      "",
-      "工具调用流程示例：截图 → take_screenshot → 得到路径 → send_file 发送",
-    ].join("\n");
-  }
-
-  async run(
-    name: string,
-    input: Record<string, unknown>,
-    ctx: ToolContext,
-  ): Promise<string> {
-    const entry = this.entries.get(name);
-    if (!entry) return `未知工具: ${name}`;
-    return entry.execute(input, ctx);
-  }
-}
-
-// ─── Web utilities ─────────────────────────────────────────────────────────────
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
-
-async function webFetch(url: string, maxChars = 8_000): Promise<string> {
-  const resp = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
-  const contentType = resp.headers.get("content-type") ?? "";
-  const text = await resp.text();
-  return contentType.includes("text/html") ? stripHtml(text).slice(0, maxChars) : text.slice(0, maxChars);
-}
-
-async function webSearch(query: string, maxResults = 5): Promise<string> {
-  try {
-    const iaUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const resp = await fetch(iaUrl, {
-      headers: { "User-Agent": "VK-Cowork-Bot/1.0" },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (resp.ok) {
-      const data = (await resp.json()) as {
-        AbstractText?: string;
-        AbstractURL?: string;
-        Answer?: string;
-        Results?: Array<{ Text?: string; FirstURL?: string }>;
-        RelatedTopics?: Array<{ Text?: string; FirstURL?: string }>;
-      };
-      const parts: string[] = [];
-      if (data.Answer) parts.push(`**答案**: ${data.Answer}`);
-      if (data.AbstractText) {
-        parts.push(`**摘要**: ${data.AbstractText}`);
-        if (data.AbstractURL) parts.push(`来源: ${data.AbstractURL}`);
-      }
-      const results = data.Results?.slice(0, maxResults) ?? [];
-      if (results.length > 0) {
-        parts.push("\n**搜索结果**:");
-        for (const r of results) {
-          if (r.Text && r.FirstURL) parts.push(`- ${r.Text.slice(0, 200)}\n  ${r.FirstURL}`);
-        }
-      }
-      if (parts.length > 0) return parts.join("\n");
-    }
-  } catch {
-    // fall through
-  }
-
-  const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const resp = await fetch(searchUrl, {
-    headers: { "User-Agent": "Mozilla/5.0 AppleWebKit/537.36" },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!resp.ok) throw new Error(`Search failed: HTTP ${resp.status}`);
-  const html = await resp.text();
-  const titleRe = /<a class="result__a"[^>]*>([\s\S]*?)<\/a>/g;
-  const snippetRe = /<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
-  const urlRe = /uddg=([^&"]+)/g;
-  const titles: string[] = [];
-  const snippets: string[] = [];
-  const urls: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = titleRe.exec(html)) !== null) titles.push(stripHtml(m[1]).slice(0, 120));
-  while ((m = snippetRe.exec(html)) !== null) snippets.push(stripHtml(m[1]).slice(0, 250));
-  while ((m = urlRe.exec(html)) !== null) {
-    try { urls.push(decodeURIComponent(m[1])); } catch { urls.push(m[1]); }
-  }
-  const count = Math.min(maxResults, titles.length);
-  if (count === 0) return `未找到"${query}"相关结果。`;
-  const results: string[] = [];
-  for (let i = 0; i < count; i++) {
-    results.push(`**${i + 1}. ${titles[i]}**${snippets[i] ? `\n${snippets[i]}` : ""}${urls[i] ? `\n${urls[i]}` : ""}`);
-  }
-  return `搜索"${query}"结果：\n\n${results.join("\n\n")}`;
-}
+import { createSharedMcpServer } from "./shared-mcp.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -309,11 +169,20 @@ async function updateBotSessionTitle(sessionId: string, firstMessage: string): P
   sessionStore?.updateSession(sessionId, { title: `[飞书] ${title}` });
 }
 
-// ─── Anthropic client cache ────────────────────────────────────────────────────
+// ─── Claude session ID registry (for query() resume) ─────────────────────────
 
-const anthropicClients = new Map<string, { client: Anthropic; apiKey: string; baseURL: string }>();
+const botClaudeSessionIds = new Map<string, string>();
 
-function getAnthropicClient(assistantId: string): Anthropic {
+function getBotClaudeSessionId(assistantId: string): string | undefined {
+  return botClaudeSessionIds.get(assistantId);
+}
+
+function setBotClaudeSessionId(assistantId: string, sessionId: string): void {
+  botClaudeSessionIds.set(assistantId, sessionId);
+}
+
+/** Build env vars for query() — includes user's API key from settings */
+function buildQueryEnv(): Record<string, string | undefined> {
   const settings = loadUserSettings();
   const apiKey =
     settings.anthropicAuthToken ||
@@ -321,12 +190,12 @@ function getAnthropicClient(assistantId: string): Anthropic {
     process.env.ANTHROPIC_AUTH_TOKEN ||
     "";
   const baseURL = settings.anthropicBaseUrl || "";
-  const cached = anthropicClients.get(assistantId);
-  if (cached && cached.apiKey === apiKey && cached.baseURL === baseURL) return cached.client;
-  if (!apiKey) throw new Error("未配置 Anthropic API Key，请在设置中填写。");
-  const client = new Anthropic({ apiKey, baseURL: baseURL || undefined });
-  anthropicClients.set(assistantId, { client, apiKey, baseURL });
-  return client;
+
+  return {
+    ...getEnhancedEnv(),
+    ...(apiKey ? { ANTHROPIC_API_KEY: apiKey, ANTHROPIC_AUTH_TOKEN: apiKey } : {}),
+    ...(baseURL ? { ANTHROPIC_BASE_URL: baseURL } : {}),
+  };
 }
 
 // ─── FeishuConnection ──────────────────────────────────────────────────────────
@@ -339,7 +208,6 @@ class FeishuConnection {
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private inflight = new Set<string>();
-  private tools!: ToolRegistry;
 
   constructor(private opts: FeishuBotOptions) {
     const domain = opts.domain === "lark" ? lark.Domain.Lark : lark.Domain.Feishu;
@@ -348,7 +216,6 @@ class FeishuConnection {
       appSecret: opts.appSecret,
       domain,
     });
-    this.tools = this.initTools();
   }
 
   async start(): Promise<void> {
@@ -579,24 +446,15 @@ class FeishuConnection {
 - 禁止把工具调用的中间状态、路径、API 返回值等细节写进最终回复
 - 如果任务失败，简短说明原因即可，无需描述每个步骤`;
 
-    const system = [basePersona, outputRules, memoryContext, this.tools.toolHint]
-      .filter(Boolean)
-      .join("\n\n");
-
-    const ctx: ToolContext = {
-      senderId,
-      chatId,
-      messageId,
-      sendProgress: (text: string) => this.sendReply(messageId, chatId, text).catch(() => {}),
-    };
+    const system = [basePersona, outputRules, memoryContext].filter(Boolean).join("\n\n");
 
     let replyText: string;
 
     try {
       if (provider === "codex") {
-        replyText = await this.runCodex(system, history, userText);
+        replyText = await this.runCodexSession(system, history, userText);
       } else {
-        replyText = await this.runClaude(system, history, userText, ctx);
+        replyText = await this.runClaudeQuery(system, userText, messageId, chatId);
       }
     } catch (err) {
       console.error("[Feishu] AI error:", err);
@@ -609,73 +467,73 @@ class FeishuConnection {
     await this.sendReply(messageId, chatId, replyText);
   }
 
-  // ── Claude ────────────────────────────────────────────────────────────────────
-
-  private async runClaude(
+  /** Claude query() path via Agent SDK with shared MCP + per-session MCP */
+  private async runClaudeQuery(
     system: string,
-    history: ConvMessage[],
     userText: string,
-    ctx: ToolContext,
+    messageId: string,
+    chatId: string,
   ): Promise<string> {
-    const client = getAnthropicClient(this.opts.assistantId);
-    const model = this.opts.model || "claude-opus-4-5";
+    const sessionMcp = this.createSessionMcp(messageId, chatId);
+    const sharedMcp = createSharedMcpServer();
+    const claudeSessionId = getBotClaudeSessionId(this.opts.assistantId);
+    const claudeCodePath = getClaudeCodePath();
 
-    const messages: Anthropic.MessageParam[] = history.slice(0, -1).map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
-    messages.push({ role: "user", content: userText });
+    let finalText = "";
+    const q = query({
+      prompt: userText,
+      options: {
+        systemPrompt: system,
+        resume: claudeSessionId,
+        cwd: this.opts.defaultCwd ?? homedir(),
+        mcpServers: { "vk-shared": sharedMcp, "fs-session": sessionMcp },
+        allowDangerouslySkipPermissions: true,
+        pathToClaudeCodeExecutable: claudeCodePath,
+        env: buildQueryEnv(),
+      },
+    });
 
-    const toolSchemas = this.tools.schemas;
-    const MAX_TOOL_TURNS = 8;
-    let toolTurns = 0;
-
-    while (toolTurns < MAX_TOOL_TURNS) {
-      const response = await client.messages.create({
-        model,
-        max_tokens: 4096,
-        system,
-        messages,
-        tools: toolSchemas.length > 0 ? toolSchemas : undefined,
-      });
-
-      const toolUseBlocks = response.content.filter(
-        (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
-      );
-
-      if (toolUseBlocks.length === 0 || response.stop_reason !== "tool_use") {
-        const textBlock = response.content.find(
-          (b): b is Anthropic.TextBlock => b.type === "text",
-        );
-        return textBlock?.text ?? "抱歉，无法生成回复。";
+    for await (const message of q) {
+      if (message.type === "result" && message.subtype === "success") {
+        finalText = message.result;
+        setBotClaudeSessionId(this.opts.assistantId, message.session_id);
       }
-
-      messages.push({ role: "assistant", content: response.content });
-
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-      for (const tb of toolUseBlocks) {
-        const inputPreview = JSON.stringify(tb.input).slice(0, 120);
-        console.log(`[Feishu][tool] ${tb.name}(${inputPreview})`);
-        let result: string;
-        try {
-          result = await this.tools.run(tb.name, tb.input as Record<string, unknown>, ctx);
-        } catch (err) {
-          result = `工具执行失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-        console.log(`[Feishu][tool] ${tb.name} → ${result.slice(0, 150)}`);
-        toolResults.push({ type: "tool_result", tool_use_id: tb.id, content: result });
-      }
-
-      messages.push({ role: "user", content: toolResults });
-      toolTurns++;
     }
 
-    return "抱歉，工具调用次数超过上限，请换个方式提问。";
+    return finalText || "抱歉，无法生成回复。";
   }
 
-  // ── Codex ─────────────────────────────────────────────────────────────────────
+  /** Per-session MCP server with send_message + send_file tools bound to current context */
+  private createSessionMcp(messageId: string, chatId: string) {
+    const self = this;
 
-  private async runCodex(
+    const sendMessageTool = tool(
+      "send_message",
+      "向当前飞书对话立即发送一条消息。适合在执行长任务时告知用户进度，或推送中间结果。",
+      { text: z.string().describe("要发送的消息内容") },
+      async (input) => {
+        const text = String(input.text ?? "").trim();
+        if (!text) return { content: [{ type: "text" as const, text: "消息内容为空" }] };
+        await self.sendReply(messageId, chatId, text).catch(() => {});
+        return { content: [{ type: "text" as const, text: "消息已发送" }] };
+      },
+    );
+
+    const sendFileTool = tool(
+      "send_file",
+      "通过飞书将本地文件发送给当前对话的用户。支持图片（png/jpg）、PDF、文档等。",
+      { file_path: z.string().describe("要发送的文件的完整本地路径") },
+      async (input) => {
+        const result = await self.doSendFile(String(input.file_path ?? ""), messageId, chatId);
+        return { content: [{ type: "text" as const, text: result }] };
+      },
+    );
+
+    return createSdkMcpServer({ name: "feishu-session", tools: [sendMessageTool, sendFileTool] });
+  }
+
+  /** Codex provider session */
+  private async runCodexSession(
     system: string,
     history: ConvMessage[],
     userText: string,
@@ -712,6 +570,107 @@ class FeishuConnection {
       }
     }
     return textParts.join("").trim() || "抱歉，无法生成回复。";
+  }
+
+  /** File upload and send via Feishu API */
+  private async doSendFile(filePath: string, messageId: string, chatId: string): Promise<string> {
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+    const path = await import("path");
+    const fs = await import("fs");
+    const os2 = await import("os");
+
+    if (!filePath || !fs.existsSync(filePath)) return `文件不存在: ${filePath}`;
+
+    const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+    const isImage = ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(ext);
+    const IMAGE_LIMIT = 20 * 1024 * 1024;
+
+    const tempFiles: string[] = [];
+    const cleanup = () => {
+      for (const f of tempFiles) {
+        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
+      }
+    };
+
+    let sendPath = filePath;
+    const stat = fs.statSync(filePath);
+
+    if (isImage && stat.size > IMAGE_LIMIT) {
+      const compressedPath = path.join(os2.tmpdir(), `vk-compressed-${Date.now()}.jpg`);
+      tempFiles.push(compressedPath);
+      try {
+        if (process.platform === "darwin") {
+          await execAsync(`sips -s format jpeg -s formatOptions 70 -Z 2000 "${filePath}" --out "${compressedPath}"`);
+        } else {
+          await execAsync(`convert "${filePath}" -resize 2000x2000> -quality 70 "${compressedPath}"`);
+        }
+        const newStat = fs.statSync(compressedPath);
+        if (newStat.size <= IMAGE_LIMIT) {
+          sendPath = compressedPath;
+        } else {
+          cleanup();
+          return `图片压缩后仍超过 20MB，建议先裁剪或降低分辨率。`;
+        }
+      } catch {
+        cleanup();
+        return `图片超过 20MB 限制，压缩失败，请先手动压缩。`;
+      }
+    }
+
+    try {
+      const sendExt = sendPath.split(".").pop()?.toLowerCase() ?? ext;
+      const sendIsImage = ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(sendExt);
+
+      if (sendIsImage) {
+        const imageBuffer = fs.readFileSync(sendPath);
+        const uploadResp = await this.feishuClient.im.image.create({
+          data: { image_type: "message", image: imageBuffer },
+        });
+        const imageKey = (uploadResp as Record<string, unknown>)?.image_key as string | undefined;
+        if (!imageKey) { cleanup(); return "图片上传失败（无 image_key）"; }
+
+        if (messageId) {
+          await this.feishuClient.im.message.reply({
+            path: { message_id: messageId },
+            data: { content: JSON.stringify({ image_key: imageKey }), msg_type: "image", reply_in_thread: false },
+          });
+        } else if (chatId) {
+          await this.feishuClient.im.message.create({
+            params: { receive_id_type: "chat_id" },
+            data: { receive_id: chatId, content: JSON.stringify({ image_key: imageKey }), msg_type: "image" },
+          });
+        }
+        cleanup();
+        return `图片已发送: ${path.basename(sendPath)}`;
+      } else {
+        const fileBuffer = fs.readFileSync(sendPath);
+        const fileName = path.basename(sendPath);
+        const uploadResp = await this.feishuClient.im.file.create({
+          data: { file_type: "stream", file_name: fileName, file: fileBuffer },
+        });
+        const fileKey = (uploadResp as Record<string, unknown>)?.file_key as string | undefined;
+        if (!fileKey) { cleanup(); return "文件上传失败（无 file_key）"; }
+
+        if (messageId) {
+          await this.feishuClient.im.message.reply({
+            path: { message_id: messageId },
+            data: { content: JSON.stringify({ file_key: fileKey }), msg_type: "file", reply_in_thread: false },
+          });
+        } else if (chatId) {
+          await this.feishuClient.im.message.create({
+            params: { receive_id_type: "chat_id" },
+            data: { receive_id: chatId, content: JSON.stringify({ file_key: fileKey }), msg_type: "file" },
+          });
+        }
+        cleanup();
+        return `文件已发送: ${fileName}`;
+      }
+    } catch (err) {
+      cleanup();
+      return `发送失败: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   // ── Persist reply ─────────────────────────────────────────────────────────────
@@ -772,381 +731,4 @@ class FeishuConnection {
     }
   }
 
-  // ── Tool registry factory ─────────────────────────────────────────────────────
-
-  private initTools(): ToolRegistry {
-    const registry = new ToolRegistry();
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-
-    // ── take_screenshot ─────────────────────────────────────────────────────
-    registry.register({
-      hint: "截取当前桌面截图，返回临时文件路径（之后用 send_file 发送）",
-      schema: {
-        name: "take_screenshot",
-        description: "截取当前桌面屏幕截图。返回截图的临时文件路径，之后可用 send_file 发送给用户。",
-        input_schema: { type: "object" as const, properties: {}, required: [] },
-      },
-      async execute(_input, ctx) {
-        const { exec } = await import("child_process");
-        const { promisify } = await import("util");
-        const execAsync = promisify(exec);
-        const os = await import("os");
-        const path = await import("path");
-        const fs = await import("fs");
-
-        const filePath = path.join(os.tmpdir(), `vk-shot-${Date.now()}.png`);
-        await ctx.sendProgress("📸 正在截图…");
-
-        const platform = process.platform;
-        if (platform === "darwin") {
-          await execAsync(`screencapture -x "${filePath}"`);
-        } else if (platform === "win32") {
-          await execAsync(
-            `powershell -command "Add-Type -AssemblyName System.Windows.Forms; ` +
-            `$b=New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width,[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); ` +
-            `$g=[System.Drawing.Graphics]::FromImage($b); ` +
-            `$g.CopyFromScreen(0,0,0,0,$b.Size); ` +
-            `$b.Save('${filePath}')"`,
-          );
-        } else {
-          await execAsync(`gnome-screenshot -f "${filePath}" 2>/dev/null || scrot "${filePath}"`);
-        }
-        if (!fs.existsSync(filePath)) throw new Error("截图文件未生成");
-        return filePath;
-      },
-    });
-
-    // ── send_file ────────────────────────────────────────────────────────────
-    registry.register({
-      hint: "将本机文件通过飞书发送给当前用户（支持图片/文件，自动压缩超大图片）",
-      schema: {
-        name: "send_file",
-        description:
-          "通过飞书将本地文件发送给当前对话的用户。支持图片（png/jpg）、PDF、文档等。" +
-          "file_path 必须是本机可读取的完整路径。超出大小限制时会自动处理。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            file_path: { type: "string", description: "要发送的文件的完整本地路径" },
-          },
-          required: ["file_path"],
-        },
-      },
-      async execute(input, ctx) {
-        const { exec } = await import("child_process");
-        const { promisify } = await import("util");
-        const execAsync = promisify(exec);
-        const path = await import("path");
-        const fs = await import("fs");
-        const os2 = await import("os");
-
-        const filePath = String(input.file_path ?? "");
-        if (!filePath || !fs.existsSync(filePath)) return `文件不存在: ${filePath}`;
-
-        const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-        const isImage = ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(ext);
-        const IMAGE_LIMIT = 20 * 1024 * 1024;
-
-        const tempFiles: string[] = [];
-        const cleanup = () => {
-          for (const f of tempFiles) {
-            try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
-          }
-        };
-
-        let sendPath = filePath;
-        const stat = fs.statSync(filePath);
-
-        if (isImage && stat.size > IMAGE_LIMIT) {
-          const compressedPath = path.join(os2.tmpdir(), `vk-compressed-${Date.now()}.jpg`);
-          tempFiles.push(compressedPath);
-          try {
-            if (process.platform === "darwin") {
-              await execAsync(
-                `sips -s format jpeg -s formatOptions 70 -Z 2000 "${filePath}" --out "${compressedPath}"`,
-              );
-            } else {
-              await execAsync(
-                `convert "${filePath}" -resize 2000x2000> -quality 70 "${compressedPath}"`,
-              );
-            }
-            const newStat = fs.statSync(compressedPath);
-            if (newStat.size <= IMAGE_LIMIT) {
-              sendPath = compressedPath;
-            } else {
-              cleanup();
-              return `图片压缩后仍超过 20MB，建议先裁剪或降低分辨率。`;
-            }
-          } catch {
-            cleanup();
-            return `图片超过 20MB 限制，压缩失败，请先手动压缩。`;
-          }
-        }
-
-        try {
-          const sendExt = sendPath.split(".").pop()?.toLowerCase() ?? ext;
-          const sendIsImage = ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(sendExt);
-
-          if (sendIsImage) {
-            const imageBuffer = fs.readFileSync(sendPath);
-            const uploadResp = await self.feishuClient.im.image.create({
-              data: {
-                image_type: "message",
-                image: imageBuffer,
-              },
-            });
-            const imageKey = (uploadResp as Record<string, unknown>)?.image_key as string | undefined;
-            if (!imageKey) {
-              cleanup();
-              return "图片上传失败（无 image_key）";
-            }
-
-            // Send via reply
-            if (ctx.messageId) {
-              await self.feishuClient.im.message.reply({
-                path: { message_id: ctx.messageId },
-                data: {
-                  content: JSON.stringify({ image_key: imageKey }),
-                  msg_type: "image",
-                  reply_in_thread: false,
-                },
-              });
-            } else if (ctx.chatId) {
-              await self.feishuClient.im.message.create({
-                params: { receive_id_type: "chat_id" },
-                data: {
-                  receive_id: ctx.chatId,
-                  content: JSON.stringify({ image_key: imageKey }),
-                  msg_type: "image",
-                },
-              });
-            }
-            cleanup();
-            return `图片已发送: ${path.basename(sendPath)}`;
-          } else {
-            // Upload file
-            const fileBuffer = fs.readFileSync(sendPath);
-            const fileName = path.basename(sendPath);
-            const uploadResp = await self.feishuClient.im.file.create({
-              data: {
-                file_type: "stream",
-                file_name: fileName,
-                file: fileBuffer,
-              },
-            });
-            const fileKey = (uploadResp as Record<string, unknown>)?.file_key as string | undefined;
-            if (!fileKey) {
-              cleanup();
-              return "文件上传失败（无 file_key）";
-            }
-
-            if (ctx.messageId) {
-              await self.feishuClient.im.message.reply({
-                path: { message_id: ctx.messageId },
-                data: {
-                  content: JSON.stringify({ file_key: fileKey }),
-                  msg_type: "file",
-                  reply_in_thread: false,
-                },
-              });
-            } else if (ctx.chatId) {
-              await self.feishuClient.im.message.create({
-                params: { receive_id_type: "chat_id" },
-                data: {
-                  receive_id: ctx.chatId,
-                  content: JSON.stringify({ file_key: fileKey }),
-                  msg_type: "file",
-                },
-              });
-            }
-            cleanup();
-            return `文件已发送: ${fileName}`;
-          }
-        } catch (err) {
-          cleanup();
-          return `发送失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    // ── bash ─────────────────────────────────────────────────────────────────
-    registry.register({
-      hint: "在本机执行 shell 命令（查找文件、读取内容等，超时 15s）",
-      schema: {
-        name: "bash",
-        description:
-          "在本机执行 bash 命令（macOS/Linux）或 PowerShell（Windows）。" +
-          "适合：查找文件（find、ls）、读取文本（cat）、获取系统信息等。超时 15 秒，输出限 3000 字符。",
-        input_schema: {
-          type: "object" as const,
-          properties: { command: { type: "string", description: "要执行的 shell 命令" } },
-          required: ["command"],
-        },
-      },
-      async execute(input) {
-        const { exec } = await import("child_process");
-        const { promisify } = await import("util");
-        const execAsync = promisify(exec);
-        const command = String(input.command ?? "").trim();
-        if (!command) return "命令为空";
-        try {
-          const { stdout, stderr } = await execAsync(command, { timeout: 15_000 });
-          const out = (stdout + (stderr ? `\n[stderr] ${stderr}` : "")).trim();
-          return out.slice(0, 3000) || "(no output)";
-        } catch (err) {
-          const e = err as { message?: string; stderr?: string };
-          return `命令失败: ${e.message ?? ""}\n${e.stderr ?? ""}`.slice(0, 1000);
-        }
-      },
-    });
-
-    // ── send_message ──────────────────────────────────────────────────────────
-    registry.register({
-      hint: "向当前对话发送一条进度通知或中间结果消息",
-      schema: {
-        name: "send_message",
-        description:
-          "向当前飞书对话立即发送一条文本消息。适合在执行长任务时告知用户进度。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            text: { type: "string", description: "要发送的消息内容" },
-          },
-          required: ["text"],
-        },
-      },
-      async execute(input, ctx) {
-        const text = String(input.text ?? "").trim();
-        if (!text) return "消息内容为空";
-        await ctx.sendProgress(text);
-        return "消息已发送";
-      },
-    });
-
-    // ── web_fetch ─────────────────────────────────────────────────────────────
-    registry.register({
-      hint: "抓取网页 URL 内容，返回可读文本（HTML 自动清除标签）",
-      schema: {
-        name: "web_fetch",
-        description:
-          "抓取指定 URL 的内容并以纯文本返回。HTML 页面会自动清除标签，返回可读正文。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            url: { type: "string", description: "要抓取的 HTTP/HTTPS URL" },
-            max_chars: { type: "number", description: "最多返回字符数，默认 8000，最大 20000" },
-          },
-          required: ["url"],
-        },
-      },
-      async execute(input) {
-        const url = String(input.url ?? "").trim();
-        if (!url) return "URL 不能为空";
-        const maxChars = Math.min(Number(input.max_chars ?? 8_000), 20_000);
-        try {
-          return await webFetch(url, maxChars);
-        } catch (err) {
-          return `抓取失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    // ── web_search ────────────────────────────────────────────────────────────
-    registry.register({
-      hint: "用 DuckDuckGo 搜索网络，返回 top-N 结果摘要和链接",
-      schema: {
-        name: "web_search",
-        description: "通过 DuckDuckGo 搜索网络，返回 top 5 搜索结果。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            query: { type: "string", description: "搜索关键词或问题" },
-            max_results: { type: "number", description: "最多返回结果数，默认 5，最大 10" },
-          },
-          required: ["query"],
-        },
-      },
-      async execute(input) {
-        const query = String(input.query ?? "").trim();
-        if (!query) return "搜索词不能为空";
-        const maxResults = Math.min(Number(input.max_results ?? 5), 10);
-        try {
-          return await webSearch(query, maxResults);
-        } catch (err) {
-          return `搜索失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    // ── read_file ─────────────────────────────────────────────────────────────
-    registry.register({
-      hint: "读取本机文本文件内容（最多 10000 字符）",
-      schema: {
-        name: "read_file",
-        description: "读取本机上的文本文件内容并返回。最多返回 10000 字符。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            path: { type: "string", description: "文件的完整本地路径" },
-            max_chars: { type: "number", description: "最多读取字符数，默认 10000，最大 50000" },
-          },
-          required: ["path"],
-        },
-      },
-      async execute(input) {
-        const filePath = String(input.path ?? "").trim();
-        if (!filePath) return "文件路径不能为空";
-        const maxChars = Math.min(Number(input.max_chars ?? 10_000), 50_000);
-        try {
-          const fs = await import("fs");
-          if (!fs.existsSync(filePath)) return `文件不存在: ${filePath}`;
-          if (!fs.statSync(filePath).isFile()) return `路径不是文件: ${filePath}`;
-          const content = fs.readFileSync(filePath, "utf-8");
-          const truncated = content.slice(0, maxChars);
-          const suffix = content.length > maxChars ? `\n…(已截断，共 ${content.length} 字符)` : "";
-          return truncated + suffix;
-        } catch (err) {
-          return `读取失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    // ── write_file ────────────────────────────────────────────────────────────
-    registry.register({
-      hint: "将文本内容写入本机文件（可新建或覆盖，支持追加模式）",
-      schema: {
-        name: "write_file",
-        description: "将文本内容写入本机文件。父目录不存在时自动创建。",
-        input_schema: {
-          type: "object" as const,
-          properties: {
-            path: { type: "string", description: "要写入的文件完整路径" },
-            content: { type: "string", description: "要写入的文本内容" },
-            append: { type: "boolean", description: "是否追加模式，默认 false（覆盖）" },
-          },
-          required: ["path", "content"],
-        },
-      },
-      async execute(input) {
-        const filePath = String(input.path ?? "").trim();
-        const content = String(input.content ?? "");
-        const append = Boolean(input.append);
-        if (!filePath) return "文件路径不能为空";
-        try {
-          const fs = await import("fs");
-          const path = await import("path");
-          const dir = path.dirname(filePath);
-          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(filePath, content, { encoding: "utf-8", flag: append ? "a" : "w" });
-          const stat = fs.statSync(filePath);
-          return `${append ? "追加" : "写入"}成功: ${filePath}（${stat.size} 字节）`;
-        } catch (err) {
-          return `写入失败: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    });
-
-    return registry;
-  }
 }
