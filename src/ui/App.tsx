@@ -153,6 +153,9 @@ function isProcessMessage(msg: StreamMessage): boolean {
   const m = msg as any;
   if (m.type === "user_prompt" || m.type === "skill_loaded") return false;
   if (m.type === "system" || m.type === "result") return false;
+  // stream_event messages are intermediate SSE chunks — treat as process so they
+  // don't split consecutive tool-call/thinking groups into multiple ProcessGroups
+  if (m.type === "stream_event") return true;
   if (m.type === "assistant") {
     const content: any[] = m.message?.content ?? [];
     const hasText = content.some((c: any) => c.type === "text");
@@ -431,10 +434,52 @@ function App() {
         prompt: task.prompt,
         cwd: effectiveCwd,
         title: `定时任务: ${task.name}`,
+        assistantId: task.assistantId,
       });
     });
     return unsubscribe;
   }, [handleStartFromModal, cwd]);
+
+  // Send DingTalk notification when a scheduled-task session completes
+  const prevSessionStatusRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    for (const [sessionId, session] of Object.entries(sessions)) {
+      const prevStatus = prevSessionStatusRef.current[sessionId];
+      const curStatus = session.status;
+
+      if (
+        prevStatus === "running" &&
+        curStatus !== "running" &&
+        session.title?.startsWith("定时任务:") &&
+        session.assistantId
+      ) {
+        // Extract last assistant text as notification body
+        const lastAssistant = [...session.messages]
+          .reverse()
+          .find((m: any) => m.type === "assistant") as any;
+        const resultText: string =
+          lastAssistant?.message?.content
+            ?.filter((c: any) => c.type === "text")
+            ?.map((c: any) => c.text as string)
+            ?.join("\n")
+            ?.trim() || "任务已完成";
+
+        const taskName = session.title.replace(/^定时任务:\s*/, "");
+        const statusLabel = curStatus === "error" ? "执行出错" : "执行完成";
+        const notifyText = `**📋 定时任务${statusLabel}：${taskName}**\n\n${resultText}`;
+
+        window.electron.sendProactiveDingtalk({
+          assistantId: session.assistantId,
+          text: notifyText,
+          title: `定时任务${statusLabel}: ${taskName}`,
+        }).catch((err: unknown) => {
+          console.error("[Scheduler] Failed to send DingTalk notification:", err);
+        });
+      }
+
+      prevSessionStatusRef.current[sessionId] = curStatus;
+    }
+  }, [sessions]);
 
   const activeSession = activeSessionId ? sessions[activeSessionId] : undefined;
   const messages = activeSession?.messages ?? [];
@@ -824,9 +869,10 @@ function App() {
             ) : messages.length === 0 ? null : (
               // 打字机动画进行时，从列表中隐藏正在被动画展示的消息（避免重复显示）
               groupMessages(
-                animatingMsgUuid
+                (animatingMsgUuid
                   ? messages.filter(msg => (msg as any).uuid !== animatingMsgUuid)
                   : messages
+                ).filter(msg => (msg as any).type !== "stream_event")
               ).map((group, gIdx, arr) => {
                 const isLastGroup = gIdx === arr.length - 1;
                 if (group.type === "process") {

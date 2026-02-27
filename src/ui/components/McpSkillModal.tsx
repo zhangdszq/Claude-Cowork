@@ -1,47 +1,123 @@
 import { useCallback, useEffect, useState, useMemo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 
+// Skill from remote catalog JSON
+interface CatalogSkill {
+  name: string;
+  label?: string;
+  description: string;
+  category: string;
+  installPath: string;
+  tags?: string[];
+}
+
+// Merged view combining catalog + installed state
+interface ViewSkill {
+  name: string;
+  label?: string;
+  description?: string;
+  category: string;
+  installPath?: string;
+  isInstalled: boolean;
+  isLocalOnly?: boolean;
+  fullPath?: string;
+}
+
 // Skill categories with icons and colors
 const SKILL_CATEGORIES: Record<string, { icon: string; color: string; label: string }> = {
-  "development": { icon: "code", color: "text-blue-500 bg-blue-500/10", label: "开发工具" },
-  "writing": { icon: "pen", color: "text-purple-500 bg-purple-500/10", label: "写作助手" },
-  "analysis": { icon: "chart", color: "text-green-500 bg-green-500/10", label: "数据分析" },
-  "design": { icon: "palette", color: "text-pink-500 bg-pink-500/10", label: "设计创意" },
-  "productivity": { icon: "zap", color: "text-yellow-500 bg-yellow-500/10", label: "效率提升" },
-  "research": { icon: "search", color: "text-cyan-500 bg-cyan-500/10", label: "研究调查" },
-  "other": { icon: "box", color: "text-gray-500 bg-gray-500/10", label: "其他" },
+  "teaching":    { icon: "graduation", color: "text-emerald-600 bg-emerald-500/10", label: "教研专用" },
+  "picturebook": { icon: "book-open",  color: "text-rose-500 bg-rose-500/10",       label: "绘本馆专用" },
+  "video":       { icon: "video",    color: "text-red-500 bg-red-500/10",     label: "视频处理" },
+  "image":       { icon: "image",    color: "text-orange-500 bg-orange-500/10", label: "图像生成" },
+  "writing":     { icon: "pen",      color: "text-purple-500 bg-purple-500/10", label: "写作内容" },
+  "social":      { icon: "share",    color: "text-indigo-500 bg-indigo-500/10", label: "社交媒体" },
+  "document":    { icon: "file",     color: "text-teal-500 bg-teal-500/10",   label: "文档工具" },
+  "infographic": { icon: "layout",   color: "text-amber-500 bg-amber-500/10", label: "信息图表" },
+  "development": { icon: "code",     color: "text-blue-500 bg-blue-500/10",   label: "开发工具" },
+  "productivity":{ icon: "zap",      color: "text-yellow-500 bg-yellow-500/10", label: "效率工具" },
+  "analysis":    { icon: "chart",    color: "text-green-500 bg-green-500/10", label: "数据分析" },
+  "design":      { icon: "palette",  color: "text-pink-500 bg-pink-500/10",   label: "设计创意" },
+  "research":    { icon: "search",   color: "text-cyan-500 bg-cyan-500/10",   label: "研究调查" },
+  "other":       { icon: "box",      color: "text-gray-500 bg-gray-500/10",   label: "其他" },
 };
 
-// Get category from skill name or description
-function getSkillCategory(skill: SkillInfo): string {
-  const name = skill.name.toLowerCase();
-  const desc = (skill.description || "").toLowerCase();
-  const text = name + " " + desc;
-  
-  if (text.includes("code") || text.includes("dev") || text.includes("程序") || text.includes("开发") || text.includes("debug")) {
-    return "development";
-  }
-  if (text.includes("write") || text.includes("写作") || text.includes("文档") || text.includes("blog") || text.includes("article")) {
-    return "writing";
-  }
-  if (text.includes("data") || text.includes("分析") || text.includes("chart") || text.includes("数据") || text.includes("report")) {
-    return "analysis";
-  }
-  if (text.includes("design") || text.includes("设计") || text.includes("ui") || text.includes("ux") || text.includes("创意")) {
-    return "design";
-  }
-  if (text.includes("效率") || text.includes("productivity") || text.includes("automat") || text.includes("自动")) {
-    return "productivity";
-  }
-  if (text.includes("research") || text.includes("调研") || text.includes("搜索") || text.includes("search")) {
-    return "research";
-  }
+// Fallback category detection for locally installed skills not in the catalog
+function getSkillCategoryFromText(name: string, desc: string): string {
+  const text = (name + " " + desc).toLowerCase();
+  if (text.includes("video") || text.includes("视频") || text.includes("youtube") || text.includes("ffmpeg")) return "video";
+  if (text.includes("image") || text.includes("图像") || text.includes("图片") || text.includes("photo") || text.includes("gif")) return "image";
+  if (text.includes("social") || text.includes("wechat") || text.includes("twitter") || text.includes("微信") || text.includes("小红书")) return "social";
+  if (text.includes("pdf") || text.includes("docx") || text.includes("pptx") || text.includes("xlsx") || text.includes("文档") || text.includes("翻译")) return "document";
+  if (text.includes("infographic") || text.includes("信息图") || text.includes("theme")) return "infographic";
+  if (text.includes("code") || text.includes("dev") || text.includes("程序") || text.includes("开发") || text.includes("debug") || text.includes("mcp") || text.includes("frontend")) return "development";
+  if (text.includes("write") || text.includes("写作") || text.includes("article") || text.includes("blog") || text.includes("comic") || text.includes("漫画")) return "writing";
+  if (text.includes("data") || text.includes("分析") || text.includes("chart") || text.includes("数据") || text.includes("report")) return "analysis";
+  if (text.includes("design") || text.includes("设计") || text.includes("ui") || text.includes("ux") || text.includes("创意") || text.includes("canvas")) return "design";
+  if (text.includes("效率") || text.includes("productivity") || text.includes("automat") || text.includes("自动") || text.includes("feishu") || text.includes("飞书")) return "productivity";
+  if (text.includes("research") || text.includes("调研") || text.includes("搜索") || text.includes("search")) return "research";
   return "other";
 }
 
 // Category icon component
 function CategoryIcon({ type, className = "" }: { type: string; className?: string }) {
   switch (type) {
+    case "graduation":
+      return (
+        <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+          <path d="M6 12v5c3 3 9 3 12 0v-5" />
+        </svg>
+      );
+    case "book-open":
+      return (
+        <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+          <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+        </svg>
+      );
+    case "video":
+      return (
+        <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
+          <polygon points="23 7 16 12 23 17 23 7" />
+          <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+        </svg>
+      );
+    case "image":
+      return (
+        <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+          <circle cx="8.5" cy="8.5" r="1.5" />
+          <polyline points="21 15 16 10 5 21" />
+        </svg>
+      );
+    case "share":
+      return (
+        <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="18" cy="5" r="3" />
+          <circle cx="6" cy="12" r="3" />
+          <circle cx="18" cy="19" r="3" />
+          <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+          <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+        </svg>
+      );
+    case "file":
+      return (
+        <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="16" y1="13" x2="8" y2="13" />
+          <line x1="16" y1="17" x2="8" y2="17" />
+          <polyline points="10 9 9 9 8 9" />
+        </svg>
+      );
+    case "layout":
+      return (
+        <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+          <line x1="3" y1="9" x2="21" y2="9" />
+          <line x1="9" y1="21" x2="9" y2="9" />
+        </svg>
+      );
     case "code":
       return (
         <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
@@ -104,6 +180,8 @@ interface McpSkillModalProps {
   initialTab?: "mcp" | "skill";
 }
 
+const CATALOG_URL = "https://s.vipkidstatic.com/fe-static/temp/skills-catalog.json";
+
 export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSkillModalProps) {
   const [activeTab, setActiveTab] = useState<"mcp" | "skill">(initialTab);
   const [loading, setLoading] = useState(false);
@@ -112,11 +190,18 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [skillFilter, setSkillFilter] = useState<"all" | "installed" | "available">("all");
+
+  // Catalog state
+  const [catalog, setCatalog] = useState<CatalogSkill[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
 
   // Install skill state
   const [showInstallForm, setShowInstallForm] = useState(false);
   const [installUrl, setInstallUrl] = useState("");
   const [installing, setInstalling] = useState(false);
+  const [installingNames, setInstallingNames] = useState<Set<string>>(new Set());
+  const [deletingNames, setDeletingNames] = useState<Set<string>>(new Set());
   const [installResult, setInstallResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Assistants state — for assigning skills to assistants
@@ -131,6 +216,21 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
   useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab]);
+
+  const fetchCatalog = useCallback(async () => {
+    setCatalogLoading(true);
+    try {
+      const res = await fetch(`${CATALOG_URL}?t=${Date.now()}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setCatalog(Array.isArray(data.skills) ? data.skills : []);
+    } catch (err) {
+      console.warn("Failed to fetch skill catalog:", err);
+      setCatalog([]);
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, []);
 
   const loadConfig = () => {
     setLoading(true);
@@ -153,8 +253,10 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
       setShowAddForm(false);
       setSelectedCategory(null);
       setSearchQuery("");
+      setSkillFilter("all");
+      fetchCatalog();
     }
-  }, [open]);
+  }, [open, fetchCatalog]);
 
   const handleAddServer = async (server: McpServer) => {
     const result = await window.electron.saveMcpServer(server);
@@ -184,10 +286,8 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
       if (result.success) {
         setInstallUrl("");
         loadConfig();
-        // Show assistant assignment picker for the newly installed skill
         if (result.skillName) {
           setPendingSkillName(result.skillName);
-          // Pre-select all assistants
           setAssignSelection(new Set(assistants.map((a) => a.id)));
         }
       }
@@ -195,6 +295,49 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
       setInstallResult({ success: false, message: String(err) });
     } finally {
       setInstalling(false);
+    }
+  };
+
+  const handleInstallFromCatalog = async (skill: ViewSkill) => {
+    if (!skill.installPath || installingNames.has(skill.name)) return;
+    setInstallingNames((prev) => new Set([...prev, skill.name]));
+    try {
+      const result = await window.electron.installSkill(skill.installPath);
+      if (result.success) {
+        loadConfig();
+        setPendingSkillName(result.skillName);
+        setAssignSelection(new Set(assistants.map((a) => a.id)));
+        setShowInstallForm(true);
+      }
+    } catch (err) {
+      console.error("Failed to install skill from catalog:", err);
+    } finally {
+      setInstallingNames((prev) => {
+        const next = new Set(prev);
+        next.delete(skill.name);
+        return next;
+      });
+    }
+  };
+
+  const [confirmDeleteName, setConfirmDeleteName] = useState<string | null>(null);
+
+  const handleDeleteSkill = async (skillName: string) => {
+    if (deletingNames.has(skillName)) return;
+    setDeletingNames((prev) => new Set([...prev, skillName]));
+    setConfirmDeleteName(null);
+    try {
+      await window.electron.deleteSkill(skillName);
+      loadConfig();
+      if (managingSkillName === skillName) setManagingSkillName(null);
+    } catch (err) {
+      console.error("Failed to delete skill:", err);
+    } finally {
+      setDeletingNames((prev) => {
+        const next = new Set(prev);
+        next.delete(skillName);
+        return next;
+      });
     }
   };
 
@@ -228,46 +371,91 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
     return assistants.filter((a) => (a.skillNames ?? []).includes(skillName));
   }, [assistants]);
 
-  // Group skills by category
-  const skillsByCategory = useMemo(() => {
-    const grouped: Record<string, SkillInfo[]> = {};
-    for (const skill of skills) {
-      const category = getSkillCategory(skill);
-      if (!grouped[category]) {
-        grouped[category] = [];
+  // Build view: catalog as primary source, plus local-only skills appended
+  const mergedSkills = useMemo((): ViewSkill[] => {
+    const installedMap = new Map(skills.map((s) => [s.name, s]));
+    const catalogNames = new Set(catalog.map((s) => s.name));
+
+    // Catalog skills first (with install status overlay)
+    const result: ViewSkill[] = catalog.map((cs) => {
+      const installed = installedMap.get(cs.name);
+      return {
+        name: cs.name,
+        label: cs.label,
+        description: cs.description,
+        category: cs.category,
+        installPath: cs.installPath,
+        isInstalled: !!installed,
+        fullPath: installed?.fullPath,
+      };
+    });
+
+    // Then: locally installed skills NOT in catalog — marked with isLocalOnly
+    for (const s of skills) {
+      if (!catalogNames.has(s.name) && !s.name.startsWith(".")) {
+        result.push({
+          name: s.name,
+          label: s.name,
+          description: s.description,
+          category: getSkillCategoryFromText(s.name, s.description || ""),
+          isInstalled: true,
+          isLocalOnly: true,
+          fullPath: s.fullPath,
+        });
       }
-      grouped[category].push(skill);
+    }
+
+    return result;
+  }, [skills, catalog]);
+
+  // Group by category (from merged list)
+  const skillsByCategory = useMemo(() => {
+    const grouped: Record<string, ViewSkill[]> = {};
+    for (const skill of mergedSkills) {
+      if (!grouped[skill.category]) grouped[skill.category] = [];
+      grouped[skill.category].push(skill);
     }
     return grouped;
-  }, [skills]);
+  }, [mergedSkills]);
 
-  // Get available categories
+  // Available categories sorted
   const availableCategories = useMemo(() => {
     return Object.keys(skillsByCategory).sort((a, b) => {
       if (a === "other") return 1;
       if (b === "other") return -1;
+      const order = ["teaching","picturebook","video","image","writing","social","document","infographic","development","productivity","analysis","design","research"];
+      const ai = order.indexOf(a);
+      const bi = order.indexOf(b);
+      if (ai !== -1 && bi !== -1) return ai - bi;
+      if (ai !== -1) return -1;
+      if (bi !== -1) return 1;
       return (SKILL_CATEGORIES[a]?.label || a).localeCompare(SKILL_CATEGORIES[b]?.label || b);
     });
   }, [skillsByCategory]);
 
-  // Filter skills
+  // Filter merged skills
   const filteredSkills = useMemo(() => {
-    let result = skills;
-    
-    if (selectedCategory) {
-      result = result.filter(skill => getSkillCategory(skill) === selectedCategory);
-    }
-    
+    let result = mergedSkills;
+
+    if (skillFilter === "installed") result = result.filter((s) => s.isInstalled);
+    else if (skillFilter === "available") result = result.filter((s) => !s.isInstalled);
+
+    if (selectedCategory) result = result.filter((s) => s.category === selectedCategory);
+
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
-      result = result.filter(skill => 
-        skill.name.toLowerCase().includes(query) ||
-        (skill.description || "").toLowerCase().includes(query)
+      result = result.filter((s) =>
+        s.name.toLowerCase().includes(query) ||
+        (s.label || "").toLowerCase().includes(query) ||
+        (s.description || "").toLowerCase().includes(query)
       );
     }
-    
+
     return result;
-  }, [skills, selectedCategory, searchQuery]);
+  }, [mergedSkills, skillFilter, selectedCategory, searchQuery]);
+
+  const installedCount = useMemo(() => mergedSkills.filter((s) => s.isInstalled).length, [mergedSkills]);
+  const availableCount = useMemo(() => mergedSkills.filter((s) => !s.isInstalled).length, [mergedSkills]);
 
   // Different modal sizes for different tabs
   const isSkillTab = activeTab === "skill";
@@ -284,18 +472,39 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
           }`}
         >
           {isSkillTab ? (
-            // Full-screen Skill Marketplace
+            // Full-screen 技能市场
             <div className="flex flex-col h-full">
               {/* Header */}
               <div className="flex items-center justify-between px-6 py-4 border-b border-ink-900/10">
-                <Dialog.Title className="text-xl font-semibold text-ink-800">
-                  🛒 Skill Marketplace
-                </Dialog.Title>
-                <div className="flex items-center gap-3">
-                  {/* Install Skill Button */}
+                <div className="flex items-center gap-4">
+                  <Dialog.Title className="text-xl font-semibold text-ink-800">
+                    技能市场
+                  </Dialog.Title>
+                  {/* Filter pills */}
+                  <div className="flex items-center gap-1 rounded-xl bg-surface-secondary p-1">
+                    {(["all", "installed", "available"] as const).map((f) => {
+                      const labels = { all: `全部 ${mergedSkills.length}`, installed: `已安装 ${installedCount}`, available: `可安装 ${availableCount}` };
+                      return (
+                        <button
+                          key={f}
+                          onClick={() => setSkillFilter(f)}
+                          className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
+                            skillFilter === f
+                              ? "bg-accent text-white shadow-sm"
+                              : "text-ink-600 hover:text-ink-800"
+                          }`}
+                        >
+                          {labels[f]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* Manual install */}
                   <button
                     onClick={() => { setShowInstallForm(!showInstallForm); setInstallResult(null); }}
-                    className={`flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
+                    className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
                       showInstallForm
                         ? "bg-accent text-white"
                         : "border border-ink-900/10 bg-surface-secondary text-ink-700 hover:bg-surface-tertiary"
@@ -306,7 +515,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                       <polyline points="7 10 12 15 17 10" />
                       <line x1="12" y1="15" x2="12" y2="3" />
                     </svg>
-                    安装技能
+                    手动安装
                   </button>
                   {/* Search */}
                   <div className="relative">
@@ -319,7 +528,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                       placeholder="搜索技能..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-64 rounded-xl border border-ink-900/10 bg-surface-secondary pl-10 pr-4 py-2 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                      className="w-52 rounded-xl border border-ink-900/10 bg-surface-secondary pl-10 pr-4 py-2 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
                     />
                   </div>
                   <Dialog.Close asChild>
@@ -334,6 +543,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                   </Dialog.Close>
                 </div>
               </div>
+
 
               {/* Install Skill Form */}
               {showInstallForm && (
@@ -453,65 +663,61 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
 
               <div className="flex flex-1 overflow-hidden">
                 {/* Category Sidebar */}
-                <div className="w-56 border-r border-ink-900/10 p-4 overflow-y-auto">
+                <div className="w-52 border-r border-ink-900/10 p-4 overflow-y-auto">
                   <div className="text-xs font-medium text-muted uppercase tracking-wider mb-3">分类</div>
-                  <div className="space-y-1">
+                  <div className="space-y-0.5">
                     <button
                       onClick={() => setSelectedCategory(null)}
-                      className={`w-full flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+                      className={`w-full flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
                         selectedCategory === null
                           ? "bg-accent text-white"
                           : "text-ink-700 hover:bg-surface-tertiary"
                       }`}
                     >
-                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
                         <rect x="3" y="3" width="7" height="7" />
                         <rect x="14" y="3" width="7" height="7" />
                         <rect x="3" y="14" width="7" height="7" />
                         <rect x="14" y="14" width="7" height="7" />
                       </svg>
-                      全部
-                      <span className="ml-auto text-xs opacity-70">{skills.length}</span>
+                      <span className="truncate">全部</span>
+                      <span className="ml-auto text-xs opacity-70 flex-shrink-0">{mergedSkills.length}</span>
                     </button>
                     {availableCategories.map(category => {
                       const config = SKILL_CATEGORIES[category] || SKILL_CATEGORIES.other;
-                      const count = skillsByCategory[category]?.length || 0;
+                      const catSkills = skillsByCategory[category] || [];
+                      const installedInCat = catSkills.filter(s => s.isInstalled).length;
                       return (
                         <button
                           key={category}
                           onClick={() => setSelectedCategory(category)}
-                          className={`w-full flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+                          className={`w-full flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
                             selectedCategory === category
                               ? "bg-accent text-white"
                               : "text-ink-700 hover:bg-surface-tertiary"
                           }`}
                         >
-                          <CategoryIcon type={config.icon} className="h-4 w-4" />
-                          {config.label}
-                          <span className="ml-auto text-xs opacity-70">{count}</span>
+                          <CategoryIcon type={config.icon} className="h-4 w-4 flex-shrink-0" />
+                          <span className="truncate">{config.label}</span>
+                          <span className="ml-auto text-xs opacity-70 flex-shrink-0">
+                            {installedInCat}/{catSkills.length}
+                          </span>
                         </button>
                       );
                     })}
                   </div>
                   
-                  <div className="mt-6 pt-4 border-t border-ink-900/10">
-                    <div className="rounded-xl border border-info/20 bg-info/5 p-3">
-                      <p className="text-xs text-info">
-                        技能位置：
-                        <code className="block mt-1 rounded bg-info/10 px-1.5 py-0.5 font-mono text-[10px]">~/.claude/skills/</code>
-                      </p>
-                    </div>
-                  </div>
                 </div>
 
                 {/* Skills Grid */}
                 <div className="flex-1 p-6 overflow-y-auto">
-                  {loading ? (
-                    <div className="flex items-center justify-center h-full">
+                  {(loading || catalogLoading) ? (
+                    <div className="flex flex-col items-center justify-center h-full gap-3">
                       <svg className="h-8 w-8 animate-spin text-muted" viewBox="0 0 24 24" fill="none">
                         <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
                         <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                       </svg>
+                      <p className="text-sm text-muted-light">正在加载技能目录...</p>
                     </div>
                   ) : filteredSkills.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full text-center">
@@ -519,58 +725,131 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                         <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
                       </svg>
                       <p className="mt-4 text-lg text-muted">
-                        {searchQuery ? "没有找到匹配的技能" : "暂无技能"}
+                        {searchQuery ? "没有找到匹配的技能" : skillFilter === "available" ? "没有可安装的技能" : skillFilter === "installed" ? "还没有已安装的技能" : "暂无技能"}
                       </p>
-                      <p className="mt-2 text-sm text-muted-light">
-                        在 ~/.claude/skills/ 目录下创建 SKILL.md 文件来添加技能
-                      </p>
+                      {skillFilter === "installed" && (
+                        <p className="mt-2 text-sm text-muted-light">从上方技能列表点击「安装」即可一键安装</p>
+                      )}
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-5">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
                       {filteredSkills.map((skill) => {
-                        const category = getSkillCategory(skill);
-                        const config = SKILL_CATEGORIES[category] || SKILL_CATEGORIES.other;
+                        const config = SKILL_CATEGORIES[skill.category] || SKILL_CATEGORIES.other;
+                        const isInstalling = installingNames.has(skill.name);
                         return (
                           <div
                             key={skill.name}
-                            className="group rounded-2xl border border-ink-900/10 bg-surface-secondary p-6 hover:border-accent/30 hover:shadow-lg transition-all duration-200"
+                            className={`group rounded-2xl border p-5 transition-all duration-200 ${
+                              skill.isInstalled
+                                ? "border-ink-900/10 bg-surface-secondary hover:border-accent/30 hover:shadow-md"
+                                : "border-dashed border-ink-900/15 bg-surface hover:border-accent/40 hover:bg-accent/3"
+                            }`}
                           >
-                            {/* Header: Icon + Name + Category */}
-                            <div className="flex items-start gap-4">
-                              <div className={`flex h-14 w-14 items-center justify-center rounded-xl ${config.color} flex-shrink-0`}>
-                                <CategoryIcon type={config.icon} className="h-7 w-7" />
+                            {/* Header */}
+                            <div className="flex items-start gap-3">
+                              <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${config.color} flex-shrink-0`}>
+                                <CategoryIcon type={config.icon} className="h-6 w-6" />
                               </div>
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center justify-between gap-2">
-                                  <h3 className="text-lg font-semibold text-ink-800 group-hover:text-accent transition-colors truncate">
-                                    {skill.name}
+                                  <h3 className="text-base font-semibold text-ink-800 truncate">
+                                    {skill.label || skill.name}
                                   </h3>
-                                  <span className="flex items-center gap-1 text-xs text-success flex-shrink-0">
-                                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor">
-                                      <circle cx="12" cy="12" r="4" />
-                                    </svg>
-                                    已安装
-                                  </span>
+                                  {skill.isInstalled ? (
+                                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                                      {confirmDeleteName === skill.name ? (
+                                        // Inline confirm
+                                        <div className="flex items-center gap-1">
+                                          <span className="text-[10px] text-error font-medium">确认删除?</span>
+                                          <button
+                                            onClick={() => handleDeleteSkill(skill.name)}
+                                            className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-error text-white hover:bg-error/80 transition-colors"
+                                          >
+                                            {deletingNames.has(skill.name) ? (
+                                              <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
+                                                <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                              </svg>
+                                            ) : "删除"}
+                                          </button>
+                                          <button
+                                            onClick={() => setConfirmDeleteName(null)}
+                                            className="rounded px-1.5 py-0.5 text-[10px] text-muted hover:bg-surface-tertiary transition-colors"
+                                          >
+                                            取消
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <>
+                                          <span className="flex items-center gap-1 text-[11px] text-success font-medium">
+                                            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor"><circle cx="12" cy="12" r="4" /></svg>
+                                            已安装
+                                          </span>
+                                          {skill.isLocalOnly && (
+                                            <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">本地</span>
+                                          )}
+                                          <button
+                                            onClick={() => setConfirmDeleteName(skill.name)}
+                                            title="删除技能"
+                                            className="rounded-lg p-1 text-muted hover:bg-error/10 hover:text-error transition-colors"
+                                          >
+                                            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                                              <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                            </svg>
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() => handleInstallFromCatalog(skill)}
+                                      disabled={isInstalling || !skill.installPath}
+                                      title={!skill.installPath ? "暂无安装地址" : ""}
+                                      className="flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-white hover:bg-accent-hover transition-colors disabled:cursor-not-allowed disabled:opacity-40 flex-shrink-0"
+                                    >
+                                      {isInstalling ? (
+                                        <>
+                                          <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
+                                            <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                          </svg>
+                                          安装中
+                                        </>
+                                      ) : (
+                                        <>
+                                          <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                            <polyline points="7 10 12 15 17 10" />
+                                            <line x1="12" y1="15" x2="12" y2="3" />
+                                          </svg>
+                                          安装
+                                        </>
+                                      )}
+                                    </button>
+                                  )}
                                 </div>
-                                <span className="text-xs font-medium text-muted mt-1 inline-block">
-                                  {config.label}
-                                </span>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <span className="text-[11px] font-medium text-muted">{config.label}</span>
+                                  {skill.label && skill.label !== skill.name && (
+                                    <span className="text-[10px] text-muted-light font-mono">{skill.name}</span>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                            
-                            {/* Description - 显示更多内容 */}
-                            <div className="mt-4 p-4 bg-surface rounded-xl border border-ink-900/5">
-                              <p className="text-sm text-ink-700 leading-relaxed line-clamp-4">
-                                {skill.description || "该技能暂无描述信息。请在 SKILL.md 文件中添加描述。"}
+
+                            {/* Description */}
+                            <div className="mt-3 p-3 bg-surface rounded-xl border border-ink-900/5">
+                              <p className="text-sm text-ink-700 leading-relaxed line-clamp-3">
+                                {skill.description || "暂无描述信息。"}
                               </p>
                             </div>
-                            
-                            {/* Assistants assigned */}
-                            {(() => {
+
+                            {/* Installed: assistant assignment UI */}
+                            {skill.isInstalled && (() => {
                               const owners = getSkillAssistants(skill.name);
                               const isManaging = managingSkillName === skill.name;
                               return (
-                                <div className="mt-4">
+                                <div className="mt-3">
                                   <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-1.5 flex-wrap">
                                       {owners.length > 0 ? owners.map((a) => (
@@ -590,7 +869,7 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                                           setManageSelection(new Set(owners.map((a) => a.id)));
                                         }
                                       }}
-                                      className="px-2.5 py-1 rounded-lg text-[10px] font-medium text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
+                                      className="px-2.5 py-1 rounded-lg text-[10px] font-medium text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors flex-shrink-0"
                                     >
                                       {isManaging ? "收起" : "分配"}
                                     </button>
@@ -652,13 +931,13 @@ export function McpSkillModal({ open, onOpenChange, initialTab = "mcp" }: McpSki
                                 </div>
                               );
                             })()}
-                            
-                            {/* Footer */}
-                            <div className="mt-3 flex items-center text-[10px] text-muted-light">
-                              <span className="font-mono truncate">
-                                ~/.claude/skills/{skill.name}
-                              </span>
-                            </div>
+
+                            {/* Footer: git source for non-installed catalog skills */}
+                            {!skill.isInstalled && skill.installPath && (
+                              <div className="mt-2.5 flex items-center text-[10px] text-muted-light">
+                                <span className="font-mono truncate text-accent/60">{skill.installPath}</span>
+                              </div>
+                            )}
                           </div>
                         );
                       })}

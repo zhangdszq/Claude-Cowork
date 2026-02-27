@@ -185,27 +185,43 @@ export function usePromptActions(
   const selectedAssistantSkillNames = useAppStore((state) => state.selectedAssistantSkillNames);
   const selectedAssistantPersona = useAppStore((state) => state.selectedAssistantPersona);
 
-  // Image attachment - only store path, Agent will use built-in analyze_image tool
-  const [imagePath, setImagePath] = useState<string | null>(null);
+  // Attachments - images and files
+  const [attachments, setAttachments] = useState<Array<{ path: string; name: string; isImage: boolean }>>([]);
 
   const activeSession = activeSessionId ? sessions[activeSessionId] : undefined;
   const isRunning = activeSession?.status === "running";
 
-  // Handle image selection
+  const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico", "tiff", "avif"]);
+  const isImagePath = (p: string) => IMAGE_EXTS.has((p.split(".").pop() ?? "").toLowerCase());
+
+  const addAttachment = useCallback((filePath: string) => {
+    const name = filePath.split("/").pop() ?? filePath;
+    const img = isImagePath(filePath);
+    setAttachments(prev => {
+      if (prev.some(a => a.path === filePath)) return prev;
+      return [...prev, { path: filePath, name, isImage: img }];
+    });
+  }, []);
+
+  // Handle file/image selection via button
   const handleSelectImage = useCallback(async () => {
     try {
-      const path = await window.electron.selectImage();
-      if (path) {
-        setImagePath(path);
+      const paths = await window.electron.selectFile();
+      if (paths) {
+        paths.forEach(addAttachment);
       }
     } catch (error) {
-      console.error("Failed to select image:", error);
-      setGlobalError("Failed to select image.");
+      console.error("Failed to select file:", error);
+      setGlobalError("Failed to select file.");
     }
-  }, [setGlobalError]);
+  }, [addAttachment, setGlobalError]);
 
-  const handleRemoveImage = useCallback(() => {
-    setImagePath(null);
+  const handleRemoveImage = useCallback((path?: string) => {
+    if (path) {
+      setAttachments(prev => prev.filter(a => a.path !== path));
+    } else {
+      setAttachments([]);
+    }
   }, []);
 
   // Handle pasted image
@@ -220,22 +236,19 @@ export function usePromptActions(
         if (!file) continue;
 
         try {
-          // Convert file to base64
           const base64 = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => {
               const dataUrl = reader.result as string;
-              // Remove data:image/xxx;base64, prefix
               resolve(dataUrl.split(",")[1]);
             };
             reader.onerror = reject;
             reader.readAsDataURL(file);
           });
 
-          // Save to temp file and get path
           const path = await window.electron.savePastedImage(base64, item.type);
           if (path) {
-            setImagePath(path);
+            addAttachment(path);
           }
         } catch (error) {
           console.error("Failed to handle pasted image:", error);
@@ -244,23 +257,59 @@ export function usePromptActions(
         break;
       }
     }
-  }, [setGlobalError]);
+  }, [addAttachment, setGlobalError]);
+
+  // Handle file drop
+  const handleDrop = useCallback(async (dataTransfer: DataTransfer) => {
+    const files = Array.from(dataTransfer.files);
+    for (const file of files) {
+      // Electron 32+: use webUtils.getPathForFile() — File.path was removed
+      let filePath = "";
+      try {
+        filePath = window.electron.getPathForFile(file);
+      } catch {
+        filePath = "";
+      }
+      if (filePath) {
+        addAttachment(filePath);
+      } else if (file.type.startsWith("image/")) {
+        // Fallback for images when path is unavailable
+        try {
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve((reader.result as string).split(",")[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+          const path = await window.electron.savePastedImage(base64, file.type);
+          if (path) addAttachment(path);
+        } catch (error) {
+          console.error("Failed to handle dropped image:", error);
+        }
+      }
+    }
+  }, [addAttachment]);
+
+  // Backward compat: imagePath is the first image attachment (if any)
+  const imagePath = attachments.find(a => a.isImage)?.path ?? null;
 
   const handleSend = useCallback(async () => {
-    if (!prompt.trim() && !imagePath) return;
+    if (!prompt.trim() && attachments.length === 0) return;
 
-    // Build prompt with image path if attached
     let finalPrompt = prompt.trim();
-    
-    if (imagePath) {
-      // Include image path in prompt - Agent will use built-in analyze_image tool
-      const imageInstruction = `请分析这张图片: ${imagePath}`;
-      if (finalPrompt) {
-        finalPrompt = `${imageInstruction}\n\n${finalPrompt}`;
-      } else {
-        finalPrompt = imageInstruction;
+
+    if (attachments.length > 0) {
+      const parts: string[] = [];
+      for (const att of attachments) {
+        if (att.isImage) {
+          parts.push(`请分析这张图片: ${att.path}`);
+        } else {
+          parts.push(`请读取并分析这个文件: ${att.path}`);
+        }
       }
-      setImagePath(null);
+      const attachmentText = parts.join("\n");
+      finalPrompt = finalPrompt ? `${attachmentText}\n\n${finalPrompt}` : attachmentText;
+      setAttachments([]);
     }
 
     // Determine if we need a new session:
@@ -328,7 +377,7 @@ export function usePromptActions(
       sendEvent({ type: "session.continue", payload: { sessionId: activeSessionId, prompt: finalPrompt } });
     }
     setPrompt("");
-  }, [activeSession, activeSessionId, cwd, imagePath, prompt, provider, codexModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona, sendEvent, setGlobalError, setPendingStart, setPrompt, activeSkillName, optionSkills, onAutoSelectSkill]);
+  }, [activeSession, activeSessionId, cwd, attachments, prompt, provider, codexModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona, sendEvent, setGlobalError, setPendingStart, setPrompt, activeSkillName, optionSkills, onAutoSelectSkill]);
 
   const handleStop = useCallback(() => {
     if (!activeSessionId) return;
@@ -350,7 +399,7 @@ export function usePromptActions(
   }, [activeSessionId, sendEvent, setPrompt]);
 
   // handleStartFromModal can be called with optional params (for scheduled tasks)
-  const handleStartFromModal = useCallback((params?: { prompt?: string; cwd?: string; title?: string }) => {
+  const handleStartFromModal = useCallback((params?: { prompt?: string; cwd?: string; title?: string; assistantId?: string }) => {
     const effectiveCwd = params?.cwd || cwd.trim();
     const effectivePrompt = params?.prompt || prompt.trim();
     const effectiveTitle = params?.title;
@@ -368,6 +417,8 @@ export function usePromptActions(
     // If params provided, directly start session (for scheduled tasks)
     if (params?.prompt) {
       setPendingStart(true);
+      // Task's assistantId takes priority over currently selected assistant
+      const effectiveAssistantId = params.assistantId || selectedAssistantId;
       sendEvent({
         type: "session.start",
         payload: { 
@@ -377,7 +428,7 @@ export function usePromptActions(
           allowedTools: DEFAULT_ALLOWED_TOOLS,
           provider,
           ...(provider === "codex" ? { model: codexModel } : {}),
-          ...(selectedAssistantId ? { assistantId: selectedAssistantId } : {}),
+          ...(effectiveAssistantId ? { assistantId: effectiveAssistantId } : {}),
           ...(selectedAssistantPersona ? { assistantPersona: selectedAssistantPersona } : {}),
         }
       });
@@ -393,12 +444,14 @@ export function usePromptActions(
     setPrompt, 
     isRunning, 
     imagePath,
+    attachments,
     handleSend, 
     handleStop, 
     handleStartFromModal,
     handleSelectImage,
     handleRemoveImage,
-    handlePaste
+    handlePaste,
+    handleDrop,
   };
 }
 
@@ -440,21 +493,61 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
     }
   }, [selectedAssistantSkillNames]);
 
+  const [isDragOver, setIsDragOver] = useState(false);
+  // Use state-based ref so useEffect re-runs when the div remounts (e.g. hasMessages toggle)
+  const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null);
+  const inputCardRef = useCallback((el: HTMLDivElement | null) => { setCardEl(el); }, []);
+
   const { 
     prompt, 
     setPrompt, 
     isRunning, 
     imagePath,
+    attachments,
     handleSend, 
     handleStop,
     handleSelectImage,
     handleRemoveImage,
-    handlePaste
+    handlePaste,
+    handleDrop,
   } = usePromptActions(sendEvent, {
     skills,
     activeSkillName: activeToolbarSkill?.name ?? null,
     onAutoSelectSkill: setActiveToolbarSkill,
   });
+
+  // Native DOM listeners — React synthetic events are unreliable in Electron for file drops
+  useEffect(() => {
+    const el = cardEl;
+    if (!el) return;
+
+    const onDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragOver(true);
+    };
+    const onDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      if (!el.contains(e.relatedTarget as Node)) {
+        setIsDragOver(false);
+      }
+    };
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragOver(false);
+      if (e.dataTransfer) handleDrop(e.dataTransfer);
+    };
+
+    el.addEventListener("dragover", onDragOver);
+    el.addEventListener("dragleave", onDragLeave);
+    el.addEventListener("drop", onDrop);
+    return () => {
+      el.removeEventListener("dragover", onDragOver);
+      el.removeEventListener("dragleave", onDragLeave);
+      el.removeEventListener("drop", onDrop);
+    };
+  }, [cardEl, handleDrop]);
 
   // Memory indicator state
   const [memorySummary, setMemorySummary] = useState<{ longTermSize: number; dailyCount: number; totalSize: number } | null>(null);
@@ -635,9 +728,6 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
     }
   }, [prompt]);
 
-  // Get filename from path
-  const imageFileName = imagePath ? imagePath.split("/").pop() : null;
-
   const skillsDropdown = showSkills ? (
     <div className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-ink-900/10 bg-surface shadow-elevated overflow-hidden z-50">
       <div className="px-4 py-2.5 border-b border-ink-900/5 bg-surface-secondary/50">
@@ -789,25 +879,53 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
   ) : null;
 
   const inputCard = (
-    <div className="w-full rounded-2xl border border-black/[0.07] bg-white shadow-[0_2px_12px_rgba(0,0,0,0.06),0_1px_3px_rgba(0,0,0,0.04)]">
-      {/* Image Preview */}
-      {imagePath && (
-        <div className="mx-3 mt-3 flex items-center gap-2 rounded-xl border border-ink-900/8 bg-surface-secondary px-3 py-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/10">
-            <svg className="h-4 w-4 text-accent" viewBox="0 0 24 24" fill="none">
-              <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-ink-700 truncate">{imageFileName}</div>
-            <div className="text-xs text-muted">Agent will analyze this image</div>
-          </div>
-          <button
-            onClick={handleRemoveImage}
-            className="flex h-6 w-6 items-center justify-center rounded-full text-muted hover:bg-ink-900/10 hover:text-ink-700"
-          >
-            <svg viewBox="0 0 24 24" className="h-4 w-4"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
-          </button>
+    <div
+      ref={inputCardRef}
+      className={`w-full rounded-2xl border bg-white shadow-[0_2px_12px_rgba(0,0,0,0.06),0_1px_3px_rgba(0,0,0,0.04)] transition-colors ${
+        isDragOver
+          ? "border-accent/60 bg-accent/[0.02] shadow-[0_0_0_2px_rgba(var(--color-accent-rgb),0.15)]"
+          : "border-black/[0.07]"
+      }`}
+    >
+      {/* Attachments Preview */}
+      {attachments.length > 0 && (
+        <div className="mx-3 mt-3 flex flex-wrap gap-2">
+          {attachments.map((att) => (
+            <div key={att.path} className="flex items-center gap-2 rounded-xl border border-ink-900/8 bg-surface-secondary px-3 py-2 max-w-xs">
+              <div className={`flex h-8 w-8 items-center justify-center rounded-lg flex-shrink-0 ${att.isImage ? "bg-accent/10" : "bg-blue-500/10"}`}>
+                {att.isImage ? (
+                  <svg className="h-4 w-4 text-accent" viewBox="0 0 24 24" fill="none">
+                    <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                ) : (
+                  <svg className="h-4 w-4 text-blue-500" viewBox="0 0 24 24" fill="none">
+                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    <polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-ink-700 truncate">{att.name}</div>
+                <div className="text-xs text-muted">{att.isImage ? "图片" : "文件"}</div>
+              </div>
+              <button
+                onClick={() => handleRemoveImage(att.path)}
+                className="flex h-6 w-6 items-center justify-center rounded-full text-muted hover:bg-ink-900/10 hover:text-ink-700 flex-shrink-0"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Drag overlay hint */}
+      {isDragOver && (
+        <div className="mx-3 mt-3 flex items-center justify-center rounded-xl border-2 border-dashed border-accent/40 bg-accent/5 px-4 py-3 gap-2 text-sm text-accent">
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+          </svg>
+          松开以添加文件
         </div>
       )}
 
@@ -816,7 +934,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
         <textarea
           rows={hasMessages ? 1 : 3}
           className="w-full resize-none bg-transparent text-sm text-ink-800 placeholder:text-ink-400/60 focus:outline-none leading-relaxed"
-          placeholder={imagePath ? "为图片添加说明（可选）..." : "帮我把这个想法变成一个技术方案"}
+          placeholder={attachments.length > 0 ? "为附件添加说明（可选）..." : "帮我把这个想法变成一个技术方案"}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -934,7 +1052,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
             className={`flex h-8 w-8 items-center justify-center rounded-full transition-all ${
               isRunning
                 ? "bg-error text-white hover:bg-error/90"
-                : (prompt.trim() || imagePath)
+                : (prompt.trim() || attachments.length > 0)
                   ? "bg-[#2C5F2E] text-white hover:bg-[#2C5F2E]/90 shadow-sm"
                   : "bg-ink-900/8 text-ink-300 cursor-default"
             }`}

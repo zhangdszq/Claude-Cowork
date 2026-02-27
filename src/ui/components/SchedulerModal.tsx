@@ -62,6 +62,12 @@ const DEFAULT_COLOR = { bg: "bg-ink-900/8", text: "text-ink-500", dot: "bg-ink-3
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
 const MONTHS = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
 
+// Format a Date as "YYYY-MM-DDTHH:MM" in local time (for datetime-local inputs)
+const toLocalDateTimeString = (d: Date): string => {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
 // Calendar helpers
 const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
 const getFirstDayOfMonth = (year: number, month: number) => {
@@ -219,7 +225,7 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     const t = date ? new Date(date) : new Date();
     if (!date) t.setHours(t.getHours() + 1);
     t.setMinutes(0); t.setSeconds(0);
-    setScheduledTime(t.toISOString().slice(0, 16));
+    setScheduledTime(toLocalDateTimeString(t));
     // pre-fill assistant from sidebar filter
     if (filterAssistantId && filterAssistantId !== "__default__") {
       setFormAssistantId(filterAssistantId);
@@ -233,7 +239,7 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     setPrompt(task.prompt);
     setCwd(task.cwd || "");
     setScheduleType(task.scheduleType);
-    if (task.scheduledTime) setScheduledTime(new Date(task.scheduledTime).toISOString().slice(0, 16));
+    if (task.scheduledTime) setScheduledTime(toLocalDateTimeString(new Date(task.scheduledTime)));
     setIntervalValue(task.intervalValue || 1);
     setIntervalUnit(task.intervalUnit || "hours");
     setDailyTime(task.dailyTime || "09:00");

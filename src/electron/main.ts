@@ -15,7 +15,9 @@ import {
   startDingtalkBot,
   stopDingtalkBot,
   getDingtalkBotStatus,
+  updateDingtalkBotConfig,
   onDingtalkBotStatusChange,
+  onDingtalkSessionUpdate,
   setSessionStore,
   sendProactiveDingtalkMessage,
   sendProactiveMediaDingtalk,
@@ -290,7 +292,18 @@ app.on("ready", async () => {
     });
 
     ipcMainHandle("save-assistants-config", (_: any, config: AssistantsConfig) => {
-        return saveAssistantsConfig(config);
+        const result = saveAssistantsConfig(config);
+        // Sync provider/model/persona changes to already-running bots
+        for (const assistant of config.assistants) {
+            updateDingtalkBotConfig(assistant.id, {
+                provider: assistant.provider,
+                model: assistant.model,
+                persona: assistant.persona,
+                assistantName: assistant.name,
+                defaultCwd: assistant.defaultCwd,
+            });
+        }
+        return result;
     });
 
     // Bot config handlers
@@ -348,6 +361,18 @@ app.on("ready", async () => {
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
             win.webContents.send("dingtalk-bot-status", { assistantId, status, detail });
+        }
+    });
+
+    // Forward DingTalk session title/status updates to renderer via existing server-event channel
+    onDingtalkSessionUpdate((sessionId, updates) => {
+        const event = JSON.stringify({
+            type: "session.status",
+            payload: { sessionId, status: updates.status ?? "idle", title: updates.title },
+        });
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+            win.webContents.send("server-event", event);
         }
     });
 
@@ -510,6 +535,20 @@ app.on("ready", async () => {
         return result.filePaths[0];
     });
 
+    // Handle file selection (any file type, returns array of paths)
+    ipcMainHandle("select-file", async () => {
+        const result = await dialog.showOpenDialog(mainWindow, {
+            title: "选择文件",
+            properties: ["openFile", "multiSelections"]
+        });
+        
+        if (result.canceled || result.filePaths.length === 0) {
+            return null;
+        }
+        
+        return result.filePaths;
+    });
+
     // Handle pasted image - save base64 to temp file and return path
     ipcMainHandle("save-pasted-image", async (_: any, base64Data: string, mimeType: string) => {
         const fs = await import("fs");
@@ -577,67 +616,52 @@ app.on("ready", async () => {
             if (existsSync(skillsDir) && statSync(skillsDir).isDirectory()) {
                 const skillDirs = readdirSync(skillsDir);
                 for (const skillName of skillDirs) {
+                    // Skip hidden directories and non-directory entries
+                    if (skillName.startsWith(".")) continue;
                     const skillPath = join(skillsDir, skillName);
-                    if (statSync(skillPath).isDirectory()) {
-                        const skillFilePath = join(skillPath, "SKILL.md");
-                        let description: string | undefined;
-                        if (existsSync(skillFilePath)) {
-                            try {
-                                const content = readFileSync(skillFilePath, "utf8");
-                                // Extract description from SKILL.md
-                                // Look for content between first heading and next heading/section
-                                const lines = content.split("\n");
-                                const descriptionLines: string[] = [];
-                                let foundFirstHeading = false;
-                                let collectingDescription = false;
-                                
-                                for (const line of lines) {
-                                    const trimmed = line.trim();
-                                    
-                                    // Skip empty lines at the beginning
-                                    if (!foundFirstHeading && !trimmed) continue;
-                                    
-                                    // Found a heading
-                                    if (trimmed.startsWith("#")) {
-                                        if (!foundFirstHeading) {
-                                            foundFirstHeading = true;
-                                            collectingDescription = true;
-                                            continue;
-                                        } else {
-                                            // Found next heading, stop collecting
-                                            break;
-                                        }
-                                    }
-                                    
-                                    // Collect description lines
-                                    if (collectingDescription && trimmed) {
-                                        // Skip code blocks
-                                        if (trimmed.startsWith("```")) continue;
-                                        // Skip list items that look like commands
-                                        if (trimmed.startsWith("- `") || trimmed.startsWith("* `")) continue;
-                                        
-                                        descriptionLines.push(trimmed);
-                                        
-                                        // Limit to 3 lines or 300 chars
-                                        if (descriptionLines.length >= 3 || descriptionLines.join(" ").length > 300) {
-                                            break;
-                                        }
-                                    }
+                    if (!statSync(skillPath).isDirectory()) continue;
+                    const skillFilePath = join(skillPath, "SKILL.md");
+                    // Only include skills that have a SKILL.md file
+                    if (!existsSync(skillFilePath)) continue;
+                    let description: string | undefined;
+                    try {
+                        const content = readFileSync(skillFilePath, "utf8");
+                        const lines = content.split("\n");
+                        const descriptionLines: string[] = [];
+                        let foundFirstHeading = false;
+                        let collectingDescription = false;
+
+                        for (const line of lines) {
+                            const trimmed = line.trim();
+                            if (!foundFirstHeading && !trimmed) continue;
+                            if (trimmed.startsWith("#")) {
+                                if (!foundFirstHeading) {
+                                    foundFirstHeading = true;
+                                    collectingDescription = true;
+                                    continue;
+                                } else {
+                                    break;
                                 }
-                                
-                                if (descriptionLines.length > 0) {
-                                    description = descriptionLines.join(" ").substring(0, 300);
-                                }
-                            } catch {
-                                // Ignore read errors
+                            }
+                            if (collectingDescription && trimmed) {
+                                if (trimmed.startsWith("```")) continue;
+                                if (trimmed.startsWith("- `") || trimmed.startsWith("* `")) continue;
+                                descriptionLines.push(trimmed);
+                                if (descriptionLines.length >= 3 || descriptionLines.join(" ").length > 300) break;
                             }
                         }
-                        result.skills.push({
-                            name: skillName,
-                            fullPath: skillFilePath,
-                            description
-                        });
+
+                        if (descriptionLines.length > 0) {
+                            description = descriptionLines.join(" ").substring(0, 300);
+                        }
+                    } catch {
+                        // Ignore read errors
                     }
+                    result.skills.push({
+                        name: skillName,
+                        fullPath: skillFilePath,
+                        description
+                    });
                 }
             }
         } catch (error) {
@@ -773,6 +797,35 @@ app.on("ready", async () => {
 
         console.log("[install-skill]", results);
         return { success: true, skillName, message: results.join("\n") };
+    });
+
+    // Delete (uninstall) a skill from both ~/.claude/skills/ and ~/.codex/skills/
+    ipcMainHandle("delete-skill", async (_: any, skillName: string) => {
+        const { rmSync } = await import("fs");
+        const home = homedir();
+
+        const targets = [
+            join(home, ".claude", "skills", skillName),
+            join(home, ".codex", "skills", skillName),
+        ];
+
+        const results: string[] = [];
+
+        for (const targetDir of targets) {
+            try {
+                if (existsSync(targetDir)) {
+                    rmSync(targetDir, { recursive: true, force: true });
+                    results.push(`已删除: ${targetDir}`);
+                } else {
+                    results.push(`不存在: ${targetDir}`);
+                }
+            } catch (err) {
+                results.push(`失败 (${targetDir}): ${(err as Error).message}`);
+            }
+        }
+
+        console.log("[delete-skill]", results);
+        return { success: true, message: results.join("\n") };
     });
 
     // Check if embedded API is running

@@ -21,6 +21,7 @@ import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
 import { buildSmartMemoryContext, appendDailyMemory } from "./memory-store.js";
 import type { SessionStore } from "./session-store.js";
+import { addScheduledTask, loadScheduledTasks, deleteScheduledTask } from "./scheduler.js";
 
 // ─── Tool Registry (OpenClaw-style extensible tool system) ───────────────────
 
@@ -829,6 +830,23 @@ function emit(assistantId: string, status: DingtalkBotStatus, detail?: string) {
   statusEmitter.emit("status", assistantId, status, detail);
 }
 
+// ─── Session update emitter ───────────────────────────────────────────────────
+
+const sessionUpdateEmitter = new EventEmitter();
+
+/** Subscribe to session title/status updates from the DingTalk bot. */
+export function onDingtalkSessionUpdate(
+  cb: (sessionId: string, updates: { title?: string; status?: string }) => void,
+): () => void {
+  sessionUpdateEmitter.on("update", cb);
+  return () => sessionUpdateEmitter.off("update", cb);
+}
+
+function emitSessionUpdate(sessionId: string, updates: { title?: string; status?: string }) {
+  sessionStore?.updateSession(sessionId, updates as Parameters<SessionStore["updateSession"]>[1]);
+  sessionUpdateEmitter.emit("update", sessionId, updates);
+}
+
 // ─── Injected session store ───────────────────────────────────────────────────
 
 let sessionStore: SessionStore | null = null;
@@ -859,6 +877,17 @@ export function stopDingtalkBot(assistantId: string): void {
 
 export function getDingtalkBotStatus(assistantId: string): DingtalkBotStatus {
   return pool.get(assistantId)?.status ?? "disconnected";
+}
+
+/** Update runtime config of a running bot without restarting the connection. */
+export function updateDingtalkBotConfig(
+  assistantId: string,
+  updates: Partial<Pick<DingtalkBotOptions, "provider" | "model" | "persona" | "assistantName" | "defaultCwd">>,
+): void {
+  const conn = pool.get(assistantId);
+  if (!conn) return;
+  Object.assign(conn.opts, updates);
+  console.log(`[DingTalk] Config updated for assistant=${assistantId}:`, updates);
 }
 
 // ─── Proactive (outbound) messaging ──────────────────────────────────────────
@@ -1268,12 +1297,12 @@ async function updateBotSessionTitle(
     );
     const generated = result.subtype === "success" && result.result ? result.result.trim() : "";
     const title = (generated && generated !== "New Session") ? generated : fallback;
-    sessionStore?.updateSession(sessionId, { title: `${prefix} ${title}` });
+    emitSessionUpdate(sessionId, { title: `${prefix} ${title}` });
     console.log(`[DingTalk] Session title updated (turn ${turns}): "${title}"`);
   } catch (err) {
     console.warn(`[DingTalk] Title generation failed:`, err);
     if (prevCount === 0) {
-      sessionStore?.updateSession(sessionId, { title: `${prefix} ${fallback}` });
+      emitSessionUpdate(sessionId, { title: `${prefix} ${fallback}` });
     }
   }
 }
@@ -1320,7 +1349,7 @@ class DingtalkConnection {
   /** Inbound message counters for observability */
   private inboundStats = { received: 0, processed: 0, skipped: 0, toolCalls: 0 };
 
-  constructor(private opts: DingtalkBotOptions) {
+  constructor(public opts: DingtalkBotOptions) {
     this.tools = this.initTools();
   }
 
@@ -1680,7 +1709,13 @@ class DingtalkConnection {
 - 禁止把工具调用的中间状态、路径、API 返回值等细节写进最终回复
 - 如果任务失败，简短说明原因即可，无需描述每个步骤`;
 
-    const system = [basePersona, outputRules, memoryContext, this.tools.toolHint]
+    // Use message's createAt timestamp as authoritative "now" — immune to local clock skew
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const msgNow = msg.createAt ?? Date.now();
+    const nowStr = new Date(msgNow).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
+    const currentTimeContext = `## 当前时间\n消息发送时间：${nowStr}（时区：${tz}）\n创建定时任务时，若需要相对时间（如"X分钟后"），请使用 delay_minutes 参数，服务器会自动计算。`;
+
+    const system = [basePersona, outputRules, currentTimeContext, memoryContext, this.tools.toolHint]
       .filter(Boolean)
       .join("\n\n");
 
@@ -2137,6 +2172,164 @@ class DingtalkConnection {
           return `${append ? "追加" : "写入"}成功: ${filePath}（${stat.size} 字节）`;
         } catch (err) {
           return `写入失败: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    });
+
+    // ── create_scheduled_task ────────────────────────────────────────────────
+    registry.register({
+      hint: "创建定时任务，支持单次(once)、间隔(interval)、每日(daily)三种类型，任务到期后自动执行 prompt",
+      schema: {
+        name: "create_scheduled_task",
+        description:
+          "创建一个定时任务。任务到期时会自动启动 AI 会话执行 prompt。\n\n" +
+          "scheduleType 选择规则（必须严格遵守）：\n" +
+          "- once：用户说「X 分钟/小时后」「明天 X 点」「X 号 X 点」等一次性时间 → 单次执行\n" +
+          "- interval：用户说「每隔 X 分钟/小时」「每 X 分钟重复」等周期性 → 间隔重复，必填 intervalValue + intervalUnit\n" +
+          "- daily：用户说「每天 X 点」「每周一/三/五 X 点」→ 每日固定时间，必填 dailyTime\n\n" +
+          "once 类型时间填写规则（二选一）：\n" +
+          "- 相对时间（推荐）：填 delay_minutes（相对现在的分钟数），服务器自动计算准确时间。「5分钟后」→ delay_minutes=5，「2小时后」→ delay_minutes=120\n" +
+          "- 绝对时间：填 scheduledTime，格式 'YYYY-MM-DDTHH:MM:SS'（本地时间，不加Z）\n\n" +
+          "示例：\n" +
+          "「2分钟后提醒我」→ once，delay_minutes=2\n" +
+          "「每2分钟检查邮件」→ interval，intervalValue=2，intervalUnit=minutes\n" +
+          "「每天早上9点汇报」→ daily，dailyTime='09:00'",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            name: { type: "string", description: "任务名称，简短描述任务用途" },
+            prompt: { type: "string", description: "任务执行时发送给 AI 的指令内容" },
+            scheduleType: { type: "string", enum: ["once", "interval", "daily"], description: "调度类型：once=单次、interval=间隔重复、daily=每日固定时间" },
+            delay_minutes: { type: "number", description: "【once 类型专用，推荐使用】从现在起延迟执行的分钟数，服务器自动换算为准确时间。优先级高于 scheduledTime。" },
+            scheduledTime: { type: "string", description: "单次执行的本地绝对时间，格式 'YYYY-MM-DDTHH:MM:SS'（不加 Z），仅当无法用 delay_minutes 表达时才填" },
+            intervalValue: { type: "number", description: "间隔数值，scheduleType=interval 时必填" },
+            intervalUnit: { type: "string", enum: ["minutes", "hours", "days", "weeks"], description: "间隔单位，scheduleType=interval 时必填" },
+            dailyTime: { type: "string", description: "每日执行时间，格式 HH:MM，scheduleType=daily 时必填" },
+            dailyDays: {
+              type: "array",
+              items: { type: "number" },
+              description: "指定星期几执行（0=周日，1=周一…6=周六），不填则每天执行，scheduleType=daily 时可选",
+            },
+            cwd: { type: "string", description: "任务执行时的工作目录（可选）" },
+          },
+          required: ["name", "prompt", "scheduleType"],
+        },
+      },
+      execute: async (input, ctx) => {
+        try {
+          const scheduleType = String(input.scheduleType) as "once" | "interval" | "daily";
+          const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          // Use message's createAt as authoritative reference time (immune to server clock skew)
+          const refNow = ctx.msg.createAt ?? Date.now();
+
+          // For once type: resolve the scheduled time server-side to avoid clock skew
+          let scheduledTime: string | undefined;
+          if (scheduleType === "once") {
+            if (input.delay_minutes != null && Number(input.delay_minutes) > 0) {
+              // Preferred path: relative delay anchored to message send time — always accurate
+              scheduledTime = new Date(refNow + Number(input.delay_minutes) * 60 * 1000).toISOString();
+            } else if (input.scheduledTime) {
+              // Absolute time path: validate it's in the future relative to message time
+              const parsed = new Date(String(input.scheduledTime));
+              if (isNaN(parsed.getTime())) {
+                return `创建失败：scheduledTime 格式无效（${input.scheduledTime}）。请改用 delay_minutes 指定延迟分钟数。`;
+              }
+              if (parsed.getTime() <= refNow) {
+                const nowStr = new Date(refNow).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
+                return `创建失败：指定时间 ${parsed.toLocaleString("zh-CN", { timeZone: tz, hour12: false })} 已经过去（消息发送时间：${nowStr}）。\n请改用 delay_minutes 参数指定从现在起延迟的分钟数，例如 delay_minutes=2 表示2分钟后。`;
+              }
+              scheduledTime = parsed.toISOString();
+            } else {
+              return `创建失败：once 类型必须提供 delay_minutes（推荐）或 scheduledTime。`;
+            }
+          }
+
+          const task = addScheduledTask({
+            name: String(input.name ?? ""),
+            prompt: String(input.prompt ?? ""),
+            enabled: true,
+            scheduleType,
+            assistantId: self.opts.assistantId,
+            cwd: input.cwd ? String(input.cwd) : undefined,
+            scheduledTime,
+            intervalValue: input.intervalValue ? Number(input.intervalValue) : undefined,
+            intervalUnit: input.intervalUnit ? (String(input.intervalUnit) as "minutes" | "hours" | "days" | "weeks") : undefined,
+            dailyTime: input.dailyTime ? String(input.dailyTime) : undefined,
+            dailyDays: Array.isArray(input.dailyDays) ? (input.dailyDays as number[]) : undefined,
+          });
+
+          const nextRunStr = task.nextRun
+            ? new Date(task.nextRun).toLocaleString("zh-CN", { timeZone: tz, hour12: false })
+            : "未知";
+
+          return `定时任务已创建！\n- 名称：${task.name}\n- 类型：${task.scheduleType}\n- 下次执行：${nextRunStr}\n- 任务 ID：${task.id}`;
+        } catch (err) {
+          return `创建失败: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    });
+
+    // ── list_scheduled_tasks ─────────────────────────────────────────────────
+    registry.register({
+      hint: "列出所有定时任务，包含任务名称、类型、下次执行时间和状态",
+      schema: {
+        name: "list_scheduled_tasks",
+        description: "获取所有已创建的定时任务列表，返回名称、调度类型、启用状态和下次执行时间。",
+        input_schema: { type: "object" as const, properties: {}, required: [] },
+      },
+      execute: async (_input, _ctx) => {
+        try {
+          const tasks = loadScheduledTasks();
+          if (tasks.length === 0) return "当前没有任何定时任务。";
+
+          const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          const fmt = (iso: string) => new Date(iso).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
+
+          const lines = tasks.map((t) => {
+            const status = t.enabled ? "✅ 启用" : "⏸ 停用";
+            const nextRun = t.nextRun ? fmt(t.nextRun) : "无";
+            let schedule = "";
+            if (t.scheduleType === "once") schedule = `单次 @ ${t.scheduledTime ? fmt(t.scheduledTime) : "未知"}`;
+            else if (t.scheduleType === "interval") schedule = `每 ${t.intervalValue} ${t.intervalUnit}`;
+            else if (t.scheduleType === "daily") schedule = `每天 ${t.dailyTime}${t.dailyDays?.length ? `（周${t.dailyDays.join("/")}）` : ""}`;
+
+            return `- **${t.name}** [${status}]\n  调度：${schedule}\n  下次：${nextRun}\n  ID：\`${t.id}\``;
+          });
+
+          return `**定时任务列表（共 ${tasks.length} 个）**\n\n${lines.join("\n\n")}`;
+        } catch (err) {
+          return `获取失败: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    });
+
+    // ── delete_scheduled_task ────────────────────────────────────────────────
+    registry.register({
+      hint: "根据任务 ID 删除定时任务",
+      schema: {
+        name: "delete_scheduled_task",
+        description: "删除指定 ID 的定时任务。可先用 list_scheduled_tasks 查看任务 ID。",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            task_id: { type: "string", description: "要删除的任务 ID" },
+          },
+          required: ["task_id"],
+        },
+      },
+      execute: async (input, _ctx) => {
+        try {
+          const taskId = String(input.task_id ?? "");
+          if (!taskId) return "任务 ID 不能为空";
+
+          const tasks = loadScheduledTasks();
+          const task = tasks.find((t) => t.id === taskId);
+          if (!task) return `未找到 ID 为 ${taskId} 的任务`;
+
+          const success = deleteScheduledTask(taskId);
+          return success ? `已删除定时任务：${task.name}` : `删除失败，请重试`;
+        } catch (err) {
+          return `删除失败: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
     });

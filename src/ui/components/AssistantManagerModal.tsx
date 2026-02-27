@@ -85,7 +85,10 @@ export function AssistantManagerModal({
   const handleSave = async () => {
     if (!editing || !editing.name.trim()) return;
 
+    const existing = assistants.find((a) => a.id === editing.id);
     const updated: AssistantConfig = {
+      // Preserve fields not managed by this form (bots, defaultCwd, etc.)
+      ...existing,
       id: editing.id || `assistant-${Date.now()}`,
       name: editing.name.trim(),
       provider: editing.provider,

@@ -78,14 +78,37 @@ function resolvePath(filePath: string, cwd?: string): string {
   return filePath;
 }
 
+// Track all file types that could be a deliverable; filtering is based on source, not extension
+const OUTPUT_EXTS = /\.(xlsx?|docx?|pptx?|pdf|csv|png|jpg|jpeg|gif|webp|svg|mp4|mov|mp3|wav|aac|zip|tar\.gz|gz|html|epub|py|js|ts|jsx|tsx|sh|rb|go|java|rs|md|json|yaml|yml|sql|xml|txt)$/i;
+
+// Auto-generated temp file patterns to ignore
+const TEMP_FILE_RE = /^(call_function_|tmp_|temp_|\.tmp|__pycache__|\.DS_Store)/i;
+
 function addFile(seen: Set<string>, result: ProducedFile[], path: string, session: SessionView) {
   if (seen.has(path)) return;
   const name = basename(path);
-  // Must have an extension and not be a hidden file
-  if (!name.includes(".") || name.startsWith(".")) return;
+  // Skip hidden files, auto-generated temp files, and non-deliverable extensions
+  if (name.startsWith(".") || TEMP_FILE_RE.test(name) || !OUTPUT_EXTS.test(name)) return;
   seen.add(path);
   const resolvedPath = resolvePath(path, session.cwd);
   result.push({ path, resolvedPath, sessionTitle: session.title || "未命名任务", sessionId: session.id });
+}
+
+/** Extract absolute/relative file paths from arbitrary text (handles quoted and unquoted). */
+function extractPathsFromText(text: string): string[] {
+  const paths: string[] = [];
+  // Quoted absolute paths: "..." or '...' containing a known extension
+  const quotedRe = /["'`](\/?(?:[^\n"'`]+[\\/])[^\n"'`]+\.[a-zA-Z0-9]{1,6})["'`]/g;
+  for (const m of text.matchAll(quotedRe)) {
+    const p = m[1];
+    if (OUTPUT_EXTS.test(p)) paths.push(p);
+  }
+  // Unquoted absolute paths starting with / (no spaces after a colon/space)
+  const unquotedRe = /(?:^|[\s：:「「【(])(\/[^\s"'`<>\n|&;,，。？！]+\.[a-zA-Z0-9]{1,6})/gm;
+  for (const m of text.matchAll(unquotedRe)) {
+    if (OUTPUT_EXTS.test(m[1])) paths.push(m[1]);
+  }
+  return paths;
 }
 
 function extractProducedFiles(sessions: SessionView[]): ProducedFile[] {
@@ -93,35 +116,42 @@ function extractProducedFiles(sessions: SessionView[]): ProducedFile[] {
   const result: ProducedFile[] = [];
 
   for (const session of sessions) {
-    // Use messages regardless of hydrated — streaming sessions have messages but hydrated=false
     if (session.messages.length === 0) continue;
 
     for (const msg of session.messages) {
       const m = msg as any;
       if (m.type !== "assistant") continue;
+
       const content: any[] = m.message?.content ?? [];
 
       for (const block of content) {
+        // ① Final text reply: paths explicitly mentioned by the assistant
+        if (block.type === "text" && typeof block.text === "string") {
+          for (const p of extractPathsFromText(block.text)) {
+            addFile(seen, result, p, session);
+          }
+          continue;
+        }
+
         if (block.type !== "tool_use") continue;
         const toolName: string = (block.name ?? "").toLowerCase();
         const input = (block.input ?? {}) as Record<string, any>;
-
         if (isReadOnlyOp(toolName, input)) continue;
 
-        // bash / shell: parse file redirections (>, >>, tee)
+        // ② bash / shell: only capture explicit shell output redirections (> / >> / tee)
+        //    Do NOT scan quoted paths inside the command — those are script internals
         if (toolName === "bash" || toolName === "shell" || toolName === "run_command") {
           const cmd: string = input.command ?? input.cmd ?? input.script ?? "";
           if (typeof cmd === "string") {
-            // Match: > file, >> file, tee file, tee -a file
-            const matches = cmd.matchAll(/(?:>>?|tee\s+(?:-a\s+)?)\s*["']?([^\s"'|&;<>]+\.[a-zA-Z0-9]+)/g);
-            for (const match of matches) {
+            const redirRe = /(?:>>?|tee\s+(?:-a\s+)?)\s*["']?([^\s"'|&;<>]+\.[a-zA-Z0-9]+)/g;
+            for (const match of cmd.matchAll(redirRe)) {
               addFile(seen, result, match[1], session);
             }
           }
           continue;
         }
 
-        // All other tools: look for path-like fields in input
+        // ③ Direct file-write tools (write_file, str_replace_editor, etc.)
         for (const field of FILE_PATH_FIELDS) {
           const val = input[field];
           if (val && typeof val === "string") {

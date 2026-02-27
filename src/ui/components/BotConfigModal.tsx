@@ -125,24 +125,24 @@ function buildDefaultForm(): FormState {
 
 function botsToForm(bots: Partial<Record<BotPlatformType, BotPlatformConfig>>): FormState {
   const form = buildDefaultForm();
-  const t = bots.telegram;
-  if (t?.platform === "telegram") {
+  const t = bots.telegram as any;
+  if (t) {
     form.telegram = { token: t.token ?? "", proxy: t.proxy ?? "" };
   }
-  const f = bots.feishu;
-  if (f?.platform === "feishu") {
+  const f = bots.feishu as any;
+  if (f) {
     form.feishu = { appId: f.appId ?? "", appSecret: f.appSecret ?? "", domain: f.domain ?? "feishu" };
   }
-  const w = bots.wecom;
-  if (w?.platform === "wecom") {
+  const w = bots.wecom as any;
+  if (w) {
     form.wecom = { corpId: w.corpId ?? "", agentId: w.agentId ?? "", secret: w.secret ?? "" };
   }
-  const d = bots.discord;
-  if (d?.platform === "discord") {
+  const d = bots.discord as any;
+  if (d) {
     form.discord = { token: d.token ?? "" };
   }
-  const dt = bots.dingtalk;
-  if (dt?.platform === "dingtalk") {
+  const dt = bots.dingtalk as any;
+  if (dt) {
     form.dingtalk = {
       appKey: dt.appKey ?? "",
       appSecret: dt.appSecret ?? "",
@@ -252,8 +252,14 @@ export function BotConfigModal({
   useEffect(() => {
     if (!open) return;
     setBots(initialBots);
-    setForm(botsToForm(initialBots));
+    const f = botsToForm(initialBots);
+    setForm(f);
     setTestResult(null);
+    // Auto-expand advanced section if any advanced field has a value
+    const dt = initialBots.dingtalk as any;
+    if (dt && (dt.ownerStaffIds?.length || dt.allowFrom?.length || dt.maxConnectionAttempts)) {
+      setDingtalkAdvanced(true);
+    }
 
     // Get current DingTalk status
     window.electron.getDingtalkBotStatus(assistantId).then((r) => {

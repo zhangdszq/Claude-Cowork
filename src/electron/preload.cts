@@ -1,4 +1,4 @@
-import electron from "electron";
+import electron, { webUtils } from "electron";
 
 electron.contextBridge.exposeInMainWorld("electron", {
     subscribeStatistics: (callback) =>
@@ -57,6 +57,11 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("select-image"),
     savePastedImage: (base64Data: string, mimeType: string) => 
         ipcInvoke("save-pasted-image", base64Data, mimeType),
+    // File selection (any file type, returns array of paths)
+    selectFile: () =>
+        ipcInvoke("select-file"),
+    // Get file system path for a dropped File object (Electron 32+ replacement for File.path)
+    getPathForFile: (file: File) => webUtils.getPathForFile(file),
     // Install tools
     installNodeJs: () => 
         ipcInvoke("install-nodejs"),
@@ -73,6 +78,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("read-skill-content", skillPath),
     installSkill: (url: string) => 
         ipcInvoke("install-skill", url),
+    deleteSkill: (skillName: string) =>
+        ipcInvoke("delete-skill", skillName),
     getAssistantsConfig: () =>
         ipcInvoke("get-assistants-config"),
     saveAssistantsConfig: (config: AssistantsConfig) =>

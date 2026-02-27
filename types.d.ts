@@ -347,6 +347,7 @@ type EventPayloadMapping = {
     "is-claude-cli-installed": boolean;
     "select-image": string | null;
     "save-pasted-image": string | null;
+    "select-file": string[] | null;
     "install-nodejs": InstallResult;
     "install-sdk": InstallResult;
     "get-claude-config": ClaudeConfigInfo;
@@ -354,6 +355,7 @@ type EventPayloadMapping = {
     "delete-mcp-server": SaveMcpResult;
     "read-skill-content": string | null;
     "install-skill": { success: boolean; skillName: string; message: string };
+    "delete-skill": { success: boolean; message: string };
     "get-assistants-config": AssistantsConfig;
     "save-assistants-config": AssistantsConfig;
     "get-bot-config": BotConfig;
@@ -409,6 +411,10 @@ interface Window {
         // Image selection (path only, Agent uses built-in analyze_image tool)
         selectImage: () => Promise<string | null>;
         savePastedImage: (base64Data: string, mimeType: string) => Promise<string | null>;
+        // File selection (any file type, returns array of paths)
+        selectFile: () => Promise<string[] | null>;
+        // Get file system path for a dropped File object (Electron 32+ API)
+        getPathForFile: (file: File) => string;
         // Install tools
         installNodeJs: () => Promise<InstallResult>;
         installSdk: () => Promise<InstallResult>;
@@ -418,6 +424,7 @@ interface Window {
         deleteMcpServer: (name: string) => Promise<SaveMcpResult>;
         readSkillContent: (skillPath: string) => Promise<string | null>;
         installSkill: (url: string) => Promise<{ success: boolean; skillName: string; message: string }>;
+        deleteSkill: (skillName: string) => Promise<{ success: boolean; message: string }>;
         getAssistantsConfig: () => Promise<AssistantsConfig>;
         saveAssistantsConfig: (config: AssistantsConfig) => Promise<AssistantsConfig>;
         // Bot config

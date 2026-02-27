@@ -266,6 +266,7 @@ function runScheduledTask(task: ScheduledTask) {
       prompt: task.prompt,
       cwd: task.cwd,
       skillPath: task.skillPath,
+      assistantId: task.assistantId,
     });
   }
 }

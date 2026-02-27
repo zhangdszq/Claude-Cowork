@@ -1,0 +1,462 @@
+{
+  "version": "1.0",
+  "updatedAt": "2026-02-27",
+  "skills": [
+    {
+      "name": "teaching-outline-writer",
+      "label": "教学大纲编写",
+      "description": "根据课程目标、学段和知识点，智能生成结构化教学大纲。支持按单元、课时拆解，自动生成教学目标、重难点分析、教学活动设计和评估方式，适用于课程规划与备课场景。",
+      "category": "teaching",
+      "installPath": "",
+      "tags": ["teaching", "outline", "curriculum", "education", "lesson-plan"]
+    },
+    {
+      "name": "picturebook-planner",
+      "label": "绘本规划助手",
+      "description": "帮助规划绘本馆的选书策略、主题书单、阅读活动和馆藏建设方案。根据读者年龄段、主题方向和馆藏现状，生成系统化的绘本采购计划、活动方案和阅读推广内容。",
+      "category": "picturebook",
+      "installPath": "",
+      "tags": ["picturebook", "library", "reading", "planning", "children"]
+    },
+    {
+      "name": "youtube-clipper",
+      "label": "YouTube 视频剪辑",
+      "description": "YouTube 视频智能剪辑工具。下载视频和字幕，AI 分析生成精细章节（几分钟级别），用户选择片段后自动剪辑、翻译字幕为中英双语、烧录字幕到视频，并生成总结文案。",
+      "category": "video",
+      "installPath": "https://github.com/op7418/Youtube-clipper-skill",
+      "tags": ["video", "youtube", "subtitle", "clip"]
+    },
+    {
+      "name": "remotion-video",
+      "label": "Remotion 视频创建",
+      "description": "使用 Remotion 框架以编程方式创建视频。Remotion 让你用 React 组件定义视频内容，支持动画、字幕、音乐可视化、3D 视频、教程讲解视频等。",
+      "category": "video",
+      "installPath": "",
+      "tags": ["video", "remotion", "react", "animation"]
+    },
+    {
+      "name": "ffmpeg-usage",
+      "label": "FFmpeg 音视频处理",
+      "description": "基于 FFmpeg 和第三方 API 的音视频处理，包括格式转换、视频拼接、合并、尺寸调整、压缩、GIF 制作、音频提取、字幕处理、社交平台优化、文案提取、文案转录等。",
+      "category": "video",
+      "installPath": "",
+      "tags": ["video", "audio", "ffmpeg", "convert", "compress"]
+    },
+    {
+      "name": "baoyu-image-gen",
+      "label": "AI 图像生成",
+      "description": "AI image generation with OpenAI, Google and DashScope APIs. Supports text-to-image, reference images, aspect ratios. Sequential by default; parallel generation available on request.",
+      "category": "image",
+      "installPath": "",
+      "tags": ["image", "ai", "generation", "openai", "google"]
+    },
+    {
+      "name": "gemini-image",
+      "label": "Gemini 图像生成",
+      "description": "当用户想要生成图片、画图、绘画、创建图像、AI 作画时使用此 Skill。支持文生图和图生图。",
+      "category": "image",
+      "installPath": "",
+      "tags": ["image", "gemini", "generation", "ai"]
+    },
+    {
+      "name": "baoyu-cover-image",
+      "label": "文章封面生成",
+      "description": "生成文章封面图，支持 5 个维度（类型、配色、渲染风格、文字、情绪）的组合，涵盖 9 种色彩方案和 6 种渲染风格，支持电影宽屏 (2.35:1)、16:9 和正方形 (1:1) 比例。",
+      "category": "image",
+      "installPath": "",
+      "tags": ["image", "cover", "article", "design"]
+    },
+    {
+      "name": "baoyu-compress-image",
+      "label": "图片压缩优化",
+      "description": "将图片压缩为 WebP（默认）或 PNG 格式，自动选择最佳工具。当用户需要压缩图片、优化图片大小、转换为 WebP 时使用。",
+      "category": "image",
+      "installPath": "",
+      "tags": ["image", "compress", "webp", "optimize"]
+    },
+    {
+      "name": "imagemagick-conversion",
+      "label": "ImageMagick 图像处理",
+      "description": "使用 ImageMagick 转换和处理图像，支持格式转换、调整大小、批量处理、质量调整和图像变换。",
+      "category": "image",
+      "installPath": "",
+      "tags": ["image", "imagemagick", "convert", "resize", "batch"]
+    },
+    {
+      "name": "algorithmic-art",
+      "label": "算法艺术生成",
+      "description": "使用 p5.js 创建具有随机种子和交互参数探索的算法艺术，支持流场、粒子系统等生成艺术。创建原创算法艺术而非复制现有艺术家的作品。",
+      "category": "image",
+      "installPath": "",
+      "tags": ["art", "algorithm", "p5js", "generative", "creative"]
+    },
+    {
+      "name": "canvas-design",
+      "label": "Canvas 视觉设计",
+      "description": "使用设计哲学在 .png 和 .pdf 文档中创建精美的视觉艺术，适用于创建海报、艺术品、设计或其他静态内容，创建原创视觉设计。",
+      "category": "image",
+      "installPath": "",
+      "tags": ["design", "canvas", "poster", "art", "pdf"]
+    },
+    {
+      "name": "slack-gif-creator",
+      "label": "Slack GIF 动图制作",
+      "description": "创建针对 Slack 优化的动态 GIF，提供约束条件、验证工具和动画概念。当用户需要为 Slack 创建动态 GIF 时使用。",
+      "category": "image",
+      "installPath": "",
+      "tags": ["gif", "slack", "animation", "image"]
+    },
+    {
+      "name": "baoyu-danger-gemini-web",
+      "label": "Gemini Web 生成",
+      "description": "通过逆向工程的 Gemini Web API 生成图像和文本，支持文本生成、从提示生成图像、参考图像视觉输入和多轮对话。",
+      "category": "image",
+      "installPath": "",
+      "tags": ["gemini", "image", "text", "generation", "api"]
+    },
+    {
+      "name": "baoyu-format-markdown",
+      "label": "Markdown 格式化",
+      "description": "格式化纯文本或 Markdown 文件，添加前置信息、标题、摘要、标题层级、粗体、列表和代码块。输出到 {filename}-formatted.md。",
+      "category": "writing",
+      "installPath": "",
+      "tags": ["markdown", "format", "writing", "article"]
+    },
+    {
+      "name": "baoyu-article-illustrator",
+      "label": "文章配图生成",
+      "description": "分析文章结构，识别需要视觉辅助的位置，使用类型×风格二维方法生成插图。当用户需要为文章配图、添加图片时使用。",
+      "category": "writing",
+      "installPath": "",
+      "tags": ["illustration", "article", "image", "writing"]
+    },
+    {
+      "name": "humanizer-zh",
+      "label": "AI 文本去痕",
+      "description": "去除文本中的 AI 生成痕迹，使其听起来更自然、更像人类书写。检测并修复夸大的象征意义、宣传性语言、AI 词汇、破折号过度使用等模式。",
+      "category": "writing",
+      "installPath": "https://github.com/op7418/Humanizer-zh",
+      "tags": ["humanize", "writing", "ai-detection", "chinese"]
+    },
+    {
+      "name": "doc-coauthoring",
+      "label": "文档协作撰写",
+      "description": "引导用户通过结构化工作流程共同撰写文档，帮助高效传递上下文、通过迭代完善内容并验证文档效果，适用于撰写技术文档、提案、规范等。",
+      "category": "writing",
+      "installPath": "",
+      "tags": ["document", "writing", "coauthoring", "workflow"]
+    },
+    {
+      "name": "internal-comms",
+      "label": "内部沟通写作",
+      "description": "帮助撰写各种内部沟通材料，包括状态报告、领导层更新、公司新闻通讯、FAQ、事故报告、项目更新等，使用公司偏好的格式。",
+      "category": "writing",
+      "installPath": "",
+      "tags": ["communication", "writing", "internal", "report"]
+    },
+    {
+      "name": "baoyu-comic",
+      "label": "知识漫画创作",
+      "description": "知识漫画创作工具，支持多种艺术风格和基调，创建包含详细面板布局和顺序图像生成的原创教育漫画。",
+      "category": "writing",
+      "installPath": "",
+      "tags": ["comic", "illustration", "education", "creative"]
+    },
+    {
+      "name": "baoyu-post-to-wechat",
+      "label": "发布微信公众号",
+      "description": "通过 API 或 Chrome CDP 将内容发布到微信公众号，支持文章发布（HTML、Markdown 或纯文本输入）和图文发布（含多张图片）。",
+      "category": "social",
+      "installPath": "",
+      "tags": ["wechat", "social", "publish", "article"]
+    },
+    {
+      "name": "baoyu-post-to-x",
+      "label": "发布到 X/Twitter",
+      "description": "将内容和文章发布到 X (Twitter)，支持带图片/视频的常规帖子和 X Articles（长文 Markdown）。使用真实 Chrome 和 CDP 绕过反自动化检测。",
+      "category": "social",
+      "installPath": "",
+      "tags": ["twitter", "x", "social", "publish", "tweet"]
+    },
+    {
+      "name": "baoyu-xhs-images",
+      "label": "小红书图片生成",
+      "description": "生成针对小红书优化的信息图系列，支持 10 种视觉风格和 8 种布局，将内容分解为 1-10 张卡通风格图片，适合中文社交平台。",
+      "category": "social",
+      "installPath": "",
+      "tags": ["xiaohongshu", "rednote", "social", "image", "infographic"]
+    },
+    {
+      "name": "baoyu-danger-x-to-markdown",
+      "label": "X 推文转 Markdown",
+      "description": "将 X (Twitter) 推文和文章转换为带有 YAML 前置信息的 Markdown 格式，使用逆向工程 API，需要用户同意。",
+      "category": "social",
+      "installPath": "",
+      "tags": ["twitter", "x", "markdown", "convert", "save"]
+    },
+    {
+      "name": "baoyu-markdown-to-html",
+      "label": "Markdown 转 HTML",
+      "description": "将 Markdown 转换为带主题样式的 HTML，兼容微信公众号。支持代码高亮、数学公式、PlantUML、脚注、提示框和信息图。",
+      "category": "document",
+      "installPath": "",
+      "tags": ["markdown", "html", "convert", "wechat", "theme"]
+    },
+    {
+      "name": "pdf",
+      "label": "PDF 文件处理",
+      "description": "处理 PDF 文件的所有操作：读取/提取文本和表格、合并/拆分 PDF、旋转页面、添加水印、创建新 PDF、填写表单、加密/解密、提取图像和 OCR 扫描件。",
+      "category": "document",
+      "installPath": "",
+      "tags": ["pdf", "document", "ocr", "extract", "merge"]
+    },
+    {
+      "name": "docx",
+      "label": "Word 文档处理",
+      "description": "创建、读取、编辑或操作 Word 文档（.docx 文件），包括目录、标题、页码、信头等格式化内容，以及提取、重组内容，处理跟踪修订或注释。",
+      "category": "document",
+      "installPath": "",
+      "tags": ["word", "docx", "document", "office"]
+    },
+    {
+      "name": "pptx",
+      "label": "PPT 演示文稿处理",
+      "description": "处理 .pptx 文件的所有操作：创建演示文稿、解析/提取内容、编辑修改、合并/拆分幻灯片、处理模板、版式、备注等。",
+      "category": "document",
+      "installPath": "",
+      "tags": ["pptx", "powerpoint", "presentation", "slides"]
+    },
+    {
+      "name": "xlsx",
+      "label": "Excel 表格处理",
+      "description": "处理电子表格文件（.xlsx、.xlsm、.csv、.tsv）：打开、读取、编辑表格，计算公式，格式化，创建图表，清理数据等。",
+      "category": "document",
+      "installPath": "",
+      "tags": ["excel", "xlsx", "csv", "spreadsheet", "data"]
+    },
+    {
+      "name": "ppocrv5",
+      "label": "图片文字识别 OCR",
+      "description": "从图片、PDF 或文档中提取文本，支持 URL 和本地文件，具有自适应质量模式，返回包含识别文本、置信度分数和质量指标的结构化 JSON。",
+      "category": "document",
+      "installPath": "",
+      "tags": ["ocr", "text", "extract", "image", "pdf"]
+    },
+    {
+      "name": "deepl",
+      "label": "DeepL 翻译",
+      "description": "通过 DeepL API 翻译文本、文档和 XLIFF 文件，支持 /deepl translate、/deepl file 和 /deepl xliff 命令。",
+      "category": "document",
+      "installPath": "",
+      "tags": ["translate", "deepl", "language", "xliff"]
+    },
+    {
+      "name": "baoyu-slide-deck",
+      "label": "演示幻灯片生成",
+      "description": "从内容生成专业幻灯片图像，创建包含样式说明的大纲，然后生成单独的幻灯片图像。当用户需要创建幻灯片、演示文稿或 PPT 时使用。",
+      "category": "document",
+      "installPath": "",
+      "tags": ["slides", "presentation", "ppt", "generate"]
+    },
+    {
+      "name": "baoyu-infographic",
+      "label": "专业信息图表",
+      "description": "生成专业信息图，支持 20 种布局类型和 17 种视觉风格，分析内容后推荐布局×风格组合，生成可发布的信息图。",
+      "category": "infographic",
+      "installPath": "",
+      "tags": ["infographic", "visual", "chart", "design"]
+    },
+    {
+      "name": "infographic-creator",
+      "label": "信息图创建工具",
+      "description": "根据给定文本内容创建精美信息图。当用户请求创建信息图时使用。",
+      "category": "infographic",
+      "installPath": "",
+      "tags": ["infographic", "create", "visual", "design"]
+    },
+    {
+      "name": "infographic-item-creator",
+      "label": "信息图 Item 组件",
+      "description": "为信息图仓库生成或更新 Item 组件（TypeScript/TSX）。当需要设计、实现或修改数据项视觉效果、布局逻辑时使用。",
+      "category": "infographic",
+      "installPath": "",
+      "tags": ["infographic", "component", "typescript", "tsx"]
+    },
+    {
+      "name": "infographic-structure-creator",
+      "label": "信息图 Structure 组件",
+      "description": "为信息图仓库生成或更新 Structure 组件（TypeScript/TSX），包括列表/比较/序列/层级/关系/地理/图表等布局。",
+      "category": "infographic",
+      "installPath": "",
+      "tags": ["infographic", "structure", "layout", "component"]
+    },
+    {
+      "name": "infographic-syntax-creator",
+      "label": "信息图 DSL 语法",
+      "description": "生成 AntV 信息图语法输出。当需要将用户内容转换为信息图 DSL（模板选择、数据结构化、主题）时使用。",
+      "category": "infographic",
+      "installPath": "",
+      "tags": ["infographic", "dsl", "antv", "syntax"]
+    },
+    {
+      "name": "infographic-template-updater",
+      "label": "信息图模板更新",
+      "description": "添加新信息图模板后更新模板目录和 UI 提示，包括 SKILL.md 模板列表、网站画廊模板映射和 AIPlayground 提示列表。",
+      "category": "infographic",
+      "installPath": "",
+      "tags": ["infographic", "template", "update", "catalog"]
+    },
+    {
+      "name": "theme-factory",
+      "label": "主题样式工厂",
+      "description": "为各类文档（幻灯片、文档、报告、HTML 落地页等）应用主题样式，包含 10 种预设主题（颜色/字体），可应用于任何创建的内容，或按需生成新主题。",
+      "category": "infographic",
+      "installPath": "",
+      "tags": ["theme", "style", "design", "color", "typography"]
+    },
+    {
+      "name": "mcp-builder",
+      "label": "MCP 服务器构建",
+      "description": "创建高质量 MCP（Model Context Protocol）服务器的指南，使 LLM 能够通过精心设计的工具与外部服务交互，支持 Python (FastMCP) 或 Node/TypeScript (MCP SDK)。",
+      "category": "development",
+      "installPath": "",
+      "tags": ["mcp", "server", "api", "integration", "development"]
+    },
+    {
+      "name": "webapp-testing",
+      "label": "Web 应用测试",
+      "description": "使用 Playwright 与本地 Web 应用程序交互和测试，支持验证前端功能、调试 UI 行为、截取浏览器截图和查看浏览器日志。",
+      "category": "development",
+      "installPath": "",
+      "tags": ["testing", "playwright", "frontend", "browser", "debug"]
+    },
+    {
+      "name": "frontend-design",
+      "label": "前端界面设计",
+      "description": "创建具有高设计质量的独特生产级前端界面。当用户需要构建 Web 组件、页面、海报或应用程序时使用，生成创意十足、精美的代码和 UI 设计，避免通用 AI 审美。",
+      "category": "development",
+      "installPath": "",
+      "tags": ["frontend", "design", "ui", "react", "tailwind", "web"]
+    },
+    {
+      "name": "web-artifacts-builder",
+      "label": "Web 组件构建套件",
+      "description": "使用现代前端 Web 技术（React、Tailwind CSS、shadcn/ui）创建精美的多组件 HTML 产物的工具套件，适用于需要状态管理、路由或 shadcn/ui 组件的复杂产物。",
+      "category": "development",
+      "installPath": "",
+      "tags": ["react", "tailwind", "shadcn", "components", "frontend"]
+    },
+    {
+      "name": "remotion-best-practices",
+      "label": "Remotion 最佳实践",
+      "description": "Remotion 的最佳实践指南 - 在 React 中创建视频的框架，涵盖组件设计、性能优化、渲染配置等内容。",
+      "category": "development",
+      "installPath": "",
+      "tags": ["remotion", "react", "video", "best-practices"]
+    },
+    {
+      "name": "skill-creator",
+      "label": "技能创建指南",
+      "description": "创建有效技能的指南。当用户想要创建新技能（或更新现有技能）来扩展 Claude 的专业知识、工作流程或工具集成能力时使用。",
+      "category": "development",
+      "installPath": "",
+      "tags": ["skill", "create", "guide", "claude", "ai"]
+    },
+    {
+      "name": "feishu-card",
+      "label": "飞书卡片发送",
+      "description": "向飞书（Lark）用户或群组发送富交互卡片，支持 Markdown（代码块、表格）、标题、彩色头部和按钮。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["feishu", "lark", "card", "message", "notification"]
+    },
+    {
+      "name": "feishu-doc-reader",
+      "label": "飞书文档读取",
+      "description": "使用飞书开放 API 读取和提取飞书（Lark）文档内容。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["feishu", "lark", "document", "read", "extract"]
+    },
+    {
+      "name": "baoyu-url-to-markdown",
+      "label": "网页转 Markdown",
+      "description": "使用 Chrome CDP 获取任意 URL 并转换为 Markdown，支持两种模式：页面加载后自动捕获，或等待用户信号（适用于需要登录的页面）。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["url", "markdown", "scrape", "web", "convert"]
+    },
+    {
+      "name": "find-skills",
+      "label": "技能发现助手",
+      "description": "帮助用户发现和安装可扩展功能的 Agent 技能，适用于用户询问如何完成某事或寻找特定功能时。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["skill", "discover", "install", "search"]
+    },
+    {
+      "name": "long-term-plan",
+      "label": "长期计划制定",
+      "description": "帮助用户创建和管理长期项目计划，通过结构化多轮对话引导用户明确目标、拆解里程碑、分解可执行任务并安排日程。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["planning", "project", "schedule", "task", "roadmap"]
+    },
+    {
+      "name": "daily-review",
+      "label": "每日工作回顾",
+      "description": "每日工作回顾与洞察分析，对用户前一天的对话历史和使用数据进行总结与建议，提供工作效率洞察。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["review", "daily", "analysis", "productivity", "insights"]
+    },
+    {
+      "name": "deep-review",
+      "label": "深度工作分析",
+      "description": "深度工作分析与项目洞察，从更长时间维度分析工作模式、项目进展和技术方向，提供战略性建议。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["review", "analysis", "deep", "project", "insights"]
+    },
+    {
+      "name": "data-analysis",
+      "label": "数据分析",
+      "description": "全链路数据分析技能，支持表格（CSV/Excel）、文档（PDF/DOCX/MD）及图像数据的处理，安全探查、质量体检、代码执行、结果验证与报告生成。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["data", "analysis", "csv", "excel", "visualization", "python"]
+    },
+    {
+      "name": "sales-coach-lily",
+      "label": "销售教练 Lily",
+      "description": "基于销冠 Lily 的实战心法，分析销售通话录音，从邀约、诊脉、理念渗透、异议处理、逼单等维度提供专业反馈。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["sales", "coaching", "analysis", "audio"]
+    },
+    {
+      "name": "niuma-help",
+      "label": "牛马 AI 使用引导",
+      "description": "牛马 AI 产品使用引导与帮助，解答用户关于功能操作、设置配置等使用问题。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["help", "guide", "product", "usage"]
+    },
+    {
+      "name": "brand-guidelines",
+      "label": "品牌设计规范",
+      "description": "将 Anthropic 官方品牌颜色和字体应用于任何可能受益于 Anthropic 视觉风格的产物，包括幻灯片、文档、报告等。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["brand", "design", "anthropic", "style", "guidelines"]
+    },
+    {
+      "name": "claude-skills-zh-cn",
+      "label": "Claude 中文技能集",
+      "description": "中文版本的 Anthropic Skills 技能集合，包含多个常用技能的中文翻译版本。当需要中文技能文档或参考中文技能实现时使用。",
+      "category": "productivity",
+      "installPath": "",
+      "tags": ["chinese", "skills", "anthropic", "translation"]
+    }
+  ]
+}
