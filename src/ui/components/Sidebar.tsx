@@ -7,7 +7,7 @@ import { AssistantManagerModal } from "./AssistantManagerModal";
 import { SchedulerModal } from "./SchedulerModal";
 
 const ASSISTANT_CWDS_KEY = "vk-cowork-assistant-cwds";
-const ASSISTANT_PANEL_EXPANDED_KEY = "vk-cowork-assistant-panel-expanded";
+const ASSISTANT_PANEL_WIDTH = 168;
 
 function loadAssistantCwdLocal(assistantId: string | null): string {
   if (!assistantId) return "";
@@ -26,6 +26,8 @@ interface SidebarProps {
   onOpenSkill?: () => void;
   onOpenMcp?: () => void;
   onNoWorkspace?: () => void;
+  taskPanelVisible: boolean;
+  onEffectiveWidthChange?: (width: number) => void;
 }
 
 export function Sidebar({
@@ -36,6 +38,8 @@ export function Sidebar({
   onOpenSkill,
   onOpenMcp,
   onNoWorkspace,
+  taskPanelVisible,
+  onEffectiveWidthChange,
 }: SidebarProps) {
   const sessions = useAppStore((state) => state.sessions);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
@@ -50,11 +54,13 @@ export function Sidebar({
   const [showSettings, setShowSettings] = useState(false);
   const [showAssistantManager, setShowAssistantManager] = useState(false);
   const [showScheduler, setShowScheduler] = useState(false);
-  const [assistantPanelExpanded, setAssistantPanelExpanded] = useState(() => {
-    const stored = localStorage.getItem(ASSISTANT_PANEL_EXPANDED_KEY);
-    return stored === null ? true : stored === "true";
-  });
   const closeTimerRef = useRef<number | null>(null);
+
+  const effectiveWidth = taskPanelVisible ? width : ASSISTANT_PANEL_WIDTH;
+
+  useEffect(() => {
+    onEffectiveWidthChange?.(effectiveWidth);
+  }, [effectiveWidth, onEffectiveWidthChange]);
 
   const formatCwd = (cwd?: string) => {
     if (!cwd) return "Working dir unavailable";
@@ -154,14 +160,6 @@ export function Sidebar({
     }
   };
 
-  const handleToggleAssistantPanel = () => {
-    setAssistantPanelExpanded((prev) => {
-      const next = !prev;
-      localStorage.setItem(ASSISTANT_PANEL_EXPANDED_KEY, String(next));
-      return next;
-    });
-  };
-
   const getAssistantInitial = (name: string) => {
     const trimmed = name.trim();
     if (!trimmed) return "?";
@@ -171,7 +169,7 @@ export function Sidebar({
   return (
     <aside
       className="fixed inset-y-0 left-0 flex h-full flex-col border-r border-ink-900/5 bg-[#FAF9F6] pb-4 pt-12"
-      style={{ width: `${width}px` }}
+      style={{ width: `${effectiveWidth}px`, transition: "width 0.2s ease" }}
     >
       <div
         className="absolute top-0 left-0 right-0 h-12"
@@ -181,35 +179,16 @@ export function Sidebar({
       <div className="flex min-h-0 flex-1">
         <div
           className="flex flex-col border-r border-ink-900/5 py-3 transition-[width] duration-200 overflow-hidden"
-          style={{ width: assistantPanelExpanded ? "168px" : "74px" }}
+          style={{ width: `${ASSISTANT_PANEL_WIDTH}px` }}
         >
-          {/* Toggle button at the top */}
-          <div className={`flex mb-2 px-2 ${assistantPanelExpanded ? "justify-end" : "justify-center"}`}>
-            <button
-              onClick={handleToggleAssistantPanel}
-              title={assistantPanelExpanded ? "收起面板" : "展开面板"}
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                className={`h-3.5 w-3.5 transition-transform duration-200 ${assistantPanelExpanded ? "" : "rotate-180"}`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-              >
-                <path d="M15 18l-6-6 6-6" />
-              </svg>
-            </button>
-          </div>
-
           {/* Assistant list */}
-          <div className={`flex flex-col gap-1 ${assistantPanelExpanded ? "px-2" : "px-2 items-center"}`}>
+          <div className="flex flex-col gap-1 px-2 pt-3">
             {assistants.length === 0 && (
               <div className="mt-3 text-[10px] text-muted text-center">No AI</div>
             )}
             {assistants.map((assistant) => {
               const selected = currentAssistant?.id === assistant.id;
-              return assistantPanelExpanded ? (
+              return (
                 <button
                   key={assistant.id}
                   type="button"
@@ -231,164 +210,75 @@ export function Sidebar({
                     {assistant.name}
                   </span>
                 </button>
-              ) : (
-                <button
-                  key={assistant.id}
-                  type="button"
-                  onClick={() => handleSelectAssistant(assistant)}
-                  title={assistant.name}
-                  className={`flex h-11 w-11 items-center justify-center rounded-full border text-sm font-semibold transition ${
-                    selected
-                      ? "border-accent bg-accent/10 text-accent shadow-sm"
-                      : "border-ink-900/10 bg-surface text-ink-700 hover:border-ink-900/20 hover:bg-surface-tertiary"
-                  }`}
-                >
-                  {getAssistantInitial(assistant.name)}
-                </button>
               );
             })}
           </div>
 
-          <div className={`mt-auto border-t border-ink-900/5 pt-2 grid gap-1 ${assistantPanelExpanded ? "px-2" : "px-2"}`}>
-            {assistantPanelExpanded ? (
-              <>
-                <button
-                  onClick={() => setShowAssistantManager(true)}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                    <circle cx="9" cy="7" r="4" />
-                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                  </svg>
-                  <span className="text-[11px] font-medium">助理管理</span>
-                </button>
-                <button
-                  onClick={() => setShowScheduler(true)}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <circle cx="12" cy="12" r="10" />
-                    <path d="M12 6v6l4 2" />
-                  </svg>
-                  <span className="text-[11px] font-medium">定时任务</span>
-                </button>
-                {onOpenSkill && (
-                  <button
-                    onClick={onOpenSkill}
-                    className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-                  >
-                    <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                    </svg>
-                    <span className="text-[11px] font-medium">Skills</span>
-                  </button>
-                )}
-                {onOpenMcp && (
-                  <button
-                    onClick={onOpenMcp}
-                    className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-                  >
-                    <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
-                      <circle cx="12" cy="12" r="3" />
-                      <path d="M12 1v6m0 6v10M1 12h6m6 0h10" />
-                    </svg>
-                    <span className="text-[11px] font-medium">MCP</span>
-                  </button>
-                )}
-                <button
-                  onClick={() => setShowSettings(true)}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <circle cx="12" cy="12" r="3" />
-                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                  </svg>
-                  <span className="text-[11px] font-medium">设置</span>
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  onClick={() => setShowAssistantManager(true)}
-                  title="助理管理"
-                  className="flex h-10 w-full items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                    <circle cx="9" cy="7" r="4" />
-                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => setShowScheduler(true)}
-                  title="定时任务"
-                  className="flex h-10 w-full items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <circle cx="12" cy="12" r="10" />
-                    <path d="M12 6v6l4 2" />
-                  </svg>
-                </button>
-                {onOpenSkill && (
-                  <button
-                    onClick={onOpenSkill}
-                    title="Skills"
-                    className="flex h-10 w-full items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-                  >
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                    </svg>
-                  </button>
-                )}
-                {onOpenMcp && (
-                  <button
-                    onClick={onOpenMcp}
-                    title="MCP 服务器"
-                    className="flex h-10 w-full items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-                  >
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                      <circle cx="12" cy="12" r="3" />
-                      <path d="M12 1v6m0 6v10M1 12h6m6 0h10" />
-                    </svg>
-                  </button>
-                )}
-                <button
-                  onClick={() => setShowSettings(true)}
-                  title="设置"
-                  className="flex h-10 w-full items-center justify-center rounded-xl text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <circle cx="12" cy="12" r="3" />
-                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                  </svg>
-                </button>
-              </>
+          <div className="mt-auto border-t border-ink-900/5 pt-2 grid gap-1 px-2">
+            <button
+              onClick={() => setShowAssistantManager(true)}
+              className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+              <span className="text-[11px] font-medium">助理管理</span>
+            </button>
+            <button
+              onClick={() => setShowScheduler(true)}
+              className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 6v6l4 2" />
+              </svg>
+              <span className="text-[11px] font-medium">定时任务</span>
+            </button>
+            {onOpenSkill && (
+              <button
+                onClick={onOpenSkill}
+                className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                </svg>
+                <span className="text-[11px] font-medium">Skills</span>
+              </button>
             )}
+            {onOpenMcp && (
+              <button
+                onClick={onOpenMcp}
+                className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M12 1v6m0 6v10M1 12h6m6 0h10" />
+                </svg>
+                <span className="text-[11px] font-medium">MCP</span>
+              </button>
+            )}
+            <button
+              onClick={() => setShowSettings(true)}
+              className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+              <span className="text-[11px] font-medium">设置</span>
+            </button>
           </div>
         </div>
 
+        {taskPanelVisible && (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-2.5 min-w-[200px]">
           <div className="pb-2 pt-3">
-            <div className="mb-2 truncate px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-light">
-              {currentAssistant?.name ?? "未归类会话"}
+            <div className="truncate px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-light">
+              历史任务
             </div>
-            <button
-              className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-accent px-3 py-2 text-sm font-medium text-white shadow-soft transition-all hover:bg-accent-hover active:scale-[0.98]"
-              onClick={() => {
-                if (currentAssistant) {
-                  handleSelectAssistant(currentAssistant);
-                }
-                onNewSession();
-              }}
-            >
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-              New Task
-            </button>
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2 gap-0.5 pt-1 pr-1">
@@ -499,6 +389,7 @@ export function Sidebar({
 
           </div>
         </div>
+        )}
       </div>
 
       <Dialog.Root open={!!resumeSessionId} onOpenChange={(open) => !open && setResumeSessionId(null)}>
@@ -539,10 +430,12 @@ export function Sidebar({
 
       <SchedulerModal open={showScheduler} onOpenChange={setShowScheduler} />
 
-      <div
-        className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize bg-transparent transition-colors hover:bg-accent/20"
-        onMouseDown={onResizeStart}
-      />
+      {taskPanelVisible && (
+        <div
+          className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize bg-transparent transition-colors hover:bg-accent/20"
+          onMouseDown={onResizeStart}
+        />
+      )}
     </aside>
   );
 }

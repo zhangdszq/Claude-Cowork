@@ -1,6 +1,12 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 
+interface ScheduledTaskHookFilter {
+  assistantId?: string;
+  titlePattern?: string;
+  onlyOnError?: boolean;
+}
+
 interface ScheduledTask {
   id: string;
   name: string;
@@ -8,12 +14,16 @@ interface ScheduledTask {
   prompt: string;
   cwd?: string;
   skillPath?: string;
-  scheduleType: "once" | "interval" | "daily";
+  scheduleType: "once" | "interval" | "daily" | "heartbeat" | "hook";
   scheduledTime?: string;
   intervalValue?: number;
   intervalUnit?: "minutes" | "hours" | "days" | "weeks";
-  dailyTime?: string;    // "HH:MM"
-  dailyDays?: number[];  // 0=Sun…6=Sat; empty = every day
+  dailyTime?: string;
+  dailyDays?: number[];
+  heartbeatInterval?: number;
+  suppressIfShort?: boolean;
+  hookEvent?: "startup" | "session.complete";
+  hookFilter?: ScheduledTaskHookFilter;
   lastRun?: string;
   nextRun?: string;
   assistantId?: string;
@@ -34,6 +44,7 @@ interface SchedulerModalProps {
 }
 
 type EditMode = "calendar" | "create" | "edit";
+type ScheduleTypeOption = "once" | "interval" | "daily" | "heartbeat" | "hook";
 
 // Weekday labels and JS day indices (Mon-first display order)
 const WEEKDAY_OPTIONS: { label: string; value: number }[] = [
@@ -113,6 +124,8 @@ const getTaskDisplayDate = (task: ScheduledTask): Date | null => {
 
 // Returns true if task should appear on this calendar day
 const isTaskOnDay = (task: ScheduledTask, date: Date): boolean => {
+  // Heartbeat and hook tasks are not time-point tasks — skip calendar display
+  if (task.scheduleType === "heartbeat" || task.scheduleType === "hook") return false;
   if (task.scheduleType === "once" || task.scheduleType === "interval") {
     const d = getTaskDisplayDate(task);
     return !!d && isSameDay(d, date);
@@ -141,12 +154,17 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [cwd, setCwd] = useState("");
-  const [scheduleType, setScheduleType] = useState<"once" | "interval" | "daily">("once");
+  const [scheduleType, setScheduleType] = useState<ScheduleTypeOption>("once");
   const [scheduledTime, setScheduledTime] = useState("");
   const [intervalValue, setIntervalValue] = useState(1);
   const [intervalUnit, setIntervalUnit] = useState<"minutes" | "hours" | "days" | "weeks">("hours");
   const [dailyTime, setDailyTime] = useState("09:00");
-  const [dailyDays, setDailyDays] = useState<number[]>([]); // empty = every day
+  const [dailyDays, setDailyDays] = useState<number[]>([]);
+  const [heartbeatInterval, setHeartbeatInterval] = useState(30);
+  const [suppressIfShort, setSuppressIfShort] = useState(true);
+  const [hookEvent, setHookEvent] = useState<"startup" | "session.complete">("startup");
+  const [hookFilterAssistantId, setHookFilterAssistantId] = useState("");
+  const [hookFilterOnlyOnError, setHookFilterOnlyOnError] = useState(false);
   const [formAssistantId, setFormAssistantId] = useState<string>("");
 
   const loadTasks = useCallback(async () => {
@@ -217,6 +235,8 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     setScheduleType("once"); setScheduledTime("");
     setIntervalValue(1); setIntervalUnit("hours");
     setDailyTime("09:00"); setDailyDays([]);
+    setHeartbeatInterval(30); setSuppressIfShort(true);
+    setHookEvent("startup"); setHookFilterAssistantId(""); setHookFilterOnlyOnError(false);
     setFormAssistantId(""); setEditingTask(null);
   };
 
@@ -244,6 +264,11 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     setIntervalUnit(task.intervalUnit || "hours");
     setDailyTime(task.dailyTime || "09:00");
     setDailyDays(task.dailyDays || []);
+    setHeartbeatInterval(task.heartbeatInterval ?? 30);
+    setSuppressIfShort(task.suppressIfShort ?? true);
+    setHookEvent(task.hookEvent ?? "startup");
+    setHookFilterAssistantId(task.hookFilter?.assistantId ?? "");
+    setHookFilterOnlyOnError(task.hookFilter?.onlyOnError ?? false);
     setFormAssistantId(task.assistantId || "");
     setMode("edit");
   };
@@ -252,7 +277,7 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     if (!name.trim() || !prompt.trim()) return;
     setLoading(true);
     try {
-      const taskData = {
+      const taskData: Omit<ScheduledTask, "id" | "createdAt" | "updatedAt"> = {
         name: name.trim(),
         enabled: true,
         prompt: prompt.trim(),
@@ -263,6 +288,13 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
         intervalUnit: scheduleType === "interval" ? intervalUnit : undefined,
         dailyTime: scheduleType === "daily" ? dailyTime : undefined,
         dailyDays: scheduleType === "daily" ? dailyDays : undefined,
+        heartbeatInterval: scheduleType === "heartbeat" ? heartbeatInterval : undefined,
+        suppressIfShort: scheduleType === "heartbeat" ? suppressIfShort : undefined,
+        hookEvent: scheduleType === "hook" ? hookEvent : undefined,
+        hookFilter: scheduleType === "hook" ? {
+          assistantId: hookFilterAssistantId || undefined,
+          onlyOnError: hookFilterOnlyOnError || undefined,
+        } : undefined,
         assistantId: formAssistantId || undefined,
       };
       if (mode === "edit" && editingTask) {
@@ -658,8 +690,14 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
                   <div className="border-t border-ink-900/10 pt-4">
                     <span className="text-xs font-medium text-muted">执行方式</span>
                     <div className="mt-3 grid grid-cols-3 gap-2">
-                      {(["once", "interval", "daily"] as const).map((type) => {
-                        const labels = { once: "单次执行", interval: "间隔重复", daily: "指定时间" };
+                      {(["once", "interval", "daily", "heartbeat", "hook"] as const).map((type) => {
+                        const labels: Record<string, string> = {
+                          once: "单次执行",
+                          interval: "间隔重复",
+                          daily: "指定时间",
+                          heartbeat: "心跳巡检",
+                          hook: "事件钩子",
+                        };
                         return (
                           <button
                             key={type}
@@ -771,6 +809,80 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
                             </p>
                           )}
                         </div>
+                      </div>
+                    )}
+
+                    {scheduleType === "heartbeat" && (
+                      <div className="mt-4 space-y-3">
+                        <label className="block">
+                          <span className="text-xs font-medium text-muted">巡检间隔（分钟）</span>
+                          <input
+                            type="number"
+                            min="5"
+                            max="1440"
+                            value={heartbeatInterval}
+                            onChange={(e) => setHeartbeatInterval(parseInt(e.target.value) || 30)}
+                            className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                          />
+                          <p className="mt-1 text-xs text-muted">每 {heartbeatInterval} 分钟检查一次，无任务时自动隐藏</p>
+                        </label>
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-medium text-muted">无动作时隐藏会话</span>
+                          <button
+                            onClick={() => setSuppressIfShort(!suppressIfShort)}
+                            className={`relative w-10 h-6 rounded-full transition-colors ${suppressIfShort ? "bg-accent" : "bg-ink-900/20"}`}
+                          >
+                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${suppressIfShort ? "left-5" : "left-1"}`} />
+                          </button>
+                        </div>
+                        <p className="text-xs text-muted">当 Agent 回复 &lt;no-action&gt; 或回复不足 80 字时，该会话不显示在侧边栏</p>
+                      </div>
+                    )}
+
+                    {scheduleType === "hook" && (
+                      <div className="mt-4 space-y-3">
+                        <label className="block">
+                          <span className="text-xs font-medium text-muted">触发时机</span>
+                          <select
+                            value={hookEvent}
+                            onChange={(e) => setHookEvent(e.target.value as "startup" | "session.complete")}
+                            className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                          >
+                            <option value="startup">应用启动时</option>
+                            <option value="session.complete">任意任务完成后</option>
+                          </select>
+                        </label>
+                        {hookEvent === "session.complete" && (
+                          <>
+                            <label className="block">
+                              <span className="text-xs font-medium text-muted">仅当助理完成时触发（可选）</span>
+                              <select
+                                value={hookFilterAssistantId}
+                                onChange={(e) => setHookFilterAssistantId(e.target.value)}
+                                className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                              >
+                                <option value="">任意助理</option>
+                                {assistants.map((a) => (
+                                  <option key={a.id} value={a.id}>{a.name}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <div className="flex items-center gap-3">
+                              <span className="text-xs font-medium text-muted">仅在出错时触发</span>
+                              <button
+                                onClick={() => setHookFilterOnlyOnError(!hookFilterOnlyOnError)}
+                                className={`relative w-10 h-6 rounded-full transition-colors ${hookFilterOnlyOnError ? "bg-accent" : "bg-ink-900/20"}`}
+                              >
+                                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${hookFilterOnlyOnError ? "left-5" : "left-1"}`} />
+                              </button>
+                            </div>
+                          </>
+                        )}
+                        <p className="text-xs text-muted">
+                          {hookEvent === "startup"
+                            ? "应用每次启动后 5 秒自动执行"
+                            : "每当符合条件的任务完成后自动触发"}
+                        </p>
                       </div>
                     )}
                   </div>
