@@ -483,15 +483,70 @@ const AskUserQuestionCard = ({
 };
 
 
-const UserMessageCard = ({ message, showIndicator = false }: { message: { type: "user_prompt"; prompt: string }; showIndicator?: boolean }) => (
-  <div className="flex flex-col mt-4">
-    <div className="header text-accent flex items-center gap-2">
-      <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
-      User
+const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico", "tiff", "avif"]);
+function isImageFile(p: string) {
+  return IMAGE_EXTS.has((p.split(".").pop() ?? "").toLowerCase());
+}
+
+function parseUserPrompt(raw: string): { attachments: { path: string; name: string; isImage: boolean; isDir: boolean }[]; text: string } {
+  const lines = raw.split("\n");
+  const attachments: { path: string; name: string; isImage: boolean; isDir: boolean }[] = [];
+  const textLines: string[] = [];
+  for (const line of lines) {
+    const imgMatch = line.match(/^请分析这张图片: (.+)$/);
+    const fileMatch = line.match(/^请读取并分析这个文件: (.+)$/);
+    const dirMatch = line.match(/^请列出并分析这个文件夹: (.+)$/);
+    if (imgMatch) {
+      const path = imgMatch[1].trim();
+      attachments.push({ path, name: path.split("/").pop() ?? path, isImage: true, isDir: false });
+    } else if (fileMatch) {
+      const path = fileMatch[1].trim();
+      attachments.push({ path, name: path.split("/").pop() ?? path, isImage: isImageFile(path), isDir: false });
+    } else if (dirMatch) {
+      const path = dirMatch[1].trim();
+      attachments.push({ path, name: path.split("/").pop() ?? path, isImage: false, isDir: true });
+    } else {
+      textLines.push(line);
+    }
+  }
+  return { attachments, text: textLines.join("\n").trim() };
+}
+
+const UserMessageCard = ({ message, showIndicator = false }: { message: { type: "user_prompt"; prompt: string }; showIndicator?: boolean }) => {
+  const { attachments, text } = parseUserPrompt(message.prompt);
+  return (
+    <div className="flex flex-col mt-4">
+      <div className="header text-accent flex items-center gap-2">
+        <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
+        User
+      </div>
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-1.5 mb-1">
+            {attachments.map((att) => (
+            <div key={att.path} className="inline-flex items-center gap-1.5 rounded-lg border border-ink-900/10 bg-surface-secondary px-2.5 py-1 text-xs text-ink-600">
+              {att.isImage ? (
+                <svg className="h-3.5 w-3.5 text-accent flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                  <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              ) : att.isDir ? (
+                <svg className="h-3.5 w-3.5 text-yellow-600 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              ) : (
+                <svg className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  <polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              )}
+              <span className="max-w-[240px] truncate">{att.name}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {text && <MDContent text={text} />}
     </div>
-    <MDContent text={message.prompt} />
-  </div>
-);
+  );
+};
 
 export const MessageCard = memo(function MessageCard({
   message,

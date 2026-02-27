@@ -62,6 +62,9 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("select-file"),
     // Get file system path for a dropped File object (Electron 32+ replacement for File.path)
     getPathForFile: (file: File) => webUtils.getPathForFile(file),
+    // Generate a thumbnail data URL for a local image (128px max dim, returns data:image/png;base64,...)
+    getImageThumbnail: (filePath: string) =>
+        ipcInvoke("get-image-thumbnail", filePath),
     // Install tools
     installNodeJs: () => 
         ipcInvoke("install-nodejs"),

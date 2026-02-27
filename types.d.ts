@@ -34,6 +34,13 @@ type UserSettings = {
     proxyEnabled?: boolean;
     proxyUrl?: string;
     openaiTokens?: OpenAITokens;
+    webhookToken?: string;
+}
+
+type ScheduledTaskHookFilter = {
+    assistantId?: string;
+    titlePattern?: string;
+    onlyOnError?: boolean;
 }
 
 type ScheduledTask = {
@@ -43,7 +50,7 @@ type ScheduledTask = {
     prompt: string;
     cwd?: string;
     skillPath?: string;
-    scheduleType: "once" | "interval" | "daily";
+    scheduleType: "once" | "interval" | "daily" | "heartbeat" | "hook";
     // For "once" type
     scheduledTime?: string;
     // For "interval" type
@@ -52,6 +59,12 @@ type ScheduledTask = {
     // For "daily" type — run at a fixed time each day/week
     dailyTime?: string;    // "HH:MM"
     dailyDays?: number[];  // 0=Sun…6=Sat; empty = every day
+    // For "heartbeat" type — periodic self-check
+    heartbeatInterval?: number;  // minutes, default 30
+    suppressIfShort?: boolean;   // hide session if response < 80 chars or contains <no-action>
+    // For "hook" type — triggered by internal events
+    hookEvent?: "startup" | "session.complete";
+    hookFilter?: ScheduledTaskHookFilter;
     lastRun?: string;
     nextRun?: string;
     assistantId?: string;
@@ -347,7 +360,8 @@ type EventPayloadMapping = {
     "is-claude-cli-installed": boolean;
     "select-image": string | null;
     "save-pasted-image": string | null;
-    "select-file": string[] | null;
+    "select-file": { path: string; isDir: boolean }[] | null;
+    "get-image-thumbnail": string | null;
     "install-nodejs": InstallResult;
     "install-sdk": InstallResult;
     "get-claude-config": ClaudeConfigInfo;
@@ -411,10 +425,12 @@ interface Window {
         // Image selection (path only, Agent uses built-in analyze_image tool)
         selectImage: () => Promise<string | null>;
         savePastedImage: (base64Data: string, mimeType: string) => Promise<string | null>;
-        // File selection (any file type, returns array of paths)
-        selectFile: () => Promise<string[] | null>;
+        // File/folder selection, returns array of { path, isDir }
+        selectFile: () => Promise<{ path: string; isDir: boolean }[] | null>;
         // Get file system path for a dropped File object (Electron 32+ API)
         getPathForFile: (file: File) => string;
+        // Generate a thumbnail data URL for a local image
+        getImageThumbnail: (filePath: string) => Promise<string | null>;
         // Install tools
         installNodeJs: () => Promise<InstallResult>;
         installSdk: () => Promise<InstallResult>;

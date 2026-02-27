@@ -250,6 +250,25 @@ function App() {
     if (!Number.isFinite(raw)) return DEFAULT_SIDEBAR_WIDTH;
     return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, raw));
   });
+  const [inputAreaHeight, setInputAreaHeight] = useState(160);
+  const [taskPanelVisible, setTaskPanelVisible] = useState(() => {
+    return localStorage.getItem("vk-cowork-task-panel-visible") === "true";
+  });
+  const handleToggleTaskPanel = useCallback(() => {
+    setTaskPanelVisible((prev) => {
+      const next = !prev;
+      localStorage.setItem("vk-cowork-task-panel-visible", String(next));
+      return next;
+    });
+  }, []);
+
+  const [effectiveSidebarWidth, setEffectiveSidebarWidth] = useState(() => {
+    const taskVisible = localStorage.getItem("vk-cowork-task-panel-visible") === "true";
+    if (!taskVisible) return 168;
+    const raw = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    if (!Number.isFinite(raw)) return DEFAULT_SIDEBAR_WIDTH;
+    return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, raw));
+  });
 
   const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
@@ -648,6 +667,13 @@ function App() {
     };
   }, [messages, partialMessage]);
 
+  // When input area grows, scroll to keep last message above it
+  useEffect(() => {
+    if (!isUserScrolledUpRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [inputAreaHeight]);
+
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
   const [showChangeWorkspacePicker, setShowChangeWorkspacePicker] = useState(false);
   const [workspaceDropdownOpen, setWorkspaceDropdownOpen] = useState(false);
@@ -758,14 +784,16 @@ function App() {
         onOpenSkill={handleOpenSkill}
         onOpenMcp={handleOpenMcp}
         onNoWorkspace={() => setShowWorkspacePicker(true)}
+        taskPanelVisible={taskPanelVisible}
+        onEffectiveWidthChange={setEffectiveSidebarWidth}
       />
 
       <main
         className="flex flex-1 flex-col bg-surface-cream"
         style={{
-          marginLeft: `${sidebarWidth}px`,
+          marginLeft: `${effectiveSidebarWidth}px`,
           marginRight: showWorkspacePanel ? `${WORKSPACE_PANEL_WIDTH}px` : 0,
-          transition: "margin-right 0.2s ease",
+          transition: "margin-left 0.2s ease, margin-right 0.2s ease",
         }}
       >
         <div 
@@ -775,6 +803,34 @@ function App() {
           <div className="w-24" /> {/* Spacer for balance */}
           <span className="text-sm font-medium text-ink-700">{activeSession?.title || "AI Team"}</span>
           <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+            {/* History tasks toggle */}
+            <button
+              onClick={handleToggleTaskPanel}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                taskPanelVisible
+                  ? "bg-accent/10 text-accent"
+                  : "text-muted hover:bg-surface-tertiary hover:text-ink-700"
+              }`}
+              title="历史任务"
+            >
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v5l3 3" />
+              </svg>
+              历史任务
+            </button>
+            {/* New task */}
+            <button
+              onClick={handleNewSession}
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
+              title="新任务"
+            >
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              新任务
+            </button>
+            <div className="h-4 w-px bg-ink-900/10" />
             {/* Workspace button */}
             <div className="relative">
               <button
@@ -861,7 +917,7 @@ function App() {
           </div>
         ) : null}
 
-        <div ref={scrollContainerRef} className={`flex-1 overflow-y-auto px-8 pb-40 pt-6 ${showWorkspacePicker || showChangeWorkspacePicker ? "hidden" : ""}`}>
+        <div ref={scrollContainerRef} className={`flex-1 overflow-y-auto px-8 pt-6 ${showWorkspacePicker || showChangeWorkspacePicker ? "hidden" : ""}`} style={{ paddingBottom: `${inputAreaHeight + 16}px` }}>
           <div className="mx-auto max-w-3xl">
             {isLoadingHistory ? (
               // 骨架屏 - 加载历史消息时显示
@@ -961,7 +1017,7 @@ function App() {
           </div>
         </div>
 
-        {!showWorkspacePicker && !showChangeWorkspacePicker && <PromptInput sendEvent={sendEvent} sidebarWidth={sidebarWidth} rightPanelWidth={showWorkspacePanel ? WORKSPACE_PANEL_WIDTH : 0} />}
+        {!showWorkspacePicker && !showChangeWorkspacePicker && <PromptInput sendEvent={sendEvent} sidebarWidth={effectiveSidebarWidth} rightPanelWidth={showWorkspacePanel ? WORKSPACE_PANEL_WIDTH : 0} onHeightChange={setInputAreaHeight} />}
       </main>
 
       {globalError && (

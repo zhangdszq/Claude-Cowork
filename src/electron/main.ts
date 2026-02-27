@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from "electron"
+import { app, BrowserWindow, ipcMain, dialog, shell, protocol } from "electron"
 import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
 import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources } from "./test.js";
@@ -35,7 +35,7 @@ import {
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { runEnvironmentChecks, validateApiConfig } from "./libs/env-check.js";
 import { openAILogin, openAILogout, getOpenAIAuthStatus, ensureCodexAuthSync } from "./libs/openai-auth.js";
-import { startEmbeddedApi, stopEmbeddedApi, isEmbeddedApiRunning } from "./api/server.js";
+import { startEmbeddedApi, stopEmbeddedApi, isEmbeddedApiRunning, setWebhookSessionRunner } from "./api/server.js";
 import {
   readLongTermMemory, readDailyMemory, buildMemoryContext,
   writeLongTermMemory, appendDailyMemory, writeDailyMemory,
@@ -51,7 +51,8 @@ import {
   deleteScheduledTask,
   startScheduler,
   stopScheduler,
-  setSchedulerWindow,
+  setSchedulerSessionRunner,
+  runHookTasks,
   type ScheduledTask
 } from "./libs/scheduler.js";
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from "fs";
@@ -146,7 +147,30 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
     }
 }
 
+// Must be called before app is ready
+protocol.registerSchemesAsPrivileged([
+    { scheme: "localfile", privileges: { secure: true, standard: true, supportFetchAPI: true, bypassCSP: true } }
+]);
+
 app.on("ready", async () => {
+    // Serve local files via localfile:// — file:// is blocked from http://localhost by Chromium
+    protocol.handle("localfile", async (request) => {
+        try {
+            const { promises: fs } = await import("fs");
+            const filePath = decodeURIComponent(new URL(request.url).pathname);
+            const data = await fs.readFile(filePath);
+            const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+            const mimeMap: Record<string, string> = {
+                jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png",
+                gif: "image/gif", webp: "image/webp", bmp: "image/bmp",
+                svg: "image/svg+xml", ico: "image/x-icon", tiff: "image/tiff", avif: "image/avif",
+            };
+            return new Response(data, { headers: { "Content-Type": mimeMap[ext] ?? "application/octet-stream" } });
+        } catch {
+            return new Response("Not found", { status: 404 });
+        }
+    });
+
     // Ensure app name shows correctly in dev mode (overrides the default "Electron")
     app.setName("AI Team");
 
@@ -171,6 +195,8 @@ app.on("ready", async () => {
     const started = await startEmbeddedApi();
     if (started) {
         console.log("Embedded API server started successfully");
+        // Wire webhook route to the same session handler
+        setWebhookSessionRunner(handleClientEvent);
     } else {
         console.error("Failed to start embedded API server");
     }
@@ -196,9 +222,14 @@ app.on("ready", async () => {
 
     pollResources(mainWindow);
 
-    // Initialize scheduler
-    setSchedulerWindow(mainWindow);
+    // Initialize scheduler — inject sessionRunner so tasks fire directly in main process
     startScheduler();
+    setSchedulerSessionRunner(handleClientEvent);
+
+    // Run startup hooks after window settles (5 s delay)
+    setTimeout(() => {
+        try { runHookTasks("startup"); } catch (e) { console.warn("[Startup] Hook error:", e); }
+    }, 5000);
 
     // Register weekly L2→L1 memory compaction task (once, idempotent)
     try {
@@ -535,18 +566,39 @@ app.on("ready", async () => {
         return result.filePaths[0];
     });
 
-    // Handle file selection (any file type, returns array of paths)
+    // Generate a small thumbnail data URL from a local image path
+    ipcMainHandle("get-image-thumbnail", async (_: any, filePath: string) => {
+        try {
+            const { nativeImage } = await import("electron");
+            const img = nativeImage.createFromPath(filePath);
+            if (img.isEmpty()) return null;
+            const size = img.getSize();
+            const maxDim = 128;
+            const scale = Math.min(maxDim / size.width, maxDim / size.height, 1);
+            const resized = img.resize({ width: Math.round(size.width * scale), height: Math.round(size.height * scale) });
+            return resized.toDataURL();
+        } catch {
+            return null;
+        }
+    });
+
+    // Handle file/folder selection (returns array of { path, isDir })
     ipcMainHandle("select-file", async () => {
         const result = await dialog.showOpenDialog(mainWindow, {
-            title: "选择文件",
-            properties: ["openFile", "multiSelections"]
+            title: "选择文件或文件夹",
+            properties: ["openFile", "openDirectory", "multiSelections"]
         });
         
         if (result.canceled || result.filePaths.length === 0) {
             return null;
         }
         
-        return result.filePaths;
+        const { statSync } = await import("fs");
+        return result.filePaths.map(p => {
+            let isDir = false;
+            try { isDir = statSync(p).isDirectory(); } catch { /* ignore */ }
+            return { path: p, isDir };
+        });
     });
 
     // Handle pasted image - save base64 to temp file and return path

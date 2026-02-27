@@ -127,6 +127,7 @@ interface PromptInputProps {
   sendEvent: (event: ClientEvent) => void;
   sidebarWidth: number;
   rightPanelWidth?: number;
+  onHeightChange?: (height: number) => void;
 }
 
 /**
@@ -185,8 +186,8 @@ export function usePromptActions(
   const selectedAssistantSkillNames = useAppStore((state) => state.selectedAssistantSkillNames);
   const selectedAssistantPersona = useAppStore((state) => state.selectedAssistantPersona);
 
-  // Attachments - images and files
-  const [attachments, setAttachments] = useState<Array<{ path: string; name: string; isImage: boolean }>>([]);
+  // Attachments - images, files and folders
+  const [attachments, setAttachments] = useState<Array<{ path: string; name: string; isImage: boolean; isDir: boolean; preview?: string }>>([]);
 
   const activeSession = activeSessionId ? sessions[activeSessionId] : undefined;
   const isRunning = activeSession?.status === "running";
@@ -194,21 +195,29 @@ export function usePromptActions(
   const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico", "tiff", "avif"]);
   const isImagePath = (p: string) => IMAGE_EXTS.has((p.split(".").pop() ?? "").toLowerCase());
 
-  const addAttachment = useCallback((filePath: string) => {
+  const addAttachment = useCallback((filePath: string, isDir = false) => {
     const name = filePath.split("/").pop() ?? filePath;
-    const img = isImagePath(filePath);
+    const img = !isDir && isImagePath(filePath);
     setAttachments(prev => {
       if (prev.some(a => a.path === filePath)) return prev;
-      return [...prev, { path: filePath, name, isImage: img }];
+      return [...prev, { path: filePath, name, isImage: img, isDir }];
     });
+    // Load thumbnail asynchronously for images
+    if (img) {
+      window.electron.getImageThumbnail(filePath).then(dataUrl => {
+        if (dataUrl) {
+          setAttachments(prev => prev.map(a => a.path === filePath ? { ...a, preview: dataUrl } : a));
+        }
+      }).catch(() => {});
+    }
   }, []);
 
-  // Handle file/image selection via button
+  // Handle file/folder selection via button
   const handleSelectImage = useCallback(async () => {
     try {
-      const paths = await window.electron.selectFile();
-      if (paths) {
-        paths.forEach(addAttachment);
+      const items = await window.electron.selectFile();
+      if (items) {
+        items.forEach(({ path, isDir }) => addAttachment(path, isDir));
       }
     } catch (error) {
       console.error("Failed to select file:", error);
@@ -271,7 +280,9 @@ export function usePromptActions(
         filePath = "";
       }
       if (filePath) {
-        addAttachment(filePath);
+        // Detect folder: dragged folders have file.type === "" and size === 0
+        const isDir = file.type === "" && file.size === 0;
+        addAttachment(filePath, isDir);
       } else if (file.type.startsWith("image/")) {
         // Fallback for images when path is unavailable
         try {
@@ -303,6 +314,8 @@ export function usePromptActions(
       for (const att of attachments) {
         if (att.isImage) {
           parts.push(`请分析这张图片: ${att.path}`);
+        } else if (att.isDir) {
+          parts.push(`请列出并分析这个文件夹: ${att.path}`);
         } else {
           parts.push(`请读取并分析这个文件: ${att.path}`);
         }
@@ -455,8 +468,9 @@ export function usePromptActions(
   };
 }
 
-export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: PromptInputProps) {
+export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHeightChange }: PromptInputProps) {
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
+  const sectionRef = useRef<HTMLElement | null>(null);
 
   const selectedAssistantSkillNames = useAppStore((state) => state.selectedAssistantSkillNames);
   const selectedAssistantSkillTags = useAppStore((state) => state.selectedAssistantSkillTags);
@@ -547,6 +561,17 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
       el.removeEventListener("drop", onDrop);
     };
   }, [cardEl, handleDrop]);
+
+  // Report height changes to parent so scroll area can adjust padding
+  useEffect(() => {
+    if (!onHeightChange) return;
+    const el = sectionRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => onHeightChange(el.offsetHeight));
+    ro.observe(el);
+    onHeightChange(el.offsetHeight);
+    return () => ro.disconnect();
+  }, [onHeightChange]);
 
   // Memory indicator state
   const [memorySummary, setMemorySummary] = useState<{ longTermSize: number; dailyCount: number; totalSize: number } | null>(null);
@@ -888,33 +913,68 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
     >
       {/* Attachments Preview */}
       {attachments.length > 0 && (
-        <div className="mx-3 mt-3 flex flex-wrap gap-2">
-          {attachments.map((att) => (
-            <div key={att.path} className="flex items-center gap-2 rounded-xl border border-ink-900/8 bg-surface-secondary px-3 py-2 max-w-xs">
-              <div className={`flex h-8 w-8 items-center justify-center rounded-lg flex-shrink-0 ${att.isImage ? "bg-accent/10" : "bg-blue-500/10"}`}>
-                {att.isImage ? (
-                  <svg className="h-4 w-4 text-accent" viewBox="0 0 24 24" fill="none">
-                    <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                ) : (
-                  <svg className="h-4 w-4 text-blue-500" viewBox="0 0 24 24" fill="none">
-                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    <polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-ink-700 truncate">{att.name}</div>
-                <div className="text-xs text-muted">{att.isImage ? "图片" : "文件"}</div>
-              </div>
-              <button
-                onClick={() => handleRemoveImage(att.path)}
-                className="flex h-6 w-6 items-center justify-center rounded-full text-muted hover:bg-ink-900/10 hover:text-ink-700 flex-shrink-0"
-              >
-                <svg viewBox="0 0 24 24" className="h-4 w-4"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
-              </button>
-            </div>
-          ))}
+        <div className="mx-3 mt-3">
+          <div className="flex flex-wrap gap-2 max-h-44 overflow-y-auto pr-1">
+            {attachments.map((att) => (
+              att.isImage ? (
+                /* Image: thumbnail card */
+                <div key={att.path} className="relative group flex-shrink-0">
+                  <div className="h-16 w-16 rounded-xl overflow-hidden border border-ink-900/10 bg-surface-secondary flex items-center justify-center">
+                    {att.preview ? (
+                      <img src={att.preview} alt={att.name} className="h-full w-full object-cover" draggable={false} />
+                    ) : (
+                      <svg className="h-6 w-6 text-ink-300 animate-pulse" viewBox="0 0 24 24" fill="none">
+                        <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => handleRemoveImage(att.path)}
+                    className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-ink-800 text-white opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3 w-3"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/></svg>
+                  </button>
+                </div>
+              ) : (
+                /* File or Folder: compact chip */
+                <div key={att.path} className="group flex items-center gap-2 rounded-xl border border-ink-900/8 bg-surface-secondary pl-2.5 pr-1.5 py-1.5 max-w-[200px]">
+                  <div className={`flex h-7 w-7 items-center justify-center rounded-lg flex-shrink-0 ${att.isDir ? "bg-yellow-500/10" : "bg-blue-500/10"}`}>
+                    {att.isDir ? (
+                      <svg className="h-3.5 w-3.5 text-yellow-600" viewBox="0 0 24 24" fill="none">
+                        <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    ) : (
+                      <svg className="h-3.5 w-3.5 text-blue-500" viewBox="0 0 24 24" fill="none">
+                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        <polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium text-ink-700 truncate leading-tight">{att.name}</div>
+                    <div className="text-[10px] text-muted uppercase leading-tight">
+                      {att.isDir ? "文件夹" : (att.name.split(".").pop() || "文件")}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleRemoveImage(att.path)}
+                    className="flex h-5 w-5 items-center justify-center rounded-full text-muted hover:bg-ink-900/10 hover:text-ink-700 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3 w-3"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/></svg>
+                  </button>
+                </div>
+              )
+            ))}
+          </div>
+          {/* Batch remove all */}
+          {attachments.length > 1 && (
+            <button
+              onClick={() => handleRemoveImage()}
+              className="mt-1.5 text-[11px] text-muted hover:text-ink-600 transition-colors"
+            >
+              清除全部 ({attachments.length})
+            </button>
+          )}
         </div>
       )}
 
@@ -922,9 +982,9 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
       {isDragOver && (
         <div className="mx-3 mt-3 flex items-center justify-center rounded-xl border-2 border-dashed border-accent/40 bg-accent/5 px-4 py-3 gap-2 text-sm text-accent">
           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
           </svg>
-          松开以添加文件
+          松开以添加图片或文件（支持批量）
         </div>
       )}
 
@@ -1073,6 +1133,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
 
   return (
     <section
+      ref={sectionRef}
       className={
         hasMessages
           ? "fixed bottom-0 left-0 right-0 bg-gradient-to-t from-surface-cream via-surface-cream to-transparent pb-6 px-4 lg:pb-8 pt-12"

@@ -2,7 +2,7 @@
   "name": "vk-cowork",
   "productName": "AI Team",
   "private": true,
-  "version": "0.0.29",
+  "version": "0.0.30",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -41,6 +41,7 @@
     "@tailwindcss/vite": "^4.1.18",
     "better-sqlite3": "^12.6.0",
     "dotenv": "^17.2.3",
+    "electron-updater": "^6.8.3",
     "highlight.js": "^11.11.1",
     "hono": "^4.11.7",
     "https-proxy-agent": "^7.0.6",
@@ -54,6 +55,7 @@
     "tailwindcss": "^4.1.18",
     "vite-tsconfig-paths": "^6.0.3",
     "ws": "^8.19.0",
+    "zod": "^4.3.6",
     "zustand": "^5.0.10"
   },
   "devDependencies": {
