@@ -1032,6 +1032,14 @@ export async function sendProactiveMediaDingtalk(
   if (!mediaId) {
     return { ok: false, error: "媒体上传失败，请检查应用权限（oapi.dingtalk.com/media/upload）" };
   }
+  // For image preview rendering, sampleImageMsg needs an HTTP URL.
+  // Build a short-lived URL backed by DingTalk V1 media/get.
+  const imagePreviewUrl =
+    detectedType === "image"
+      ? `https://oapi.dingtalk.com/media/get?access_token=${encodeURIComponent(
+          await getAccessTokenV1(botOpts.appKey, botOpts.appSecret),
+        )}&media_id=${encodeURIComponent(mediaId)}`
+      : "";
 
   // Send to each target
   const robotCode = botOpts.robotCode ?? botOpts.appKey;
@@ -1046,16 +1054,17 @@ export async function sendProactiveMediaDingtalk(
       ? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
       : `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
 
-    // NOTE: sampleImageMsg.photoURL requires an HTTP URL — media_id is NOT a URL.
-    // Use sampleFile for image/video/file; use sampleAudio for voice only.
     let msgKey: string;
     let msgParam: string;
     const fileName2 = filePath.split("/").pop() ?? "file";
     if (detectedType === "voice") {
       msgKey = "sampleAudio";
       msgParam = JSON.stringify({ mediaId, duration: "0" });
+    } else if (detectedType === "image") {
+      msgKey = "sampleImageMsg";
+      msgParam = JSON.stringify({ photoURL: imagePreviewUrl });
     } else {
-      const fileExt = ext || (detectedType === "image" ? "png" : detectedType === "video" ? "mp4" : "bin");
+      const fileExt = ext || (detectedType === "video" ? "mp4" : "bin");
       msgKey = "sampleFile";
       msgParam = JSON.stringify({ mediaId, fileName: fileName2, fileType: fileExt });
     }
@@ -1077,6 +1086,30 @@ export async function sendProactiveMediaDingtalk(
         },
         body: JSON.stringify(payload),
       });
+
+      if (!resp.ok && detectedType === "image") {
+        const fallbackPayload: Record<string, unknown> = {
+          robotCode,
+          msgKey: "sampleFile",
+          msgParam: JSON.stringify({ mediaId, fileName: fileName2, fileType: ext || "png" }),
+        };
+        if (isGroup) fallbackPayload.openConversationId = targetId;
+        else fallbackPayload.userIds = [targetId];
+
+        const fallbackResp = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-acs-dingtalk-access-token": token,
+          },
+          body: JSON.stringify(fallbackPayload),
+        });
+        if (fallbackResp.ok) {
+          clearProactiveRisk(botOpts.assistantId, targetId);
+          console.log(`[DingTalk] Proactive image fallback(file) sent → ${isGroup ? "group" : "user"} ${targetId}`);
+          continue;
+        }
+      }
 
       if (!resp.ok) {
         const errText = await resp.text();
@@ -1779,7 +1812,7 @@ class DingtalkConnection {
           }
         }
 
-        // Fallback: proactive API (sampleFile for images/files, sampleAudio for voice)
+        // Fallback: proactive API (image->sampleImageMsg, fallback to sampleFile; voice->sampleAudio)
         const robotCode = self.opts.robotCode ?? self.opts.appKey;
         const sender = msg.senderStaffId ?? msg.senderId ?? "";
         const isGroup = msg.conversationType === "2";
@@ -1790,10 +1823,18 @@ class DingtalkConnection {
 
         const fileName = path.basename(filePath);
         const fileExt = ext || "bin";
-        const msgKey = sendMediaType === "voice" ? "sampleAudio" : "sampleFile";
-        const msgParam = sendMediaType === "voice"
+        let msgKey = sendMediaType === "voice" ? "sampleAudio" : "sampleFile";
+        let msgParam = sendMediaType === "voice"
           ? JSON.stringify({ mediaId, duration: "1" })
           : JSON.stringify({ mediaId, fileName, fileType: fileExt });
+        if (sendMediaType === "image") {
+          const tokenV1 = await getAccessTokenV1(self.opts.appKey, self.opts.appSecret);
+          const imageUrl =
+            `https://oapi.dingtalk.com/media/get?access_token=${encodeURIComponent(tokenV1)}` +
+            `&media_id=${encodeURIComponent(mediaId)}`;
+          msgKey = "sampleImageMsg";
+          msgParam = JSON.stringify({ photoURL: imageUrl });
+        }
 
         const payload: Record<string, unknown> = { robotCode, msgKey, msgParam };
         if (isGroup) payload.openConversationId = resolvedTarget;
@@ -1807,6 +1848,24 @@ class DingtalkConnection {
             body: JSON.stringify(payload),
           });
           const respText = await resp.text();
+          if (!resp.ok && sendMediaType === "image") {
+            const fallbackPayload: Record<string, unknown> = {
+              robotCode,
+              msgKey: "sampleFile",
+              msgParam: JSON.stringify({ mediaId, fileName, fileType: fileExt || "png" }),
+            };
+            if (isGroup) fallbackPayload.openConversationId = resolvedTarget;
+            else fallbackPayload.userIds = [resolvedTarget];
+            const fallbackResp = await fetch(apiUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "x-acs-dingtalk-access-token": token },
+              body: JSON.stringify(fallbackPayload),
+            });
+            const fallbackText = await fallbackResp.text();
+            cleanup();
+            if (fallbackResp.ok) return `文件已发送: ${path.basename(sendPath)}`;
+            return `发送失败 (HTTP ${fallbackResp.status}): ${fallbackText.slice(0, 200)}`;
+          }
           cleanup();
           if (resp.ok) return `文件已发送: ${path.basename(sendPath)}`;
           return `发送失败 (HTTP ${resp.status}): ${respText.slice(0, 200)}`;
