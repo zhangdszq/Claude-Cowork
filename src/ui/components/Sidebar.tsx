@@ -31,7 +31,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({
-  onNewSession,
+  onNewSession: _onNewSession,
   onDeleteSession,
   width,
   onResizeStart,

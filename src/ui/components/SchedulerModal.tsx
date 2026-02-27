@@ -1,35 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 
-interface ScheduledTaskHookFilter {
-  assistantId?: string;
-  titlePattern?: string;
-  onlyOnError?: boolean;
-}
-
-interface ScheduledTask {
-  id: string;
-  name: string;
-  enabled: boolean;
-  prompt: string;
-  cwd?: string;
-  skillPath?: string;
-  scheduleType: "once" | "interval" | "daily" | "heartbeat" | "hook";
-  scheduledTime?: string;
-  intervalValue?: number;
-  intervalUnit?: "minutes" | "hours" | "days" | "weeks";
-  dailyTime?: string;
-  dailyDays?: number[];
-  heartbeatInterval?: number;
-  suppressIfShort?: boolean;
-  hookEvent?: "startup" | "session.complete";
-  hookFilter?: ScheduledTaskHookFilter;
-  lastRun?: string;
-  nextRun?: string;
-  assistantId?: string;
-  createdAt: string;
-  updatedAt: string;
-}
 
 interface AssistantConfig {
   id: string;
