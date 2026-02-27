@@ -22,6 +22,63 @@ import { getCodexBinaryPath } from "./codex-runner.js";
 import { buildSmartMemoryContext, appendDailyMemory } from "./memory-store.js";
 import type { SessionStore } from "./session-store.js";
 
+// ─── Tool Registry (OpenClaw-style extensible tool system) ───────────────────
+
+/** Context passed to every tool execution */
+interface ToolContext {
+  msg: DingtalkMessage;
+  /** Send an interim progress message to the current conversation */
+  sendProgress: (text: string) => Promise<void>;
+}
+
+/** A single registered tool */
+interface ToolEntry {
+  schema: Anthropic.Tool;
+  /** Short one-line hint shown in the system prompt */
+  hint: string;
+  execute: (input: Record<string, unknown>, ctx: ToolContext) => Promise<string>;
+}
+
+/**
+ * Extensible tool registry — mirrors OpenClaw's createOpenClawTools() pattern.
+ * Tools are registered once per bot instance and passed to every Claude API call.
+ */
+class ToolRegistry {
+  private entries = new Map<string, ToolEntry>();
+
+  register(entry: ToolEntry): this {
+    this.entries.set(entry.schema.name, entry);
+    return this;
+  }
+
+  get schemas(): Anthropic.Tool[] {
+    return [...this.entries.values()].map((e) => e.schema);
+  }
+
+  /** Multiline hint block injected into the Claude system prompt */
+  get toolHint(): string {
+    if (this.entries.size === 0) return "";
+    return [
+      "## 可用工具",
+      "你可以调用以下工具完成用户请求，无需询问，直接执行：",
+      ...[...this.entries.values()].map((e) => `- **${e.schema.name}** — ${e.hint}`),
+      "",
+      "工具调用流程示例：截图 → take_screenshot → 得到路径 → send_file 发送",
+      "工具调用流程示例：查找文件 → bash(find ...) → 得到路径 → send_file 发送",
+    ].join("\n");
+  }
+
+  async run(
+    name: string,
+    input: Record<string, unknown>,
+    ctx: ToolContext,
+  ): Promise<string> {
+    const entry = this.entries.get(name);
+    if (!entry) return `未知工具: ${name}`;
+    return entry.execute(input, ctx);
+  }
+}
+
 function getLocalIp(): string {
   const nets = networkInterfaces();
   for (const list of Object.values(nets)) {
@@ -227,6 +284,132 @@ async function uploadMediaV1(
     console.error("[DingTalk] Media upload V1 error:", err);
     return null;
   }
+}
+
+// ─── Web utilities ────────────────────────────────────────────────────────────
+
+/** Strip HTML tags and decode common HTML entities */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/**
+ * Fetch a URL and return readable text content.
+ * HTML pages are cleaned to plain text; other content is returned as-is.
+ */
+async function webFetch(url: string, maxChars = 8_000): Promise<string> {
+  const resp = await fetch(url, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+
+  const contentType = resp.headers.get("content-type") ?? "";
+  const text = await resp.text();
+  if (contentType.includes("text/html")) {
+    return stripHtml(text).slice(0, maxChars);
+  }
+  return text.slice(0, maxChars);
+}
+
+/**
+ * Search the web via DuckDuckGo.
+ * Tries the Instant Answer API first; falls back to HTML result scraping.
+ */
+async function webSearch(query: string, maxResults = 5): Promise<string> {
+  // 1. DuckDuckGo Instant Answer API (facts / definitions)
+  try {
+    const iaUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
+    const resp = await fetch(iaUrl, {
+      headers: { "User-Agent": "VK-Cowork-Bot/1.0" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (resp.ok) {
+      const data = (await resp.json()) as {
+        AbstractText?: string;
+        AbstractURL?: string;
+        Answer?: string;
+        Results?: Array<{ Text?: string; FirstURL?: string }>;
+        RelatedTopics?: Array<{ Text?: string; FirstURL?: string; Topics?: unknown[] }>;
+      };
+      const parts: string[] = [];
+      if (data.Answer) parts.push(`**答案**: ${data.Answer}`);
+      if (data.AbstractText) {
+        parts.push(`**摘要**: ${data.AbstractText}`);
+        if (data.AbstractURL) parts.push(`来源: ${data.AbstractURL}`);
+      }
+      if (data.Results && data.Results.length > 0) {
+        parts.push("\n**搜索结果**:");
+        for (const r of data.Results.slice(0, maxResults)) {
+          if (r.Text && r.FirstURL) parts.push(`- ${r.Text.slice(0, 200)}\n  ${r.FirstURL}`);
+        }
+      }
+      const flatTopics = (data.RelatedTopics ?? []).filter((t) => t.Text && t.FirstURL);
+      if (flatTopics.length > 0) {
+        parts.push("\n**相关话题**:");
+        for (const t of flatTopics.slice(0, maxResults)) {
+          parts.push(`- ${(t.Text ?? "").slice(0, 200)}\n  ${t.FirstURL}`);
+        }
+      }
+      if (parts.length > 0) return parts.join("\n");
+    }
+  } catch {
+    /* fall through to HTML scraping */
+  }
+
+  // 2. DuckDuckGo HTML scraping fallback
+  const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const resp = await fetch(searchUrl, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!resp.ok) throw new Error(`Search failed: HTTP ${resp.status}`);
+
+  const html = await resp.text();
+  const titleRe = /<a class="result__a"[^>]*>([\s\S]*?)<\/a>/g;
+  const snippetRe = /<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+  const urlRe = /uddg=([^&"]+)/g;
+
+  const titles: string[] = [];
+  const snippets: string[] = [];
+  const urls: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = titleRe.exec(html)) !== null) titles.push(stripHtml(m[1]).slice(0, 120));
+  while ((m = snippetRe.exec(html)) !== null) snippets.push(stripHtml(m[1]).slice(0, 250));
+  while ((m = urlRe.exec(html)) !== null) {
+    try { urls.push(decodeURIComponent(m[1])); } catch { urls.push(m[1]); }
+  }
+
+  const count = Math.min(maxResults, titles.length);
+  if (count === 0) {
+    return `未找到"${query}"相关结果，建议使用 web_fetch 直接访问相关网址。`;
+  }
+  const results: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const snippet = snippets[i] ? `\n${snippets[i]}` : "";
+    const url = urls[i] ? `\n${urls[i]}` : "";
+    results.push(`**${i + 1}. ${titles[i]}**${snippet}${url}`);
+  }
+  return `🔍 搜索"${query}"结果：\n\n${results.join("\n\n")}`;
 }
 
 async function createAICard(
@@ -1018,7 +1201,16 @@ class DingtalkConnection {
   private everConnected = false;
   private reconnectAttempts = 0;
 
-  constructor(private opts: DingtalkBotOptions) {}
+  /** Extensible tool registry — all Claude tool calls go through here */
+  private tools!: ToolRegistry;
+  /** In-flight message IDs (per-instance) — prevents parallel processing of the same message */
+  private inflight = new Set<string>();
+  /** Inbound message counters for observability */
+  private inboundStats = { received: 0, processed: 0, skipped: 0, toolCalls: 0 };
+
+  constructor(private opts: DingtalkBotOptions) {
+    this.tools = this.initTools();
+  }
 
   getOptions(): DingtalkBotOptions {
     return this.opts;
@@ -1233,21 +1425,33 @@ class DingtalkConnection {
       recordLastSeen(this.opts.assistantId, proactiveTarget, isGroup);
     }
 
-    // ── Deduplication ──────────────────────────────────────────────────────────
+    this.inboundStats.received++;
+
+    // ── Deduplication (persistent TTL + in-flight lock) ────────────────────────
     const dedupKey = msg.msgId
       ? `${this.opts.assistantId}:${msg.msgId}`
       : null;
 
     if (dedupKey) {
       if (isDuplicate(dedupKey)) {
-        console.log(`[DingTalk] Duplicate message skipped: ${msg.msgId}`);
+        console.log(`[DingTalk][${this.opts.assistantName}] Dup TTL skip: ${msg.msgId}`);
+        this.inboundStats.skipped++;
+        return;
+      }
+      if (this.inflight.has(dedupKey)) {
+        console.log(`[DingTalk][${this.opts.assistantName}] In-flight skip: ${msg.msgId}`);
+        this.inboundStats.skipped++;
         return;
       }
       markProcessed(dedupKey);
+      this.inflight.add(dedupKey);
     }
 
     // ── Access control ─────────────────────────────────────────────────────────
-    if (!isAllowed(msg, this.opts)) return;
+    if (!isAllowed(msg, this.opts)) {
+      if (dedupKey) this.inflight.delete(dedupKey);
+      return;
+    }
 
     // ── sessionWebhook expiry check ────────────────────────────────────────────
     if (
@@ -1292,17 +1496,22 @@ class DingtalkConnection {
     }
 
     // ── Generate and deliver reply ─────────────────────────────────────────────
+    this.inboundStats.processed++;
+    console.log(
+      `[DingTalk][${this.opts.assistantName}] Processing (rcv=${this.inboundStats.received} proc=${this.inboundStats.processed} skip=${this.inboundStats.skipped} tools=${this.inboundStats.toolCalls})`,
+    );
     try {
       await this.generateAndDeliver(msg, extracted.text, extracted.images);
     } catch (err) {
       console.error("[DingTalk] Reply generation error:", err);
-      // Best-effort error reply via sessionWebhook (if not expired)
       if (!msg.sessionWebhookExpiredTime || Date.now() <= msg.sessionWebhookExpiredTime) {
         await this.sendMarkdown(
           msg.sessionWebhook,
           "抱歉，处理您的消息时遇到了问题，请稍后再试。",
         ).catch(() => {});
       }
+    } finally {
+      if (dedupKey) this.inflight.delete(dedupKey);
     }
   }
 
@@ -1346,16 +1555,9 @@ class DingtalkConnection {
     const basePersona =
       this.opts.persona?.trim() ||
       `你是 ${this.opts.assistantName}，一个智能助手，请简洁有用地回答问题。`;
-    const toolsHint = `
-## 可用工具
-你可以调用以下工具来完成用户的请求，无需询问，直接执行即可：
-- **take_screenshot** — 截取当前桌面截图，返回文件路径
-- **send_file** — 把本机文件通过钉钉发送给用户（需先有文件路径）
-- **bash** — 在本机执行 shell 命令（查找文件、读取内容、获取系统信息等）
-
-典型工作流（截图）：先调用 take_screenshot → 拿到路径 → 调用 send_file 发送。
-典型工作流（找文件）：先调用 bash 找到路径 → 再调用 send_file 发送。`;
-    const system = `${basePersona}\n\n${memoryContext}\n\n${toolsHint}`;
+    const system = [basePersona, memoryContext, this.tools.toolHint]
+      .filter(Boolean)
+      .join("\n\n");
 
     let replyText: string;
 
@@ -1382,267 +1584,62 @@ class DingtalkConnection {
     await this.sendMarkdown(msg.sessionWebhook, replyText);
   }
 
-  // ── Tool execution (OpenClaw-style: Claude decides, framework executes) ──────
+  // ── Tool registry factory (OpenClaw-style: register once, run via ToolRegistry) ─
 
-  private async executeTool(
-    name: string,
-    input: Record<string, unknown>,
-    msg: DingtalkMessage,
-  ): Promise<string> {
-    const { exec } = await import("child_process");
-    const { promisify } = await import("util");
-    const execAsync = promisify(exec);
-    const os = await import("os");
-    const path = await import("path");
-    const fs = await import("fs");
+  private initTools(): ToolRegistry {
+    const registry = new ToolRegistry();
+    // Capture `this` for closures
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
 
-    if (name === "take_screenshot") {
-      const filePath = path.join(os.tmpdir(), `vk-shot-${Date.now()}.png`);
-      const platform = process.platform;
-      await this.sendMarkdown(msg.sessionWebhook, "📸 正在截图…").catch(() => {});
-      if (platform === "darwin") {
-        await execAsync(`screencapture -x "${filePath}"`);
-      } else if (platform === "win32") {
-        await execAsync(
-          `powershell -command "Add-Type -AssemblyName System.Windows.Forms; ` +
-          `$b=New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width,[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); ` +
-          `$g=[System.Drawing.Graphics]::FromImage($b); ` +
-          `$g.CopyFromScreen(0,0,0,0,$b.Size); ` +
-          `$b.Save('${filePath}')"`,
-        );
-      } else {
-        await execAsync(`gnome-screenshot -f "${filePath}" 2>/dev/null || scrot "${filePath}"`);
-      }
-      if (!fs.existsSync(filePath)) throw new Error("截图文件未生成");
-      return filePath;
-    }
-
-    if (name === "send_file") {
-      const filePath = String(input.file_path ?? "");
-      if (!filePath || !fs.existsSync(filePath)) {
-        return `文件不存在: ${filePath}`;
-      }
-
-      const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-      const mediaType: "image" | "voice" | "video" | "file" =
-        ["jpg", "jpeg", "png", "gif", "bmp"].includes(ext) ? "image" :
-        ["mp3", "amr", "wav"].includes(ext) ? "voice" :
-        ["mp4", "avi", "mov"].includes(ext) ? "video" : "file";
-
-      const SIZE_LIMITS: Record<string, number> = {
-        image: 20 * 1024 * 1024,
-        voice: 2 * 1024 * 1024,
-        video: 20 * 1024 * 1024,
-        file: 20 * 1024 * 1024,
-      };
-
-      // Temp files created by compression (need cleanup regardless)
-      const tempFiles: string[] = [];
-      const cleanup = () => {
-        const toDelete = filePath.includes("vk-shot-") ? [filePath, ...tempFiles] : tempFiles;
-        for (const f of toDelete) {
-          try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
-        }
-      };
-
-      // Check file size and auto-compress if needed
-      let sendPath = filePath;
-      const stat = fs.statSync(filePath);
-      const limit = SIZE_LIMITS[mediaType];
-
-      if (stat.size > limit) {
-        const os2 = await import("os");
-        const sizeMB = (stat.size / 1024 / 1024).toFixed(1);
-
-        if (mediaType === "image") {
-          // Compress image with sips (macOS built-in) or convert quality to ~70%
-          const compressedPath = path.join(os2.tmpdir(), `vk-compressed-${Date.now()}.jpg`);
-          tempFiles.push(compressedPath);
-          try {
-            if (process.platform === "darwin") {
-              // sips: resize to max 2000px wide and convert to jpg
-              await execAsync(
-                `sips -s format jpeg -s formatOptions 70 -Z 2000 "${filePath}" --out "${compressedPath}"`,
-              );
-            } else {
-              // fallback: ImageMagick
-              await execAsync(
-                `convert "${filePath}" -resize 2000x2000> -quality 70 "${compressedPath}"`,
-              );
-            }
-            const newStat = fs.statSync(compressedPath);
-            if (newStat.size <= limit) {
-              console.log(`[DingTalk] Image compressed: ${sizeMB}MB → ${(newStat.size/1024/1024).toFixed(1)}MB`);
-              sendPath = compressedPath;
-            } else {
-              cleanup();
-              return `图片压缩后仍超过 20MB（${(newStat.size/1024/1024).toFixed(1)}MB），无法发送。建议先裁剪或降低分辨率。`;
-            }
-          } catch {
-            cleanup();
-            return `图片 ${sizeMB}MB 超过 20MB 限制，压缩失败，请先手动压缩。`;
-          }
-        } else if (mediaType === "voice" && stat.size > SIZE_LIMITS.voice) {
-          cleanup();
-          return `语音文件 ${sizeMB}MB 超过 2MB 限制，请裁剪后再发。`;
-        } else {
-          // For video/file > 20MB: zip it first
-          const zipPath = path.join(
-            (await import("os")).tmpdir(),
-            `vk-${path.basename(filePath)}-${Date.now()}.zip`,
-          );
-          tempFiles.push(zipPath);
-          try {
-            await execAsync(`cd "${path.dirname(filePath)}" && zip "${zipPath}" "${path.basename(filePath)}"`);
-            const zipStat = fs.statSync(zipPath);
-            if (zipStat.size <= SIZE_LIMITS.file) {
-              console.log(`[DingTalk] File zipped: ${sizeMB}MB → ${(zipStat.size/1024/1024).toFixed(1)}MB`);
-              sendPath = zipPath;
-            } else {
-              cleanup();
-              return `文件 ${sizeMB}MB 压缩后仍超过 20MB（${(zipStat.size/1024/1024).toFixed(1)}MB）。` +
-                `建议用网盘分享链接代替，或通过 bash 工具上传到 OSS/对象存储后发链接。`;
-            }
-          } catch {
-            cleanup();
-            return `文件 ${sizeMB}MB 超过 20MB 限制，且 zip 压缩失败，建议改用网盘分享。`;
-          }
-        }
-      }
-
-      // 1. Upload to DingTalk media server (V1 API, correct token)
-      const sendExt = sendPath.split(".").pop()?.toLowerCase() ?? ext;
-      const sendMediaType: "image" | "voice" | "video" | "file" =
-        ["jpg", "jpeg", "png", "gif", "bmp"].includes(sendExt) ? "image" :
-        ["mp3", "amr", "wav"].includes(sendExt) ? "voice" :
-        ["mp4", "avi", "mov"].includes(sendExt) ? "video" : "file";
-
-      const mediaId = await uploadMediaV1(
-        this.opts.appKey, this.opts.appSecret, sendPath, sendMediaType,
-      );
-      if (!mediaId) {
-        cleanup();
-        return `媒体上传失败，请检查应用权限或网络（oapi.dingtalk.com）`;
-      }
-
-      // 2a. Send via sessionWebhook (NO auth header — webhook URL is self-authenticating)
-      const webhookExpired =
-        msg.sessionWebhookExpiredTime && Date.now() > msg.sessionWebhookExpiredTime;
-      if (!webhookExpired && msg.sessionWebhook) {
-        try {
-          // session webhook supports media_id directly for image/voice/file
-          const body = sendMediaType === "image"
-            ? { msgtype: "image", image: { media_id: mediaId } }
-            : sendMediaType === "voice"
-            ? { msgtype: "voice", voice: { media_id: mediaId, duration: 1 } }
-            : { msgtype: "file", file: { media_id: mediaId } };
-
-          const resp = await fetch(msg.sessionWebhook, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
-          const respText = await resp.text();
-          if (resp.ok) {
-            console.log(`[DingTalk] File sent via session webhook: ${path.basename(sendPath)}`);
-            cleanup();
-            return `文件已发送: ${path.basename(sendPath)}`;
-          }
-          console.error(`[DingTalk] Session webhook send failed (${resp.status}): ${respText}`);
-          // Fall through to proactive API
-        } catch (err) {
-          console.error("[DingTalk] Session webhook send error:", err);
-          // Fall through to proactive API
-        }
-      } else {
-        console.log(`[DingTalk] Session webhook skipped (expired=${!!webhookExpired})`);
-      }
-
-      // 2b. Fall back to proactive API
-      // NOTE: sampleImageMsg requires an HTTP URL in photoURL — media_id is NOT a URL.
-      // Use sampleFile for all types; users can tap to open images. This is the only
-      // safe option when session webhook is unavailable.
-      const robotCode = this.opts.robotCode ?? this.opts.appKey;
-      const target = msg.senderStaffId ?? msg.senderId ?? "";
-      const isGroup = msg.conversationType === "2";
-      const resolvedTarget = resolveOriginalPeerId(target || msg.conversationId || "");
-
-      const url = isGroup
-        ? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
-        : `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
-
-      const fileName = path.basename(filePath);
-      const fileExt = ext || "png";
-      // Use sampleAudio for voice; sampleFile for everything else (including images)
-      const msgKey = sendMediaType === "voice" ? "sampleAudio" : "sampleFile";
-      const msgParam = sendMediaType === "voice"
-        ? JSON.stringify({ mediaId, duration: "1" })
-        : JSON.stringify({ mediaId, fileName, fileType: fileExt });
-
-      const payload: Record<string, unknown> = { robotCode, msgKey, msgParam };
-      if (isGroup) {
-        payload.openConversationId = resolvedTarget;
-      } else {
-        payload.userIds = [resolvedTarget];
-      }
-
-      try {
-        const token = await getAccessToken(this.opts.appKey, this.opts.appSecret);
-        const resp = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-acs-dingtalk-access-token": token,
-          },
-          body: JSON.stringify(payload),
-        });
-        const respText = await resp.text();
-        cleanup();
-        if (resp.ok) {
-          console.log(`[DingTalk] File sent via proactive API: ${path.basename(sendPath)}`);
-          cleanup();
-          return `文件已发送: ${path.basename(sendPath)}`;
-        }
-        return `发送失败 (HTTP ${resp.status}): ${respText.slice(0, 200)}`;
-      } catch (err) {
-        cleanup();
-        return `发送异常: ${err instanceof Error ? err.message : String(err)}`;
-      }
-    }
-
-    if (name === "bash") {
-      const command = String(input.command ?? "").trim();
-      if (!command) return "命令为空";
-      try {
-        const { stdout, stderr } = await execAsync(command, { timeout: 15_000 });
-        const out = (stdout + (stderr ? `\n[stderr] ${stderr}` : "")).trim();
-        return out.slice(0, 3000) || "(no output)";
-      } catch (err) {
-        const e = err as { message?: string; stdout?: string; stderr?: string };
-        return `命令失败: ${e.message}\n${e.stderr ?? ""}`.slice(0, 1000);
-      }
-    }
-
-    return `未知工具: ${name}`;
-  }
-
-  // ── Claude tools definition ───────────────────────────────────────────────────
-
-  private get claudeTools(): Anthropic.Tool[] {
-    return [
-      {
+    // ── take_screenshot ────────────────────────────────────────────────────
+    registry.register({
+      hint: "截取当前桌面截图，返回临时文件路径（之后用 send_file 发送）",
+      schema: {
         name: "take_screenshot",
-        description:
-          "截取当前桌面屏幕截图。返回截图的临时文件路径，之后可用 send_file 发送给用户。",
+        description: "截取当前桌面屏幕截图。返回截图的临时文件路径，之后可用 send_file 发送给用户。",
         input_schema: { type: "object" as const, properties: {}, required: [] },
       },
-      {
+      async execute(_input, ctx) {
+        const { exec } = await import("child_process");
+        const { promisify } = await import("util");
+        const execAsync = promisify(exec);
+        const os = await import("os");
+        const path = await import("path");
+        const fs = await import("fs");
+
+        const filePath = path.join(os.tmpdir(), `vk-shot-${Date.now()}.png`);
+        await ctx.sendProgress("📸 正在截图…");
+
+        const platform = process.platform;
+        if (platform === "darwin") {
+          await execAsync(`screencapture -x "${filePath}"`);
+        } else if (platform === "win32") {
+          await execAsync(
+            `powershell -command "Add-Type -AssemblyName System.Windows.Forms; ` +
+            `$b=New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width,[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); ` +
+            `$g=[System.Drawing.Graphics]::FromImage($b); ` +
+            `$g.CopyFromScreen(0,0,0,0,$b.Size); ` +
+            `$b.Save('${filePath}')"`,
+          );
+        } else {
+          await execAsync(`gnome-screenshot -f "${filePath}" 2>/dev/null || scrot "${filePath}"`);
+        }
+        if (!fs.existsSync(filePath)) throw new Error("截图文件未生成");
+        return filePath;
+      },
+    });
+
+    // ── send_file ────────────────────────────────────────────────────────
+    registry.register({
+      hint: "将本机文件通过钉钉发送给当前用户（支持图/PDF/视频，自动压缩超大文件）",
+      schema: {
         name: "send_file",
         description:
           "通过钉钉将本地文件发送给当前对话的用户。支持图片（png/jpg）、PDF、文档、视频等。" +
           "file_path 必须是本机可读取的完整路径。" +
           "超出大小限制时会自动处理：图片自动压缩（macOS sips），其他文件自动 zip 压缩。" +
-          "压缩后仍超限才会报错。",
+          "压缩后仍超限才会返回提示。",
         input_schema: {
           type: "object" as const,
           properties: {
@@ -1651,21 +1648,361 @@ class DingtalkConnection {
           required: ["file_path"],
         },
       },
-      {
+      async execute(input, ctx) {
+        const msg = ctx.msg;
+        const { exec } = await import("child_process");
+        const { promisify } = await import("util");
+        const execAsync = promisify(exec);
+        const path = await import("path");
+        const fs = await import("fs");
+
+        const filePath = String(input.file_path ?? "");
+        if (!filePath || !fs.existsSync(filePath)) return `文件不存在: ${filePath}`;
+
+        const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+        const mediaType: "image" | "voice" | "video" | "file" =
+          ["jpg", "jpeg", "png", "gif", "bmp"].includes(ext) ? "image" :
+          ["mp3", "amr", "wav"].includes(ext) ? "voice" :
+          ["mp4", "avi", "mov"].includes(ext) ? "video" : "file";
+
+        const SIZE_LIMITS: Record<string, number> = {
+          image: 20 * 1024 * 1024,
+          voice: 2 * 1024 * 1024,
+          video: 20 * 1024 * 1024,
+          file: 20 * 1024 * 1024,
+        };
+
+        const tempFiles: string[] = [];
+        const cleanup = () => {
+          const toDelete = filePath.includes("vk-shot-") ? [filePath, ...tempFiles] : tempFiles;
+          for (const f of toDelete) {
+            try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* ignore */ }
+          }
+        };
+
+        let sendPath = filePath;
+        const stat = fs.statSync(filePath);
+        const limit = SIZE_LIMITS[mediaType];
+
+        if (stat.size > limit) {
+          const os2 = await import("os");
+          const sizeMB = (stat.size / 1024 / 1024).toFixed(1);
+
+          if (mediaType === "image") {
+            const compressedPath = path.join(os2.tmpdir(), `vk-compressed-${Date.now()}.jpg`);
+            tempFiles.push(compressedPath);
+            try {
+              if (process.platform === "darwin") {
+                await execAsync(
+                  `sips -s format jpeg -s formatOptions 70 -Z 2000 "${filePath}" --out "${compressedPath}"`,
+                );
+              } else {
+                await execAsync(
+                  `convert "${filePath}" -resize 2000x2000> -quality 70 "${compressedPath}"`,
+                );
+              }
+              const newStat = fs.statSync(compressedPath);
+              if (newStat.size <= limit) {
+                console.log(`[DingTalk] Image compressed: ${sizeMB}MB → ${(newStat.size / 1024 / 1024).toFixed(1)}MB`);
+                sendPath = compressedPath;
+              } else {
+                cleanup();
+                return `图片压缩后仍超过 20MB（${(newStat.size / 1024 / 1024).toFixed(1)}MB），建议先裁剪或降低分辨率。`;
+              }
+            } catch {
+              cleanup();
+              return `图片 ${sizeMB}MB 超过 20MB 限制，压缩失败，请先手动压缩。`;
+            }
+          } else if (mediaType === "voice") {
+            cleanup();
+            return `语音文件 ${sizeMB}MB 超过 2MB 限制，请裁剪后再发。`;
+          } else {
+            const zipPath = path.join(
+              (await import("os")).tmpdir(),
+              `vk-${path.basename(filePath)}-${Date.now()}.zip`,
+            );
+            tempFiles.push(zipPath);
+            try {
+              await execAsync(`cd "${path.dirname(filePath)}" && zip "${zipPath}" "${path.basename(filePath)}"`);
+              const zipStat = fs.statSync(zipPath);
+              if (zipStat.size <= SIZE_LIMITS.file) {
+                console.log(`[DingTalk] File zipped: ${sizeMB}MB → ${(zipStat.size / 1024 / 1024).toFixed(1)}MB`);
+                sendPath = zipPath;
+              } else {
+                cleanup();
+                return `文件 ${sizeMB}MB 压缩后仍超过 20MB，建议用网盘分享链接代替，或通过 bash 上传 OSS 后发链接。`;
+              }
+            } catch {
+              cleanup();
+              return `文件 ${sizeMB}MB 超过 20MB 限制，且 zip 压缩失败，建议改用网盘分享。`;
+            }
+          }
+        }
+
+        // Upload to DingTalk media server (V1 API — requires V1 token)
+        const sendExt = sendPath.split(".").pop()?.toLowerCase() ?? ext;
+        const sendMediaType: "image" | "voice" | "video" | "file" =
+          ["jpg", "jpeg", "png", "gif", "bmp"].includes(sendExt) ? "image" :
+          ["mp3", "amr", "wav"].includes(sendExt) ? "voice" :
+          ["mp4", "avi", "mov"].includes(sendExt) ? "video" : "file";
+
+        const mediaId = await uploadMediaV1(self.opts.appKey, self.opts.appSecret, sendPath, sendMediaType);
+        if (!mediaId) {
+          cleanup();
+          return `媒体上传失败，请检查应用权限（oapi.dingtalk.com）`;
+        }
+
+        // Try sessionWebhook first (self-authenticating, no auth header needed)
+        const webhookExpired = msg.sessionWebhookExpiredTime && Date.now() > msg.sessionWebhookExpiredTime;
+        if (!webhookExpired && msg.sessionWebhook) {
+          try {
+            const body = sendMediaType === "image"
+              ? { msgtype: "image", image: { media_id: mediaId } }
+              : sendMediaType === "voice"
+              ? { msgtype: "voice", voice: { media_id: mediaId, duration: 1 } }
+              : { msgtype: "file", file: { media_id: mediaId } };
+
+            const resp = await fetch(msg.sessionWebhook, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            const respText = await resp.text();
+            if (resp.ok) {
+              console.log(`[DingTalk][send_file] webhook ok: ${path.basename(sendPath)}`);
+              cleanup();
+              return `文件已发送: ${path.basename(sendPath)}`;
+            }
+            console.error(`[DingTalk][send_file] webhook fail (${resp.status}): ${respText}`);
+          } catch (err) {
+            console.error("[DingTalk][send_file] webhook error:", err);
+          }
+        }
+
+        // Fallback: proactive API (sampleFile for images/files, sampleAudio for voice)
+        const robotCode = self.opts.robotCode ?? self.opts.appKey;
+        const sender = msg.senderStaffId ?? msg.senderId ?? "";
+        const isGroup = msg.conversationType === "2";
+        const resolvedTarget = resolveOriginalPeerId(sender || msg.conversationId || "");
+        const apiUrl = isGroup
+          ? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
+          : `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
+
+        const fileName = path.basename(filePath);
+        const fileExt = ext || "bin";
+        const msgKey = sendMediaType === "voice" ? "sampleAudio" : "sampleFile";
+        const msgParam = sendMediaType === "voice"
+          ? JSON.stringify({ mediaId, duration: "1" })
+          : JSON.stringify({ mediaId, fileName, fileType: fileExt });
+
+        const payload: Record<string, unknown> = { robotCode, msgKey, msgParam };
+        if (isGroup) payload.openConversationId = resolvedTarget;
+        else payload.userIds = [resolvedTarget];
+
+        try {
+          const token = await getAccessToken(self.opts.appKey, self.opts.appSecret);
+          const resp = await fetch(apiUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-acs-dingtalk-access-token": token },
+            body: JSON.stringify(payload),
+          });
+          const respText = await resp.text();
+          cleanup();
+          if (resp.ok) return `文件已发送: ${path.basename(sendPath)}`;
+          return `发送失败 (HTTP ${resp.status}): ${respText.slice(0, 200)}`;
+        } catch (err) {
+          cleanup();
+          return `发送异常: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    });
+
+    // ── bash ────────────────────────────────────────────────────────────
+    registry.register({
+      hint: "在本机执行 shell 命令（查找文件、读取内容等，超时 15s）",
+      schema: {
         name: "bash",
         description:
           "在本机执行 bash 命令（macOS/Linux）或 PowerShell（Windows）。" +
-          "适合：查找文件（find、ls）、读取文本内容（cat）、获取系统信息等。" +
-          "超时 15 秒，输出限制 3000 字符。",
+          "适合：查找文件（find、ls）、读取文本（cat）、获取系统信息等。超时 15 秒，输出限 3000 字符。",
         input_schema: {
           type: "object" as const,
-          properties: {
-            command: { type: "string", description: "要执行的 shell 命令" },
-          },
+          properties: { command: { type: "string", description: "要执行的 shell 命令" } },
           required: ["command"],
         },
       },
-    ];
+      async execute(input) {
+        const { exec } = await import("child_process");
+        const { promisify } = await import("util");
+        const execAsync = promisify(exec);
+        const command = String(input.command ?? "").trim();
+        if (!command) return "命令为空";
+        try {
+          const { stdout, stderr } = await execAsync(command, { timeout: 15_000 });
+          const out = (stdout + (stderr ? `\n[stderr] ${stderr}` : "")).trim();
+          return out.slice(0, 3000) || "(no output)";
+        } catch (err) {
+          const e = err as { message?: string; stderr?: string };
+          return `命令失败: ${e.message ?? ""}\n${e.stderr ?? ""}`.slice(0, 1000);
+        }
+      },
+    });
+
+    // ── send_message ─────────────────────────────────────────────────────
+    registry.register({
+      hint: "向当前对话发送一条进度通知或中间结果消息（支持 Markdown）",
+      schema: {
+        name: "send_message",
+        description:
+          "向当前钉钉对话立即发送一条文本/Markdown 消息。适合在执行长任务时告知用户进度，" +
+          "或在最终回复前推送中间结果。注意：你的最终文字回复也会自动发送，请勿重复内容。",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            text: { type: "string", description: "要发送的消息内容（支持 Markdown）" },
+          },
+          required: ["text"],
+        },
+      },
+      async execute(input, ctx) {
+        const text = String(input.text ?? "").trim();
+        if (!text) return "消息内容为空";
+        await ctx.sendProgress(text);
+        return "消息已发送";
+      },
+    });
+
+    // ── web_fetch ────────────────────────────────────────────────────────
+    registry.register({
+      hint: "抓取网页 URL 内容，返回可读文本（HTML 自动清除标签）",
+      schema: {
+        name: "web_fetch",
+        description:
+          "抓取指定 URL 的内容并以纯文本返回。HTML 页面会自动清除标签，返回可读正文。" +
+          "可用于查看文章、文档、API 响应等。默认最多返回 8000 字符。",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            url: { type: "string", description: "要抓取的 HTTP/HTTPS URL" },
+            max_chars: { type: "number", description: "最多返回字符数，默认 8000，最大 20000" },
+          },
+          required: ["url"],
+        },
+      },
+      async execute(input) {
+        const url = String(input.url ?? "").trim();
+        if (!url) return "URL 不能为空";
+        const maxChars = Math.min(Number(input.max_chars ?? 8_000), 20_000);
+        try {
+          return await webFetch(url, maxChars);
+        } catch (err) {
+          return `抓取失败: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    });
+
+    // ── web_search ────────────────────────────────────────────────────────
+    registry.register({
+      hint: "用 DuckDuckGo 搜索网络，返回 top-N 结果摘要和链接",
+      schema: {
+        name: "web_search",
+        description:
+          "通过 DuckDuckGo 搜索网络，返回 top 5 搜索结果（标题、摘要、URL）。" +
+          "如需查看某个结果的详细内容，再用 web_fetch 工具抓取对应 URL。",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            query: { type: "string", description: "搜索关键词或问题" },
+            max_results: { type: "number", description: "最多返回结果数，默认 5，最大 10" },
+          },
+          required: ["query"],
+        },
+      },
+      async execute(input) {
+        const query = String(input.query ?? "").trim();
+        if (!query) return "搜索词不能为空";
+        const maxResults = Math.min(Number(input.max_results ?? 5), 10);
+        try {
+          return await webSearch(query, maxResults);
+        } catch (err) {
+          return `搜索失败: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    });
+
+    // ── read_file ─────────────────────────────────────────────────────────
+    registry.register({
+      hint: "读取本机文本文件内容（最多 10000 字符）",
+      schema: {
+        name: "read_file",
+        description:
+          "读取本机上的文本文件内容并返回。适合查看配置文件、日志、代码等文本文件。" +
+          "最多返回 10000 字符。不支持二进制文件（图片/PDF 等请用 send_file）。",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            path: { type: "string", description: "文件的完整本地路径" },
+            max_chars: { type: "number", description: "最多读取字符数，默认 10000，最大 50000" },
+          },
+          required: ["path"],
+        },
+      },
+      async execute(input) {
+        const filePath = String(input.path ?? "").trim();
+        if (!filePath) return "文件路径不能为空";
+        const maxChars = Math.min(Number(input.max_chars ?? 10_000), 50_000);
+        try {
+          const fs = await import("fs");
+          if (!fs.existsSync(filePath)) return `文件不存在: ${filePath}`;
+          if (!fs.statSync(filePath).isFile()) return `路径不是文件: ${filePath}`;
+          const content = fs.readFileSync(filePath, "utf-8");
+          const truncated = content.slice(0, maxChars);
+          const suffix = content.length > maxChars ? `\n…(已截断，共 ${content.length} 字符)` : "";
+          return truncated + suffix;
+        } catch (err) {
+          return `读取失败: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    });
+
+    // ── write_file ────────────────────────────────────────────────────────
+    registry.register({
+      hint: "将文本内容写入本机文件（可新建或覆盖，支持追加模式）",
+      schema: {
+        name: "write_file",
+        description:
+          "将文本内容写入本机文件。父目录不存在时自动创建。" +
+          "可用于保存笔记、生成报告、写入配置等。写入后返回文件路径和字节数。",
+        input_schema: {
+          type: "object" as const,
+          properties: {
+            path: { type: "string", description: "要写入的文件完整路径" },
+            content: { type: "string", description: "要写入的文本内容" },
+            append: { type: "boolean", description: "是否追加模式，默认 false（覆盖）" },
+          },
+          required: ["path", "content"],
+        },
+      },
+      async execute(input) {
+        const filePath = String(input.path ?? "").trim();
+        const content = String(input.content ?? "");
+        const append = Boolean(input.append);
+        if (!filePath) return "文件路径不能为空";
+        try {
+          const fs = await import("fs");
+          const path = await import("path");
+          const dir = path.dirname(filePath);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(filePath, content, { encoding: "utf-8", flag: append ? "a" : "w" });
+          const stat = fs.statSync(filePath);
+          return `${append ? "追加" : "写入"}成功: ${filePath}（${stat.size} 字节）`;
+        } catch (err) {
+          return `写入失败: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    });
+
+    return registry;
   }
 
   // ── Claude ───────────────────────────────────────────────────────────────────
@@ -1764,9 +2101,14 @@ class DingtalkConnection {
     }
 
     // ── Agentic tool-use loop (OpenClaw pattern) ───────────────────────────────
-    // Claude decides which tools to call; we execute and feed results back.
-    const MAX_TOOL_TURNS = 6;
+    // Claude decides which tools to call; ToolRegistry dispatches and executes them.
+    const MAX_TOOL_TURNS = 8;
     let toolTurns = 0;
+    const toolSchemas = this.tools.schemas;
+    const ctx: ToolContext = {
+      msg,
+      sendProgress: (text: string) => this.sendMarkdown(msg.sessionWebhook, text).catch(() => {}),
+    };
 
     while (toolTurns < MAX_TOOL_TURNS) {
       const response = await client.messages.create({
@@ -1774,7 +2116,7 @@ class DingtalkConnection {
         max_tokens: 4096,
         system,
         messages,
-        tools: this.claudeTools,
+        tools: toolSchemas.length > 0 ? toolSchemas : undefined,
       });
 
       const toolUseBlocks = response.content.filter(
@@ -1788,24 +2130,26 @@ class DingtalkConnection {
         return textBlock?.text ?? "抱歉，无法生成回复。";
       }
 
-      // Append assistant turn with tool calls
+      // Append assistant turn (includes tool_use blocks)
       messages.push({ role: "assistant", content: response.content });
 
       // Execute each tool and collect results
       const toolResults: Anthropic.ToolResultBlockParam[] = [];
       for (const tb of toolUseBlocks) {
-        console.log(`[DingTalk] Tool call: ${tb.name}(${JSON.stringify(tb.input)})`);
+        this.inboundStats.toolCalls++;
+        const inputPreview = JSON.stringify(tb.input).slice(0, 120);
+        console.log(`[DingTalk][tool] ${tb.name}(${inputPreview})`);
         let result: string;
         try {
-          result = await this.executeTool(tb.name, tb.input as Record<string, unknown>, msg);
+          result = await this.tools.run(tb.name, tb.input as Record<string, unknown>, ctx);
         } catch (err) {
           result = `工具执行失败: ${err instanceof Error ? err.message : String(err)}`;
         }
-        console.log(`[DingTalk] Tool result (${tb.name}): ${result.slice(0, 100)}`);
+        console.log(`[DingTalk][tool] ${tb.name} → ${result.slice(0, 150)}`);
         toolResults.push({ type: "tool_result", tool_use_id: tb.id, content: result });
       }
 
-      // Feed results back to Claude
+      // Feed results back to Claude for next reasoning step
       messages.push({ role: "user", content: toolResults });
       toolTurns++;
     }
@@ -1876,73 +2220,6 @@ class DingtalkConnection {
       appendDailyMemory(
         `\n## [钉钉] ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
       );
-    }
-  }
-
-  // ── Built-in screenshot command ───────────────────────────────────────────────
-
-  private async handleScreenshot(msg: DingtalkMessage): Promise<void> {
-    const os = process.platform;
-    const { exec } = await import("child_process");
-    const { promisify } = await import("util");
-    const execAsync = promisify(exec);
-    const path = await import("path");
-    const fs = await import("fs");
-    const tmpDir = (await import("os")).tmpdir();
-    const filePath = path.join(tmpDir, `vk-screenshot-${Date.now()}.png`);
-
-    // Notify user that screenshot is being taken
-    await this.sendMarkdown(msg.sessionWebhook, "📸 正在截图…").catch(() => {});
-
-    try {
-      // OS-specific screenshot commands
-      if (os === "darwin") {
-        await execAsync(`screencapture -x "${filePath}"`);
-      } else if (os === "win32") {
-        // PowerShell screenshot on Windows
-        await execAsync(
-          `powershell -command "Add-Type -AssemblyName System.Windows.Forms; ` +
-          `$screen=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; ` +
-          `$bmp=New-Object System.Drawing.Bitmap($screen.Width,$screen.Height); ` +
-          `$g=[System.Drawing.Graphics]::FromImage($bmp); ` +
-          `$g.CopyFromScreen($screen.Left,$screen.Top,0,0,$screen.Size); ` +
-          `$bmp.Save('${filePath}',[System.Drawing.Imaging.ImageFormat]::Png)"`,
-        );
-      } else {
-        // Linux: try gnome-screenshot, then scrot as fallback
-        await execAsync(`gnome-screenshot -f "${filePath}" 2>/dev/null || scrot "${filePath}"`);
-      }
-
-      if (!fs.existsSync(filePath)) {
-        throw new Error("截图文件未生成");
-      }
-
-      // Upload to DingTalk and send
-      const result = await sendProactiveMediaDingtalk(this.opts.assistantId, filePath, {
-        targets: [msg.senderStaffId ?? msg.senderId ?? ""],
-      });
-
-      if (result.ok) {
-        await this.sendMarkdown(msg.sessionWebhook, "✅ 截图已发送").catch(() => {});
-      } else {
-        await this.sendMarkdown(
-          msg.sessionWebhook,
-          `❌ 截图发送失败：${result.error}`,
-        ).catch(() => {});
-      }
-    } catch (err) {
-      const msg2 = err instanceof Error ? err.message : String(err);
-      console.error("[DingTalk] Screenshot failed:", msg2);
-      await this.sendMarkdown(
-        msg.sessionWebhook,
-        `❌ 截图失败：${msg2}`,
-      ).catch(() => {});
-    } finally {
-      // Clean up temp file
-      try {
-        const fs2 = await import("fs");
-        if (fs2.existsSync(filePath)) fs2.unlinkSync(filePath);
-      } catch { /* ignore */ }
     }
   }
 
