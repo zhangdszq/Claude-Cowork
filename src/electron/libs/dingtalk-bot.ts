@@ -510,33 +510,58 @@ async function streamAICard(
   }
 }
 
-/** Download a media file from DingTalk and return base64 data for vision */
-async function downloadMediaAsBase64(
+/** Download a media file from DingTalk and save to a temp file; returns the local path */
+async function downloadMediaToTempFile(
   appKey: string,
   appSecret: string,
   robotCode: string,
   downloadCode: string,
-): Promise<{ base64: string; mimeType: string } | null> {
+): Promise<string | null> {
   try {
     const token = await getAccessToken(appKey, appSecret);
     const infoResp = await fetch(
-      `${DINGTALK_API}/v1.0/robot/messageFiles/download?downloadCode=${encodeURIComponent(downloadCode)}&robotCode=${encodeURIComponent(robotCode)}`,
-      { headers: { "x-acs-dingtalk-access-token": token } },
+      `${DINGTALK_API}/v1.0/robot/messageFiles/download`,
+      {
+        method: "POST",
+        headers: {
+          "x-acs-dingtalk-access-token": token,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ downloadCode, robotCode }),
+      },
     );
-    if (!infoResp.ok) return null;
+    if (!infoResp.ok) {
+      const body = await infoResp.text().catch(() => "");
+      console.error(`[DingTalk] Image download info failed: HTTP ${infoResp.status} — ${body.slice(0, 200)}`);
+      return null;
+    }
 
     const info = (await infoResp.json()) as { downloadUrl?: string };
     const url = info.downloadUrl;
-    if (!url) return null;
+    if (!url) {
+      console.error(`[DingTalk] Image download info returned no downloadUrl:`, JSON.stringify(info).slice(0, 200));
+      return null;
+    }
 
     const fileResp = await fetch(url);
-    if (!fileResp.ok) return null;
+    if (!fileResp.ok) {
+      console.error(`[DingTalk] Image file fetch failed: HTTP ${fileResp.status}`);
+      return null;
+    }
 
     const buffer = Buffer.from(await fileResp.arrayBuffer());
     const contentType = fileResp.headers.get("content-type") ?? "image/jpeg";
-    const mimeType = contentType.split(";")[0].trim();
-    return { base64: buffer.toString("base64"), mimeType };
-  } catch {
+    const ext = contentType.split(";")[0].trim().split("/")[1]?.replace("jpeg", "jpg") ?? "jpg";
+
+    const os = await import("os");
+    const path = await import("path");
+    const fs = await import("fs");
+    const tmpPath = path.join(os.tmpdir(), `vk-dingtalk-img-${Date.now()}.${ext}`);
+    fs.writeFileSync(tmpPath, buffer);
+    console.log(`[DingTalk] Image saved to temp file: ${tmpPath} (${(buffer.length / 1024).toFixed(1)}KB)`);
+    return tmpPath;
+  } catch (err) {
+    console.error(`[DingTalk] Image download exception:`, err);
     return null;
   }
 }
@@ -706,8 +731,21 @@ function isAllowed(msg: DingtalkMessage, opts: DingtalkBotOptions): boolean {
 async function extractContent(
   msg: DingtalkMessage,
   opts: DingtalkBotOptions,
-): Promise<{ text: string; images?: Array<{ base64: string; mimeType: string }> }> {
+): Promise<{ text: string; filePaths?: string[] }> {
   const rc = opts.robotCode ?? opts.appKey;
+
+  /** Download helper — logs a warn on missing inputs instead of silently skipping */
+  async function tryDownload(dc: string | undefined, label: string): Promise<string | null> {
+    if (!dc) {
+      console.warn(`[DingTalk] ${label}: missing downloadCode`);
+      return null;
+    }
+    if (!rc) {
+      console.warn(`[DingTalk] ${label}: robotCode is empty (appKey=${opts.appKey})`);
+      return null;
+    }
+    return downloadMediaToTempFile(opts.appKey, opts.appSecret, rc, dc);
+  }
 
   if (msg.msgtype === "text") {
     // Strip @bot mention prefix in group chats
@@ -718,46 +756,57 @@ async function extractContent(
 
   if (msg.msgtype === "voice" || msg.msgtype === "audio") {
     const asr = msg.content?.recognition;
+    const tmpPath = await tryDownload(msg.content?.downloadCode, "voice");
+    if (tmpPath) {
+      const textPart = asr ? `[语音] ${asr}` : "用户发来了一条语音消息";
+      return { text: textPart, filePaths: [tmpPath] };
+    }
     return { text: asr ? `[语音] ${asr}` : "[语音消息（无识别文本）]" };
   }
 
   if (msg.msgtype === "picture" || msg.msgtype === "image") {
-    const dc = msg.content?.downloadCode;
-    if (dc && rc) {
-      const img = await downloadMediaAsBase64(opts.appKey, opts.appSecret, rc, dc);
-      if (img?.mimeType.startsWith("image/")) {
-        return { text: "[图片消息，请描述图片内容]", images: [img] };
-      }
+    const tmpPath = await tryDownload(msg.content?.downloadCode, "picture");
+    if (tmpPath) {
+      return { text: "用户发来了一张图片", filePaths: [tmpPath] };
     }
     return { text: "[图片消息]" };
   }
 
+  if (msg.msgtype === "file") {
+    const fileName = msg.content?.fileName ?? "未知文件";
+    const tmpPath = await tryDownload(msg.content?.downloadCode, `file(${fileName})`);
+    if (tmpPath) {
+      return { text: `用户发来了一个文件：${fileName}`, filePaths: [tmpPath] };
+    }
+    return { text: `[文件: ${fileName}]` };
+  }
+
+  if (msg.msgtype === "video") {
+    const tmpPath = await tryDownload(msg.content?.downloadCode, "video");
+    if (tmpPath) {
+      return { text: "用户发来了一段视频", filePaths: [tmpPath] };
+    }
+    return { text: "[视频消息]" };
+  }
+
   if (msg.msgtype === "richText" && msg.content?.richText) {
     const parts: string[] = [];
-    const images: Array<{ base64: string; mimeType: string }> = [];
+    const filePaths: string[] = [];
     for (const part of msg.content.richText) {
       if (part.type === "text" && part.text) {
         parts.push(part.text);
-      } else if (part.type === "picture" && part.downloadCode && rc) {
-        const img = await downloadMediaAsBase64(opts.appKey, opts.appSecret, rc, part.downloadCode);
-        if (img?.mimeType.startsWith("image/")) {
-          images.push(img);
+      } else if (part.type === "picture" && rc) {
+        const tmpPath = await tryDownload(part.downloadCode, "richText.picture");
+        if (tmpPath) {
+          filePaths.push(tmpPath);
         } else {
-          parts.push("[图片]");
+          parts.push("[图片下载失败]");
         }
       } else if (part.type === "at" && part.atName) {
         // skip @mentions
       }
     }
-    return { text: parts.join("").trim() || "[富文本消息]", images: images.length > 0 ? images : undefined };
-  }
-
-  if (msg.msgtype === "file") {
-    return { text: `[文件: ${msg.content?.fileName ?? "未知文件"}]` };
-  }
-
-  if (msg.msgtype === "video") {
-    return { text: "[视频消息]" };
+    return { text: parts.join("").trim() || "[富文本消息]", filePaths: filePaths.length > 0 ? filePaths : undefined };
   }
 
   // Fallback
@@ -1489,7 +1538,7 @@ class DingtalkConnection {
     }
 
     // ── Extract text/media content ─────────────────────────────────────────────
-    let extracted: { text: string; images?: Array<{ base64: string; mimeType: string }> };
+    let extracted: { text: string; filePaths?: string[] };
     try {
       extracted = await extractContent(msg, this.opts);
     } catch (err) {
@@ -1498,6 +1547,12 @@ class DingtalkConnection {
     }
 
     if (!extracted.text) return;
+
+    // Append file paths to the text so Agent SDK can read/view them
+    if (extracted.filePaths && extracted.filePaths.length > 0) {
+      const pathsNote = extracted.filePaths.map((p: string) => `文件路径: ${p}`).join("\n");
+      extracted = { ...extracted, text: `${extracted.text}\n\n${pathsNote}` };
+    }
 
     console.log(`[DingTalk] Message (${msg.msgtype}): ${extracted.text.slice(0, 100)}`);
 
@@ -1527,7 +1582,7 @@ class DingtalkConnection {
       `[DingTalk][${this.opts.assistantName}] Processing (rcv=${this.inboundStats.received} proc=${this.inboundStats.processed} skip=${this.inboundStats.skipped} tools=${this.inboundStats.toolCalls})`,
     );
     try {
-      await this.generateAndDeliver(msg, extracted.text, extracted.images);
+      await this.generateAndDeliver(msg, extracted.text);
     } catch (err) {
       console.error("[DingTalk] Reply generation error:", err);
       if (!msg.sessionWebhookExpiredTime || Date.now() <= msg.sessionWebhookExpiredTime) {
@@ -1558,7 +1613,6 @@ class DingtalkConnection {
   private async generateAndDeliver(
     msg: DingtalkMessage,
     userText: string,
-    userImages?: Array<{ base64: string; mimeType: string }>,
   ): Promise<void> {
     const history = getHistory(this.opts.assistantId);
     const provider = this.opts.provider ?? "claude";
@@ -1603,7 +1657,6 @@ class DingtalkConnection {
         system,
         history,
         userText,
-        userImages,
         msg,
         sessionId,
       );
@@ -2058,7 +2111,6 @@ class DingtalkConnection {
     system: string,
     history: ConvMessage[],
     userText: string,
-    userImages: Array<{ base64: string; mimeType: string }> | undefined,
     msg: DingtalkMessage,
     sessionId: string,
   ): Promise<string> {
@@ -2071,26 +2123,7 @@ class DingtalkConnection {
       content: m.content,
     }));
 
-    // Add current user turn (with optional images)
-    if (userImages && userImages.length > 0) {
-      const contentParts: Anthropic.ContentBlockParam[] = [];
-      for (const img of userImages) {
-        if (img.mimeType.startsWith("image/")) {
-          contentParts.push({
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: img.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-              data: img.base64,
-            },
-          });
-        }
-      }
-      contentParts.push({ type: "text", text: userText });
-      messages.push({ role: "user", content: contentParts });
-    } else {
-      messages.push({ role: "user", content: userText });
-    }
+    messages.push({ role: "user", content: userText });
 
     // ── Card streaming mode ────────────────────────────────────────────────────
     const useCard =

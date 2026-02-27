@@ -221,8 +221,9 @@ function FormField({
   );
 }
 
-// DingTalk-specific status indicator
+// Platform-specific status indicator
 type DingtalkStatus = DingtalkBotStatus | null;
+type FeishuStatus = FeishuBotStatus | null;
 
 export function BotConfigModal({
   open,
@@ -243,9 +244,11 @@ export function BotConfigModal({
   const [connecting, setConnecting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [dingtalkStatus, setDingtalkStatus] = useState<DingtalkStatus>(null);
+  const [feishuStatus, setFeishuStatus] = useState<FeishuStatus>(null);
   const unsubRef = useRef<(() => void) | null>(null);
+  const unsubFeishuRef = useRef<(() => void) | null>(null);
 
-  // Load initial DingTalk status and subscribe to updates
+  // Load initial status and subscribe to updates for real-time bot platforms
   useEffect(() => {
     if (!open) return;
     setBots(initialBots);
@@ -257,8 +260,13 @@ export function BotConfigModal({
       setDingtalkStatus(r.status);
     });
 
-    // Subscribe to live status updates
-    const unsub = window.electron.onDingtalkBotStatus((id, status, detail) => {
+    // Get current Feishu status
+    window.electron.getFeishuBotStatus(assistantId).then((r) => {
+      setFeishuStatus(r.status);
+    });
+
+    // Subscribe to DingTalk live status updates
+    const unsubDt = window.electron.onDingtalkBotStatus((id, status, detail) => {
       if (id !== assistantId) return;
       setDingtalkStatus(status);
       if (status === "error" && detail) {
@@ -268,10 +276,26 @@ export function BotConfigModal({
         setTestResult({ success: true, message: "连接成功，机器人正在监听消息" });
       }
     });
-    unsubRef.current = unsub;
+    unsubRef.current = unsubDt;
+
+    // Subscribe to Feishu live status updates
+    const unsubFs = window.electron.onFeishuBotStatus((id, status, detail) => {
+      if (id !== assistantId) return;
+      setFeishuStatus(status);
+      if (status === "error" && detail) {
+        setTestResult({ success: false, message: detail });
+      }
+      if (status === "connected") {
+        setTestResult({ success: true, message: "飞书连接成功，机器人正在监听消息" });
+      }
+    });
+    unsubFeishuRef.current = unsubFs;
+
     return () => {
-      unsub();
+      unsubDt();
+      unsubFs();
       unsubRef.current = null;
+      unsubFeishuRef.current = null;
     };
   }, [open, assistantId, initialBots]);
 
@@ -282,10 +306,12 @@ export function BotConfigModal({
   const currentPlatformCfg = bots[selectedPlatform];
   const isConnected = currentPlatformCfg?.connected ?? false;
 
-  // For DingTalk, use real-time status; for others, use config flag
+  // For DingTalk and Feishu, use real-time status; for others, use config flag
   const effectiveStatus =
     selectedPlatform === "dingtalk"
       ? dingtalkStatus ?? (isConnected ? "connected" : "disconnected")
+      : selectedPlatform === "feishu"
+      ? feishuStatus ?? (isConnected ? "connected" : "disconnected")
       : isConnected
       ? "connected"
       : "disconnected";
@@ -319,14 +345,12 @@ export function BotConfigModal({
   const handleToggleConnect = async () => {
     if (selectedPlatform === "dingtalk") {
       if (effectiveStatus === "connected" || effectiveStatus === "connecting") {
-        // Disconnect
         await window.electron.stopDingtalkBot(assistantId);
         const platformCfg = formToPlatformConfig("dingtalk", form, false);
         const nextBots = { ...bots, dingtalk: platformCfg };
         setBots(nextBots);
         onSave(nextBots);
       } else {
-        // Connect
         const dt = form.dingtalk;
         if (!dt.appKey || !dt.appSecret) {
           setTestResult({ success: false, message: "请先填写 AppKey 和 AppSecret" });
@@ -362,6 +386,44 @@ export function BotConfigModal({
           } else {
             const platformCfg = formToPlatformConfig("dingtalk", form, true);
             const nextBots = { ...bots, dingtalk: platformCfg };
+            setBots(nextBots);
+            onSave(nextBots);
+          }
+        } finally {
+          setConnecting(false);
+        }
+      }
+    } else if (selectedPlatform === "feishu") {
+      if (effectiveStatus === "connected" || effectiveStatus === "connecting") {
+        await window.electron.stopFeishuBot(assistantId);
+        const platformCfg = formToPlatformConfig("feishu", form, false);
+        const nextBots = { ...bots, feishu: platformCfg };
+        setBots(nextBots);
+        onSave(nextBots);
+      } else {
+        const fs = form.feishu;
+        if (!fs.appId || !fs.appSecret) {
+          setTestResult({ success: false, message: "请先填写 App ID 和 App Secret" });
+          return;
+        }
+        setConnecting(true);
+        setTestResult(null);
+        try {
+          const result = await window.electron.startFeishuBot({
+            appId: fs.appId,
+            appSecret: fs.appSecret,
+            domain: fs.domain,
+            assistantId,
+            assistantName,
+            provider,
+            model,
+            defaultCwd,
+          });
+          if (result.status === "error") {
+            setTestResult({ success: false, message: result.detail ?? "连接失败" });
+          } else {
+            const platformCfg = formToPlatformConfig("feishu", form, true);
+            const nextBots = { ...bots, feishu: platformCfg };
             setBots(nextBots);
             onSave(nextBots);
           }
@@ -453,6 +515,8 @@ export function BotConfigModal({
                     <span className="text-sm font-medium leading-none flex-1">{platform.name}</span>
                     {(platform.id === "dingtalk"
                       ? dingtalkStatus === "connected"
+                      : platform.id === "feishu"
+                      ? feishuStatus === "connected"
                       : connected) && (
                       <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
                     )}
@@ -460,6 +524,12 @@ export function BotConfigModal({
                       <div className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
                     )}
                     {platform.id === "dingtalk" && dingtalkStatus === "error" && (
+                      <div className="h-1.5 w-1.5 rounded-full bg-red-500 flex-shrink-0" />
+                    )}
+                    {platform.id === "feishu" && feishuStatus === "connecting" && (
+                      <div className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
+                    )}
+                    {platform.id === "feishu" && feishuStatus === "error" && (
                       <div className="h-1.5 w-1.5 rounded-full bg-red-500 flex-shrink-0" />
                     )}
                   </button>

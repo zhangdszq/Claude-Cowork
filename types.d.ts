@@ -308,6 +308,26 @@ type DingtalkBotStatusResult = {
     detail?: string;
 };
 
+type FeishuBotStatus = "disconnected" | "connecting" | "connected" | "error";
+
+type StartFeishuBotInput = {
+    appId: string;
+    appSecret: string;
+    domain?: "feishu" | "lark";
+    assistantId: string;
+    assistantName: string;
+    persona?: string;
+    provider?: "claude" | "codex";
+    model?: string;
+    defaultCwd?: string;
+    maxConnectionAttempts?: number;
+};
+
+type FeishuBotStatusResult = {
+    status: FeishuBotStatus;
+    detail?: string;
+};
+
 type UnsubscribeFunction = () => void;
 
 type EventPayloadMapping = {
@@ -345,6 +365,9 @@ type EventPayloadMapping = {
     "send-proactive-dingtalk": SendProactiveDingtalkResult;
     "send-proactive-dingtalk-media": SendProactiveDingtalkResult;
     "get-dingtalk-last-seen": Array<{ target: string; isGroup: boolean; lastSeenAt: number }>;
+    "start-feishu-bot": FeishuBotStatusResult;
+    "stop-feishu-bot": void;
+    "get-feishu-bot-status": FeishuBotStatusResult;
     "is-sidecar-running": boolean;
     // OpenAI Codex OAuth
     "openai-login": OpenAILoginResult;
@@ -409,6 +432,11 @@ interface Window {
         sendProactiveDingtalk: (input: SendProactiveDingtalkInput) => Promise<SendProactiveDingtalkResult>;
         sendProactiveMediaDingtalk: (input: SendProactiveMediaDingtalkInput) => Promise<SendProactiveDingtalkResult>;
         getDingtalkLastSeen: (assistantId: string) => Promise<Array<{ target: string; isGroup: boolean; lastSeenAt: number }>>;
+        // Feishu bot lifecycle
+        startFeishuBot: (input: StartFeishuBotInput) => Promise<FeishuBotStatusResult>;
+        stopFeishuBot: (assistantId: string) => Promise<void>;
+        getFeishuBotStatus: (assistantId: string) => Promise<FeishuBotStatusResult>;
+        onFeishuBotStatus: (cb: (assistantId: string, status: FeishuBotStatus, detail?: string) => void) => UnsubscribeFunction;
         // OpenAI Codex OAuth
         openaiLogin: () => Promise<OpenAILoginResult>;
         openaiLogout: () => Promise<{ success: boolean }>;

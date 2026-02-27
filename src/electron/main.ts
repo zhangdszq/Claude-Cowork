@@ -3,8 +3,9 @@ import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
 import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources } from "./test.js";
 import { handleClientEvent, sessions } from "./ipc-handlers.js";
-// Inject the shared SessionStore into the DingTalk bot module so it uses the same DB connection
+// Inject the shared SessionStore into bot modules so they use the same DB connection
 setSessionStore(sessions);
+setFeishuSessionStore(sessions);
 import type { ClientEvent } from "./types.js";
 import "./libs/claude-settings.js";
 import { loadUserSettings, saveUserSettings, type UserSettings } from "./libs/user-settings.js";
@@ -21,6 +22,14 @@ import {
   getLastSeenTargets,
   type DingtalkBotOptions,
 } from "./libs/dingtalk-bot.js";
+import {
+  startFeishuBot,
+  stopFeishuBot,
+  getFeishuBotStatus,
+  onFeishuBotStatusChange,
+  setFeishuSessionStore,
+  type FeishuBotOptions,
+} from "./libs/feishu-bot.js";
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { runEnvironmentChecks, validateApiConfig } from "./libs/env-check.js";
 import { openAILogin, openAILogout, getOpenAIAuthStatus, ensureCodexAuthSync } from "./libs/openai-auth.js";
@@ -66,6 +75,7 @@ const JANITOR_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 h
 async function autoConnectBots(win: BrowserWindow): Promise<void> {
     const config = loadAssistantsConfig();
     for (const assistant of config.assistants) {
+        // DingTalk
         const dingtalk = assistant.bots?.dingtalk as DingtalkBotConfig | undefined;
         if (dingtalk?.connected && dingtalk.appKey && dingtalk.appSecret) {
             console.log(`[AutoConnect] Starting DingTalk bot for assistant: ${assistant.name}`);
@@ -98,6 +108,33 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
             } catch (err) {
                 console.error(`[AutoConnect] Failed to connect DingTalk bot for ${assistant.name}:`, err);
                 win.webContents.send("dingtalk-bot-status", {
+                    assistantId: assistant.id,
+                    status: "error",
+                    detail: err instanceof Error ? err.message : String(err),
+                });
+            }
+        }
+
+        // Feishu
+        const feishu = assistant.bots?.feishu as FeishuBotConfig | undefined;
+        if (feishu?.connected && feishu.appId && feishu.appSecret) {
+            console.log(`[AutoConnect] Starting Feishu bot for assistant: ${assistant.name}`);
+            try {
+                await startFeishuBot({
+                    appId: feishu.appId,
+                    appSecret: feishu.appSecret,
+                    domain: feishu.domain,
+                    assistantId: assistant.id,
+                    assistantName: assistant.name,
+                    persona: assistant.persona,
+                    provider: assistant.provider,
+                    model: assistant.model,
+                    defaultCwd: assistant.defaultCwd,
+                });
+                console.log(`[AutoConnect] Feishu bot connected for: ${assistant.name}`);
+            } catch (err) {
+                console.error(`[AutoConnect] Failed to connect Feishu bot for ${assistant.name}:`, err);
+                win.webContents.send("feishu-bot-status", {
                     assistantId: assistant.id,
                     status: "error",
                     detail: err instanceof Error ? err.message : String(err),
@@ -311,6 +348,33 @@ app.on("ready", async () => {
         const windows = BrowserWindow.getAllWindows();
         for (const win of windows) {
             win.webContents.send("dingtalk-bot-status", { assistantId, status, detail });
+        }
+    });
+
+    // Feishu bot lifecycle handlers
+    ipcMainHandle("start-feishu-bot", async (_: any, input: FeishuBotOptions) => {
+        try {
+            await startFeishuBot(input);
+            return { status: getFeishuBotStatus(input.assistantId) as FeishuBotStatus };
+        } catch (err) {
+            const detail = err instanceof Error ? err.message : String(err);
+            return { status: "error" as FeishuBotStatus, detail };
+        }
+    });
+
+    ipcMainHandle("stop-feishu-bot", (_: any, assistantId: string) => {
+        stopFeishuBot(assistantId);
+    });
+
+    ipcMainHandle("get-feishu-bot-status", (_: any, assistantId: string) => {
+        return { status: getFeishuBotStatus(assistantId) as FeishuBotStatus };
+    });
+
+    // Forward Feishu bot status changes to renderer
+    onFeishuBotStatusChange((assistantId, status, detail) => {
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+            win.webContents.send("feishu-bot-status", { assistantId, status, detail });
         }
     });
 

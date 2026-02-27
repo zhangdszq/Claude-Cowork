@@ -97,6 +97,20 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("send-proactive-dingtalk-media", input),
     getDingtalkLastSeen: (assistantId: string) =>
         ipcInvoke("get-dingtalk-last-seen", assistantId),
+    // Feishu bot lifecycle
+    startFeishuBot: (input: StartFeishuBotInput) =>
+        ipcInvoke("start-feishu-bot", input),
+    stopFeishuBot: (assistantId: string) =>
+        ipcInvoke("stop-feishu-bot", assistantId),
+    getFeishuBotStatus: (assistantId: string) =>
+        ipcInvoke("get-feishu-bot-status", assistantId),
+    onFeishuBotStatus: (cb: (assistantId: string, status: FeishuBotStatus, detail?: string) => void) => {
+        const handler = (_: Electron.IpcRendererEvent, payload: { assistantId: string; status: FeishuBotStatus; detail?: string }) => {
+            cb(payload.assistantId, payload.status, payload.detail);
+        };
+        electron.ipcRenderer.on("feishu-bot-status", handler);
+        return () => electron.ipcRenderer.off("feishu-bot-status", handler);
+    },
     onDingtalkBotStatus: (cb: (assistantId: string, status: DingtalkBotStatus, detail?: string) => void) => {
         const handler = (_: Electron.IpcRendererEvent, payload: { assistantId: string; status: DingtalkBotStatus; detail?: string }) => {
             cb(payload.assistantId, payload.status, payload.detail);
