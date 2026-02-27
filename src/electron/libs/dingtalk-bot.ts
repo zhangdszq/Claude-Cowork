@@ -252,13 +252,31 @@ async function uploadMediaV1(
     const token = await getAccessTokenV1(appKey, appSecret);
     const fileBuffer = await fs.promises.readFile(filePath);
     const fileName = path.basename(filePath);
+    const fileExt = path.extname(fileName).toLowerCase();
+    const mimeByExt: Record<string, string> = {
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".gif": "image/gif",
+      ".bmp": "image/bmp",
+      ".webp": "image/webp",
+      ".mp3": "audio/mpeg",
+      ".wav": "audio/wav",
+      ".amr": "audio/amr",
+      ".mp4": "video/mp4",
+      ".mov": "video/quicktime",
+      ".avi": "video/x-msvideo",
+      ".pdf": "application/pdf",
+      ".txt": "text/plain",
+    };
+    const contentType = mimeByExt[fileExt] ?? "application/octet-stream";
     const boundary = `----DT${Date.now()}`;
     const CRLF = "\r\n";
     const body = Buffer.concat([
       Buffer.from(
         `--${boundary}${CRLF}` +
         `Content-Disposition: form-data; name="media"; filename="${fileName}"${CRLF}` +
-        `Content-Type: application/octet-stream${CRLF}${CRLF}`,
+        `Content-Type: ${contentType}${CRLF}${CRLF}`,
       ),
       fileBuffer,
       Buffer.from(`${CRLF}--${boundary}--${CRLF}`),
@@ -1032,14 +1050,6 @@ export async function sendProactiveMediaDingtalk(
   if (!mediaId) {
     return { ok: false, error: "媒体上传失败，请检查应用权限（oapi.dingtalk.com/media/upload）" };
   }
-  // For image preview rendering, sampleImageMsg needs an HTTP URL.
-  // Build a short-lived URL backed by DingTalk V1 media/get.
-  const imagePreviewUrl =
-    detectedType === "image"
-      ? `https://oapi.dingtalk.com/media/get?access_token=${encodeURIComponent(
-          await getAccessTokenV1(botOpts.appKey, botOpts.appSecret),
-        )}&media_id=${encodeURIComponent(mediaId)}`
-      : "";
 
   // Send to each target
   const robotCode = botOpts.robotCode ?? botOpts.appKey;
@@ -1054,6 +1064,8 @@ export async function sendProactiveMediaDingtalk(
       ? `${DINGTALK_API}/v1.0/robot/groupMessages/send`
       : `${DINGTALK_API}/v1.0/robot/oToMessages/batchSend`;
 
+    // soimy pattern: for sampleImageMsg, pass mediaId directly as photoURL.
+    // DingTalk V2 proactive API accepts media_id (@lA...) in photoURL field.
     let msgKey: string;
     let msgParam: string;
     const fileName2 = filePath.split("/").pop() ?? "file";
@@ -1062,7 +1074,7 @@ export async function sendProactiveMediaDingtalk(
       msgParam = JSON.stringify({ mediaId, duration: "0" });
     } else if (detectedType === "image") {
       msgKey = "sampleImageMsg";
-      msgParam = JSON.stringify({ photoURL: imagePreviewUrl });
+      msgParam = JSON.stringify({ photoURL: mediaId });
     } else {
       const fileExt = ext || (detectedType === "video" ? "mp4" : "bin");
       msgKey = "sampleFile";
@@ -1087,28 +1099,9 @@ export async function sendProactiveMediaDingtalk(
         body: JSON.stringify(payload),
       });
 
-      if (!resp.ok && detectedType === "image") {
-        const fallbackPayload: Record<string, unknown> = {
-          robotCode,
-          msgKey: "sampleFile",
-          msgParam: JSON.stringify({ mediaId, fileName: fileName2, fileType: ext || "png" }),
-        };
-        if (isGroup) fallbackPayload.openConversationId = targetId;
-        else fallbackPayload.userIds = [targetId];
-
-        const fallbackResp = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-acs-dingtalk-access-token": token,
-          },
-          body: JSON.stringify(fallbackPayload),
-        });
-        if (fallbackResp.ok) {
-          clearProactiveRisk(botOpts.assistantId, targetId);
-          console.log(`[DingTalk] Proactive image fallback(file) sent → ${isGroup ? "group" : "user"} ${targetId}`);
-          continue;
-        }
+      if (!resp.ok) {
+        const errText = await resp.text();
+        console.error(`[DingTalk] Proactive send fail (${resp.status}) msgKey=${msgKey}: ${errText.slice(0, 200)}`);
       }
 
       if (!resp.ok) {
@@ -1785,10 +1778,11 @@ class DingtalkConnection {
           return `媒体上传失败，请检查应用权限（oapi.dingtalk.com）`;
         }
 
-        // Try sessionWebhook first (self-authenticating, no auth header needed)
+        // Try sessionWebhook first — add V2 token header (soimy always adds it for media)
         const webhookExpired = msg.sessionWebhookExpiredTime && Date.now() > msg.sessionWebhookExpiredTime;
         if (!webhookExpired && msg.sessionWebhook) {
           try {
+            const webhookToken = await getAccessToken(self.opts.appKey, self.opts.appSecret);
             const body = sendMediaType === "image"
               ? { msgtype: "image", image: { media_id: mediaId } }
               : sendMediaType === "voice"
@@ -1797,7 +1791,10 @@ class DingtalkConnection {
 
             const resp = await fetch(msg.sessionWebhook, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: {
+                "Content-Type": "application/json",
+                "x-acs-dingtalk-access-token": webhookToken,
+              },
               body: JSON.stringify(body),
             });
             const respText = await resp.text();
@@ -1812,7 +1809,7 @@ class DingtalkConnection {
           }
         }
 
-        // Fallback: proactive API (image->sampleImageMsg, fallback to sampleFile; voice->sampleAudio)
+        // Fallback: proactive API — soimy pattern: pass mediaId directly as photoURL for images
         const robotCode = self.opts.robotCode ?? self.opts.appKey;
         const sender = msg.senderStaffId ?? msg.senderId ?? "";
         const isGroup = msg.conversationType === "2";
@@ -1823,17 +1820,17 @@ class DingtalkConnection {
 
         const fileName = path.basename(filePath);
         const fileExt = ext || "bin";
-        let msgKey = sendMediaType === "voice" ? "sampleAudio" : "sampleFile";
-        let msgParam = sendMediaType === "voice"
-          ? JSON.stringify({ mediaId, duration: "1" })
-          : JSON.stringify({ mediaId, fileName, fileType: fileExt });
-        if (sendMediaType === "image") {
-          const tokenV1 = await getAccessTokenV1(self.opts.appKey, self.opts.appSecret);
-          const imageUrl =
-            `https://oapi.dingtalk.com/media/get?access_token=${encodeURIComponent(tokenV1)}` +
-            `&media_id=${encodeURIComponent(mediaId)}`;
+        let msgKey: string;
+        let msgParam: string;
+        if (sendMediaType === "voice") {
+          msgKey = "sampleAudio";
+          msgParam = JSON.stringify({ mediaId, duration: "1" });
+        } else if (sendMediaType === "image") {
           msgKey = "sampleImageMsg";
-          msgParam = JSON.stringify({ photoURL: imageUrl });
+          msgParam = JSON.stringify({ photoURL: mediaId });
+        } else {
+          msgKey = "sampleFile";
+          msgParam = JSON.stringify({ mediaId, fileName, fileType: fileExt });
         }
 
         const payload: Record<string, unknown> = { robotCode, msgKey, msgParam };
@@ -1848,24 +1845,6 @@ class DingtalkConnection {
             body: JSON.stringify(payload),
           });
           const respText = await resp.text();
-          if (!resp.ok && sendMediaType === "image") {
-            const fallbackPayload: Record<string, unknown> = {
-              robotCode,
-              msgKey: "sampleFile",
-              msgParam: JSON.stringify({ mediaId, fileName, fileType: fileExt || "png" }),
-            };
-            if (isGroup) fallbackPayload.openConversationId = resolvedTarget;
-            else fallbackPayload.userIds = [resolvedTarget];
-            const fallbackResp = await fetch(apiUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "x-acs-dingtalk-access-token": token },
-              body: JSON.stringify(fallbackPayload),
-            });
-            const fallbackText = await fallbackResp.text();
-            cleanup();
-            if (fallbackResp.ok) return `文件已发送: ${path.basename(sendPath)}`;
-            return `发送失败 (HTTP ${fallbackResp.status}): ${fallbackText.slice(0, 200)}`;
-          }
           cleanup();
           if (resp.ok) return `文件已发送: ${path.basename(sendPath)}`;
           return `发送失败 (HTTP ${resp.status}): ${respText.slice(0, 200)}`;
