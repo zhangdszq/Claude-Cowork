@@ -1581,7 +1581,16 @@ class DingtalkConnection {
     const basePersona =
       this.opts.persona?.trim() ||
       `你是 ${this.opts.assistantName}，一个智能助手，请简洁有用地回答问题。`;
-    const system = [basePersona, memoryContext, this.tools.toolHint]
+
+    // Strict output rules: no internal monologue, no step-by-step narration.
+    const outputRules = `## 回复规范（必须遵守）
+- 直接给出结果，不要叙述你的思考过程或执行步骤
+- 调用工具时保持沉默，只在工具全部完成后给出一句话结论
+- 截图/发文件类任务：工具执行完只需回复"已发送"或简短说明，不要写"我先截图再上传再发送…"
+- 禁止把工具调用的中间状态、路径、API 返回值等细节写进最终回复
+- 如果任务失败，简短说明原因即可，无需描述每个步骤`;
+
+    const system = [basePersona, outputRules, memoryContext, this.tools.toolHint]
       .filter(Boolean)
       .join("\n\n");
 
