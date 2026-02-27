@@ -502,7 +502,6 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0 }: Pr
     prompt, 
     setPrompt, 
     isRunning, 
-    imagePath,
     attachments,
     handleSend, 
     handleStop,
