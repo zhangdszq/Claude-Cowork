@@ -1197,7 +1197,8 @@ export async function broadcastDingtalkMessage(
 const histories = new Map<string, ConvMessage[]>();
 const MAX_TURNS = 10;
 const botSessionIds = new Map<string, string>();
-const titledSessions = new Set<string>();
+/** sessionId → number of times the title has been (re)generated */
+const titledSessions = new Map<string, number>();
 
 function getHistory(assistantId: string): ConvMessage[] {
   if (!histories.has(assistantId)) histories.set(assistantId, []);
@@ -1224,21 +1225,57 @@ function getBotSession(
   return session.id;
 }
 
-async function updateBotSessionTitle(sessionId: string, firstMessage: string): Promise<void> {
-  if (titledSessions.has(sessionId)) return;
-  titledSessions.add(sessionId);
-  const fallback = firstMessage.slice(0, 40).trim() + (firstMessage.length > 40 ? "…" : "");
-  let title = fallback;
+/**
+ * Asynchronously generate and update a session title using Agent SDK.
+ * Re-runs on turn 1 and turn 3 so the title improves as context grows.
+ * @param sessionId  - DB session ID
+ * @param history    - current full conversation history (user + assistant turns)
+ * @param prefix     - channel prefix, e.g. "[钉钉]"
+ */
+async function updateBotSessionTitle(
+  sessionId: string,
+  history: ConvMessage[],
+  prefix = "[钉钉]",
+): Promise<void> {
+  const turns = Math.floor(history.length / 2); // each turn = user + assistant
+  const prevCount = titledSessions.get(sessionId) ?? 0;
+
+  // Update on turn 1 (after first exchange) and turn 3 (with richer context)
+  const shouldUpdate = turns === 1 || (turns === 3 && prevCount < 2);
+  if (!shouldUpdate) return;
+  titledSessions.set(sessionId, prevCount + 1);
+
+  // Build a compact context from the last 3 turns for the prompt
+  const recentTurns = history.slice(-6); // up to 3 user+assistant pairs
+  const contextLines = recentTurns
+    .map((m) => {
+      const role = m.role === "user" ? "用户" : "助手";
+      const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+      return `${role}：${text.slice(0, 200)}`;
+    })
+    .join("\n");
+
+  const fallback = (recentTurns[0]
+    ? (typeof recentTurns[0].content === "string" ? recentTurns[0].content : "对话")
+    : "对话"
+  ).slice(0, 30).trim();
+
   try {
-    const { generateSessionTitle } = await import("../api/services/runner.js");
-    const generated = await generateSessionTitle(
-      `请根据以下对话内容，生成一个简短的中文标题（10字以内，不加引号），直接输出标题：\n${firstMessage}`,
+    const agentSdk = await import("@anthropic-ai/claude-agent-sdk");
+    const result = await agentSdk.unstable_v2_prompt(
+      `请根据以下对话内容，生成一个简短的中文标题（不超过12字，不加引号，不加标点），直接输出标题，不输出其他内容：\n\n${contextLines}`,
+      { model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514" } as Parameters<typeof agentSdk.unstable_v2_prompt>[1],
     );
-    if (generated && generated !== "New Session") title = generated;
-  } catch {
-    // keep fallback
+    const generated = result.subtype === "success" && result.result ? result.result.trim() : "";
+    const title = (generated && generated !== "New Session") ? generated : fallback;
+    sessionStore?.updateSession(sessionId, { title: `${prefix} ${title}` });
+    console.log(`[DingTalk] Session title updated (turn ${turns}): "${title}"`);
+  } catch (err) {
+    console.warn(`[DingTalk] Title generation failed:`, err);
+    if (prevCount === 0) {
+      sessionStore?.updateSession(sessionId, { title: `${prefix} ${fallback}` });
+    }
   }
-  sessionStore?.updateSession(sessionId, { title: `[钉钉] ${title}` });
 }
 
 // ─── Anthropic client cache ───────────────────────────────────────────────────
@@ -1626,7 +1663,6 @@ class DingtalkConnection {
     );
 
     sessionStore?.recordMessage(sessionId, { type: "user_prompt", prompt: userText });
-    updateBotSessionTitle(sessionId, userText).catch(() => {});
 
     history.push({ role: "user", content: userText });
     while (history.length > MAX_TURNS * 2) history.shift();
@@ -1668,6 +1704,9 @@ class DingtalkConnection {
 
     history.push({ role: "assistant", content: replyText });
     this.persistReply(sessionId, replyText, userText);
+
+    // Async title update after reply — uses full history for better context
+    updateBotSessionTitle(sessionId, history, `[钉钉]`).catch(() => {});
 
     await this.sendMarkdown(msg.sessionWebhook, replyText);
   }
@@ -2172,6 +2211,8 @@ class DingtalkConnection {
 
         history.push({ role: "assistant", content: finalText });
         this.persistReply(sessionId, finalText, userText);
+
+        updateBotSessionTitle(sessionId, history, `[钉钉]`).catch(() => {});
 
         return "__CARD_DELIVERED__";
       } catch (err) {
