@@ -811,37 +811,94 @@ app.on("ready", async () => {
         }
     });
 
-    // Install skill from git URL into both ~/.claude/skills/ and ~/.codex/skills/
+    // Install skill via curl + unzip (no git required)
+    // Supports:
+    //   - GitHub subdirectory: https://github.com/user/repo/tree/branch/subdir
+    //   - GitHub full repo:    https://github.com/user/repo
     ipcMainHandle("install-skill", async (_: any, url: string) => {
         const { execSync } = await import("child_process");
+        const { mkdtempSync, cpSync, rmSync } = await import("fs");
+        const { tmpdir } = await import("os");
         const home = homedir();
 
-        // Derive skill name from URL: last path segment without .git
         const urlClean = url.replace(/\.git\/?$/, "").replace(/\/+$/, "");
         const skillName = urlClean.split("/").pop() || "unknown-skill";
+
+        // Parse GitHub URL
+        const subdirMatch = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)\/(.+)$/);
+        const repoMatch = !subdirMatch && url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(\.git)?$/);
 
         const targets = [
             join(home, ".claude", "skills", skillName),
             join(home, ".codex", "skills", skillName),
         ];
 
+        const isWin = process.platform === "win32";
+
+        // Download GitHub zip and extract to targetDir (no git)
+        // - macOS/Linux: curl + unzip (both built-in)
+        // - Windows:     curl (built-in since Win10) + PowerShell Expand-Archive
+        const installFromGithub = (user: string, repo: string, branch: string, subPath: string | null, targetDir: string) => {
+            const zipUrl = `https://github.com/${user}/${repo}/archive/refs/heads/${branch}.zip`;
+            const tmpDir = mkdtempSync(join(tmpdir(), "skill-"));
+            const zipFile = join(tmpDir, "skill.zip");
+            const extractDir = join(tmpDir, "extract");
+            try {
+                execSync(`curl -fsSL "${zipUrl}" -o "${zipFile}"`, { timeout: 60000 });
+                mkdirSync(extractDir, { recursive: true });
+
+                if (isWin) {
+                    // PowerShell Expand-Archive always extracts everything; we pick subdir after
+                    const psZip = zipFile.replace(/\\/g, "/");
+                    const psExtract = extractDir.replace(/\\/g, "/");
+                    execSync(
+                        `powershell -NoProfile -Command "Expand-Archive -LiteralPath '${psZip}' -DestinationPath '${psExtract}' -Force"`,
+                        { timeout: 60000 }
+                    );
+                } else {
+                    // macOS/Linux: unzip supports pattern to avoid extracting the whole archive
+                    const zipPrefix = `${repo}-${branch}/${subPath ?? ""}`;
+                    if (subPath) {
+                        execSync(`unzip -q "${zipFile}" "${zipPrefix}/*" -d "${extractDir}"`, { timeout: 30000 });
+                    } else {
+                        execSync(`unzip -q "${zipFile}" -d "${extractDir}"`, { timeout: 30000 });
+                    }
+                }
+
+                const srcDir = subPath
+                    ? join(extractDir, `${repo}-${branch}`, ...subPath.split("/"))
+                    : join(extractDir, `${repo}-${branch}`);
+                if (existsSync(targetDir)) rmSync(targetDir, { recursive: true, force: true });
+                cpSync(srcDir, targetDir, { recursive: true });
+            } finally {
+                rmSync(tmpDir, { recursive: true, force: true });
+            }
+        };
+
         const results: string[] = [];
 
         for (const targetDir of targets) {
             try {
-                if (existsSync(targetDir)) {
-                    // Already exists — pull latest
-                    execSync("git pull", { cwd: targetDir, timeout: 30000, stdio: "pipe" });
-                    results.push(`更新: ${targetDir}`);
-                } else {
-                    // Ensure parent exists
-                    const parentDir = join(targetDir, "..");
-                    if (!existsSync(parentDir)) {
-                        mkdirSync(parentDir, { recursive: true });
+                const parentDir = join(targetDir, "..");
+                if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true });
+
+                const action = existsSync(targetDir) ? "更新" : "安装";
+
+                if (subdirMatch) {
+                    const [, user, repo, branch, subPath] = subdirMatch;
+                    installFromGithub(user, repo, branch, subPath, targetDir);
+                } else if (repoMatch) {
+                    const [, user, repo] = repoMatch;
+                    try {
+                        installFromGithub(user, repo, "main", null, targetDir);
+                    } catch {
+                        installFromGithub(user, repo, "master", null, targetDir);
                     }
-                    execSync(`git clone ${url} ${JSON.stringify(targetDir)}`, { timeout: 60000, stdio: "pipe" });
-                    results.push(`安装: ${targetDir}`);
+                } else {
+                    throw new Error(`不支持的地址格式: ${url}`);
                 }
+
+                results.push(`${action}: ${targetDir}`);
             } catch (err) {
                 results.push(`失败 (${targetDir}): ${(err as Error).message}`);
             }

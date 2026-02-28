@@ -728,6 +728,19 @@ function App() {
   const [mcpSkillModalOpen, setMcpSkillModalOpen] = useState(false);
   const [mcpSkillInitialTab, setMcpSkillInitialTab] = useState<"mcp" | "skill">("mcp");
 
+  // Header compact mode: hide button labels when header is narrow
+  const headerRef = useRef<HTMLDivElement>(null);
+  const [headerCompact, setHeaderCompact] = useState(false);
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setHeaderCompact(entry.contentRect.width < 480);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   const handleOpenMcp = useCallback(() => {
     setMcpSkillInitialTab("mcp");
     setMcpSkillModalOpen(true);
@@ -796,13 +809,16 @@ function App() {
           transition: "margin-left 0.2s ease, margin-right 0.2s ease",
         }}
       >
-        <div 
+        <div
+          ref={headerRef}
           className="flex items-center justify-between h-12 border-b border-ink-900/10 bg-surface-cream select-none px-4"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
-          <div className="w-24" /> {/* Spacer for balance */}
-          <span className="text-sm font-medium text-ink-700">{activeSession?.title || "AI Team"}</span>
-          <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <div className="w-24 shrink-0" /> {/* Spacer for balance */}
+          <span className="min-w-0 flex-1 text-center text-sm font-medium text-ink-700 truncate px-2">
+            {activeSession?.title || "AI Team"}
+          </span>
+          <div className="flex items-center gap-1 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
             {/* History tasks toggle */}
             <button
               onClick={handleToggleTaskPanel}
@@ -817,7 +833,7 @@ function App() {
                 <circle cx="12" cy="12" r="9" />
                 <path d="M12 7v5l3 3" />
               </svg>
-              历史任务
+              {!headerCompact && <span>历史任务</span>}
             </button>
             {/* New task */}
             <button
@@ -828,7 +844,7 @@ function App() {
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M12 5v14M5 12h14" />
               </svg>
-              新任务
+              {!headerCompact && <span>新任务</span>}
             </button>
             <div className="h-4 w-px bg-ink-900/10" />
             {/* Workspace button */}
@@ -841,12 +857,16 @@ function App() {
                 <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
                 </svg>
-                <span className="truncate">
-                  {cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : "选择工作区"}
-                </span>
-                <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M6 9l6 6 6-6" />
-                </svg>
+                {!headerCompact && (
+                  <>
+                    <span className="truncate">
+                      {cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : "选择工作区"}
+                    </span>
+                    <svg viewBox="0 0 24 24" className="h-3 w-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M6 9l6 6 6-6" />
+                    </svg>
+                  </>
+                )}
               </button>
 
               {workspaceDropdownOpen && (
@@ -885,7 +905,7 @@ function App() {
                 <path d="M15 3v18" />
                 <path d="M9 9h3M9 12h3M9 15h3" />
               </svg>
-              工作区
+              {!headerCompact && <span>工作区</span>}
             </button>
           </div>
         </div>
@@ -917,7 +937,7 @@ function App() {
           </div>
         ) : null}
 
-        <div ref={scrollContainerRef} className={`flex-1 overflow-y-auto px-8 pt-6 ${showWorkspacePicker || showChangeWorkspacePicker ? "hidden" : ""}`} style={{ paddingBottom: `${inputAreaHeight + 16}px` }}>
+        <div ref={scrollContainerRef} className={`flex-1 px-8 pt-6 ${(messages.length > 0 || isLoadingHistory) ? "overflow-y-auto" : "overflow-hidden"} ${showWorkspacePicker || showChangeWorkspacePicker ? "hidden" : ""}`} style={{ paddingBottom: (messages.length > 0 || isLoadingHistory) ? `${inputAreaHeight + 16}px` : 0 }}>
           <div className="mx-auto max-w-3xl">
             {isLoadingHistory ? (
               // 骨架屏 - 加载历史消息时显示

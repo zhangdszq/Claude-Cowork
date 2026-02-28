@@ -457,6 +457,14 @@
       "category": "productivity",
       "installPath": "",
       "tags": ["chinese", "skills", "anthropic", "translation"]
+    },
+    {
+      "name": "vipkid-ops",
+      "label": "VIPKID 运营后台",
+      "description": "VIPKID 国际化运营后台助理，操作 sa-manager.lionabc.com 管理端。支持商品包查询、新建、修改，配置优惠券使用限制、库存（追加/扣减/不限制）、赠送权限。⛔ 不执行上架、下架、删除操作。",
+      "category": "productivity",
+      "installPath": "https://github.com/zhangdszq/will-skills/tree/main/vipkid-ops",
+      "tags": ["vipkid", "ops", "product", "ecommerce", "internal"]
     }
   ]
 }
