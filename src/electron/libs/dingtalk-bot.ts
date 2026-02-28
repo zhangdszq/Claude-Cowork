@@ -1555,7 +1555,7 @@ class DingtalkConnection {
 - 调用工具时保持沉默，只在工具全部完成后给出一句话结论
 - 截图/发文件类任务：工具执行完只需回复"已发送"或简短说明，不要写"我先截图再上传再发送…"
 - 禁止把工具调用的中间状态、路径、API 返回值等细节写进最终回复
-- 如果任务失败，简短说明原因即可，无需描述每个步骤`;
+- 遇到障碍或工具调用失败时，主动换方法重试，穷尽所有可用工具和途径，直到完成任务或确认客观上不可完成为止`;
 
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const msgNow = msg.createAt ?? Date.now();
@@ -1609,7 +1609,11 @@ class DingtalkConnection {
         resume: claudeSessionId,
         cwd: this.opts.defaultCwd ?? homedir(),
         mcpServers: { "vk-shared": sharedMcp, "dt-session": sessionMcp },
+        permissionMode: "bypassPermissions",
+        includePartialMessages: true,
         allowDangerouslySkipPermissions: true,
+        maxTurns: 30,
+        settingSources: ["user", "project", "local"],
         pathToClaudeCodeExecutable: claudeCodePath,
         env: buildQueryEnv(),
       },

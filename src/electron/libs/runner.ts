@@ -7,6 +7,7 @@ import type { ServerEvent } from "../types.js";
 import type { Session } from "./session-store.js";
 import { claudeCodeEnv } from "./claude-settings.js";
 import { buildSmartMemoryContext } from "./memory-store.js";
+import { createSharedMcpServer } from "./shared-mcp.js";
 import { app } from "electron";
 import { join } from "path";
 import { homedir } from "os";
@@ -133,8 +134,10 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
           permissionMode: "bypassPermissions",
           includePartialMessages: true,
           allowDangerouslySkipPermissions: true,
+          maxTurns: 30,
           // Load user settings to enable skills from ~/.claude/skills/
           settingSources: ["user", "project", "local"],
+          mcpServers: { "vk-shared": createSharedMcpServer() },
           canUseTool: async (toolName, input, { signal, toolUseID }) => {
             // For AskUserQuestion, we need to wait for user response
             if (toolName === "AskUserQuestion") {
