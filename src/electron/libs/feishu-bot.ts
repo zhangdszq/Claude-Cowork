@@ -19,7 +19,7 @@ import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
-import { buildSmartMemoryContext, appendDailyMemory } from "./memory-store.js";
+import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
 import { getEnhancedEnv, getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
@@ -461,7 +461,7 @@ class FeishuConnection {
     history.push({ role: "user", content: userText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
-    const memoryContext = buildSmartMemoryContext(userText);
+    const memoryContext = buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
     const system = buildStructuredPersona(this.opts, memoryContext);
 
     let replyText: string;
@@ -491,7 +491,7 @@ class FeishuConnection {
     chatId: string,
   ): Promise<string> {
     const sessionMcp = this.createSessionMcp(messageId, chatId);
-    const sharedMcp = createSharedMcpServer();
+    const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
     const claudeSessionId = getBotClaudeSessionId(this.opts.assistantId);
     const claudeCodePath = getClaudeCodePath();
 
@@ -565,7 +565,7 @@ class FeishuConnection {
     const codex = new Codex(codexOpts);
     const threadOpts: ThreadOptions = {
       model: this.opts.model || "gpt-5.3-codex",
-      workingDirectory: this.opts.defaultCwd || process.cwd(),
+      workingDirectory: this.opts.defaultCwd || homedir(),
       sandboxMode: "danger-full-access",
       approvalPolicy: "never",
       skipGitRepoCheck: true,
@@ -712,8 +712,9 @@ class FeishuConnection {
     } as unknown as import("../types.js").StreamMessage);
 
     if (userText) {
-      appendDailyMemory(
-        `\n## [飞书] ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
+      recordConversation(
+        `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
+        { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "飞书" },
       );
     }
   }

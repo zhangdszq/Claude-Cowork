@@ -38,6 +38,7 @@ export type StoredSession = {
   model?: string;
   assistantId?: string;
   assistantSkillNames?: string[];
+  background?: boolean;
   hidden?: boolean;
   createdAt: number;
   updatedAt: number;
@@ -89,8 +90,8 @@ export class SessionStore {
     this.db
       .prepare(
         `insert into sessions
-          (id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          (id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, background, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -104,6 +105,7 @@ export class SessionStore {
         session.model ?? null,
         session.assistantId ?? null,
         JSON.stringify(session.assistantSkillNames ?? []),
+        session.background ? 1 : 0,
         now,
         now
       );
@@ -117,7 +119,7 @@ export class SessionStore {
   listSessions(): StoredSession[] {
     const rows = this.db
       .prepare(
-        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, hidden, created_at, updated_at
+        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, background, hidden, created_at, updated_at
          from sessions
          where hidden is null or hidden = 0
          order by updated_at desc`
@@ -135,6 +137,7 @@ export class SessionStore {
       model: row.model ? String(row.model) : undefined,
       assistantId: row.assistant_id ? String(row.assistant_id) : undefined,
       assistantSkillNames: parseSkillNames(row.assistant_skill_names),
+      background: Boolean(row.background),
       hidden: Boolean(row.hidden),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at)
@@ -239,6 +242,7 @@ export class SessionStore {
       model: "model",
       assistantId: "assistant_id",
       assistantSkillNames: "assistant_skill_names",
+      background: "background",
       hidden: "hidden",
     } as const;
 
@@ -249,7 +253,7 @@ export class SessionStore {
       const value = updates[key];
       if (key === "assistantSkillNames") {
         values.push(value === undefined ? null : JSON.stringify(value));
-      } else if (key === "hidden") {
+      } else if (key === "hidden" || key === "background") {
         values.push(value === undefined ? null : (value ? 1 : 0));
       } else {
         values.push(value === undefined ? null : (value as string));
@@ -289,6 +293,7 @@ export class SessionStore {
     try { this.db.exec(`alter table sessions add column model text`); } catch { /* already exists */ }
     try { this.db.exec(`alter table sessions add column assistant_id text`); } catch { /* already exists */ }
     try { this.db.exec(`alter table sessions add column assistant_skill_names text`); } catch { /* already exists */ }
+    try { this.db.exec(`alter table sessions add column background integer default 0`); } catch { /* already exists */ }
     try { this.db.exec(`alter table sessions add column hidden integer default 0`); } catch { /* already exists */ }
     this.db.exec(
       `create table if not exists messages (
@@ -305,7 +310,7 @@ export class SessionStore {
   private loadSessions(): void {
     const rows = this.db
       .prepare(
-        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, hidden
+        `select id, title, claude_session_id, status, cwd, allowed_tools, last_prompt, provider, model, assistant_id, assistant_skill_names, background, hidden
          from sessions`
       )
       .all();
@@ -322,6 +327,7 @@ export class SessionStore {
         model: row.model ? String(row.model) : undefined,
         assistantId: row.assistant_id ? String(row.assistant_id) : undefined,
         assistantSkillNames: parseSkillNames(row.assistant_skill_names),
+        background: Boolean(row.background),
         hidden: Boolean(row.hidden),
         pendingPermissions: new Map()
       };

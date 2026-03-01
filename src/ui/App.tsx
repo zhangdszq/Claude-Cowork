@@ -234,6 +234,9 @@ function App() {
   const partialMessagesRef = useRef<Map<string, string>>(new Map());
   const [partialMessages, setPartialMessages] = useState<Map<string, SessionPartialState>>(new Map());
 
+  // 跟踪每个 session 当前流式块是否为 thinking 类型
+  const isThinkingBlockRef = useRef<Map<string, boolean>>(new Map());
+
   // 打字机模拟：用于 Codex 等非流式后端
   const [animatingMsgUuid, setAnimatingMsgUuid] = useState<string | null>(null);
   const typewriterIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -386,20 +389,34 @@ function App() {
     // ── Claude 原生流式（stream_event / content_block_delta）──────────────────
     if (message.type === "stream_event") {
       if (message.event.type === "content_block_start") {
+        const blockType = message.event.content_block?.type;
+        const isThinking = blockType === "thinking";
+        isThinkingBlockRef.current.set(sessionId, isThinking);
         partialMessagesRef.current.set(sessionId, "");
-        updatePartialMessage(sessionId, "", true, true);
-        isUserScrolledUpRef.current = false;
+        if (!isThinking) {
+          updatePartialMessage(sessionId, "", true, true);
+          isUserScrolledUpRef.current = false;
+        }
       }
       if (message.event.type === "content_block_delta") {
+        const isThinking = isThinkingBlockRef.current.get(sessionId) ?? false;
         const currentContent = partialMessagesRef.current.get(sessionId) || "";
         const newContent = currentContent + (getPartialMessageContent(message.event) || "");
         partialMessagesRef.current.set(sessionId, newContent);
-        updatePartialMessage(sessionId, newContent, true, true); // flushSync 防止 React 18 批处理
+        if (!isThinking) {
+          updatePartialMessage(sessionId, newContent, true, true);
+        }
       }
       if (message.event.type === "content_block_stop") {
-        const finalContent = partialMessagesRef.current.get(sessionId) || "";
-        updatePartialMessage(sessionId, finalContent, false, true);
-        setTimeout(() => clearPartialMessage(sessionId), 500);
+        const isThinking = isThinkingBlockRef.current.get(sessionId) ?? false;
+        isThinkingBlockRef.current.delete(sessionId);
+        if (!isThinking) {
+          const finalContent = partialMessagesRef.current.get(sessionId) || "";
+          updatePartialMessage(sessionId, finalContent, false, true);
+          setTimeout(() => clearPartialMessage(sessionId), 500);
+        } else {
+          partialMessagesRef.current.delete(sessionId);
+        }
       }
       return;
     }
@@ -634,16 +651,6 @@ function App() {
   const currentPartialState = activeSessionId ? partialMessages.get(activeSessionId) : undefined;
   const partialMessage = currentPartialState?.content ?? "";
   const showPartialMessage = currentPartialState?.isVisible ?? false;
-
-  // Auto-detect provider: prefer codex if authorized
-  const setProvider = useAppStore((s) => s.setProvider);
-  useEffect(() => {
-    window.electron.openaiAuthStatus().then((status) => {
-      if (status.loggedIn) {
-        setProvider("codex");
-      }
-    }).catch(() => {});
-  }, [setProvider]);
 
   useEffect(() => {
     if (connected) sendEvent({ type: "session.list" });

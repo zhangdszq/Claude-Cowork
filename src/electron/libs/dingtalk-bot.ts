@@ -21,7 +21,7 @@ import { networkInterfaces, homedir } from "os";
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
-import { buildSmartMemoryContext, appendDailyMemory } from "./memory-store.js";
+import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
 import { getEnhancedEnv, getClaudeCodePath } from "./util.js";
 import type { SessionStore } from "./session-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
@@ -1572,7 +1572,7 @@ class DingtalkConnection {
     history.push({ role: "user", content: userText });
     while (history.length > MAX_TURNS * 2) history.shift();
 
-    const memoryContext = buildSmartMemoryContext(userText);
+    const memoryContext = buildSmartMemoryContext(userText, this.opts.assistantId, this.opts.defaultCwd);
 
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const msgNow = msg.createAt ?? Date.now();
@@ -1612,7 +1612,7 @@ class DingtalkConnection {
     msg: DingtalkMessage,
   ): Promise<string> {
     const sessionMcp = this.createSessionMcp(msg);
-    const sharedMcp = createSharedMcpServer();
+    const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
     const claudeSessionId = getBotClaudeSessionId(this.opts.assistantId);
     const claudeCodePath = getClaudeCodePath();
 
@@ -1762,7 +1762,7 @@ class DingtalkConnection {
     const codex = new Codex(codexOpts);
     const threadOpts: ThreadOptions = {
       model: this.opts.model || "gpt-5.3-codex",
-      workingDirectory: this.opts.defaultCwd || process.cwd(),
+      workingDirectory: this.opts.defaultCwd || homedir(),
       sandboxMode: "danger-full-access",
       approvalPolicy: "never",
       skipGitRepoCheck: true,
@@ -1983,8 +1983,9 @@ class DingtalkConnection {
     } as unknown as import("../types.js").StreamMessage);
 
     if (userText) {
-      appendDailyMemory(
-        `\n## [钉钉] ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
+      recordConversation(
+        `\n## ${new Date().toLocaleTimeString("zh-CN")}\n**我**: ${userText}\n**${this.opts.assistantName}**: ${replyText}\n`,
+        { assistantId: this.opts.assistantId, assistantName: this.opts.assistantName, channel: "钉钉" },
       );
     }
   }

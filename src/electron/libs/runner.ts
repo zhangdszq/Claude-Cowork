@@ -25,7 +25,7 @@ export type RunnerHandle = {
   abort: () => void;
 };
 
-const DEFAULT_CWD = process.cwd();
+const DEFAULT_CWD = homedir();
 
 // Get Claude Code CLI path for packaged app
 function getClaudeCodePath(): string | undefined {
@@ -92,11 +92,11 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
   const { prompt, session, resumeSessionId, onEvent, onSessionUpdate } = options;
   const abortController = new AbortController();
 
-  // Inject smart memory context for new sessions
+  // Inject smart memory context for new sessions (scoped to assistant)
   let effectivePrompt = prompt;
   if (!resumeSessionId) {
     try {
-      const memoryCtx = buildSmartMemoryContext(prompt);
+      const memoryCtx = buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
       if (memoryCtx) {
         effectivePrompt = memoryCtx + "\n\n" + prompt;
         console.log("[Runner/fallback] Memory context injected, length:", memoryCtx.length);
@@ -137,7 +137,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
           maxTurns: 30,
           // Load user settings to enable skills from ~/.claude/skills/
           settingSources: ["user", "project", "local"],
-          mcpServers: { "vk-shared": createSharedMcpServer() },
+          mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd }) },
           canUseTool: async (toolName, input, { signal, toolUseID }) => {
             // For AskUserQuestion, we need to wait for user response
             if (toolName === "AskUserQuestion") {

@@ -170,7 +170,7 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
   activeControllers.set(trackingId, abortController);
   console.log('[Runner] Tracking session with ID:', trackingId);
 
-  const DEFAULT_CWD = process.cwd();
+  const DEFAULT_CWD = homedir();
 
   // Queue for permission requests that need to be yielded
   const permissionRequestQueue: ServerEvent[] = [];
@@ -185,11 +185,11 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
     enhancedEnv.ANTHROPIC_MODEL = model;
   }
 
-  // Inject smart memory context into prompt (only for new sessions, not resume)
+  // Inject smart memory context into prompt (scoped to assistant)
   let effectivePrompt = prompt;
   if (!resumeSessionId) {
     try {
-      const memoryCtx = buildSmartMemoryContext(prompt);
+      const memoryCtx = buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
       if (memoryCtx) {
         effectivePrompt = memoryCtx + '\n\n' + prompt;
         console.log('[Runner] Memory context injected, length:', memoryCtx.length);
@@ -216,7 +216,7 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
         allowDangerouslySkipPermissions: true,
         maxTurns: 30,
         settingSources: ['user', 'project', 'local'],
-        mcpServers: { 'vk-shared': createSharedMcpServer() },
+        mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd }) },
         canUseTool: async (toolName, input, { signal, toolUseID }) => {
           // For AskUserQuestion, we need to wait for user response
           if (toolName === 'AskUserQuestion') {
@@ -495,13 +495,13 @@ export async function* runCodex(options: RunnerOptions): AsyncGenerator<ServerEv
   activeControllers.set(trackingId, abortController);
   console.log('[CodexRunner] Tracking session with ID:', trackingId);
 
-  const DEFAULT_CWD = process.cwd();
+  const DEFAULT_CWD = homedir();
 
-  // Inject smart memory context into prompt (only for new sessions, not resume)
+  // Inject smart memory context into prompt (scoped to assistant)
   let effectivePrompt = prompt;
   if (!session.claudeSessionId) {
     try {
-      const memoryCtx = buildSmartMemoryContext(prompt);
+      const memoryCtx = buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
       if (memoryCtx) {
         effectivePrompt = memoryCtx + '\n\n' + prompt;
         console.log('[CodexRunner] Memory context injected, length:', memoryCtx.length);
@@ -580,7 +580,7 @@ function handleCodexEvent(
   onSessionUpdate?: (updates: Partial<Session>) => void
 ): ServerEvent[] {
   const results: ServerEvent[] = [];
-  const DEFAULT_CWD = process.cwd();
+  const DEFAULT_CWD = homedir();
 
   const pushMsg = (msg: Record<string, unknown>) => {
     results.push({ type: 'stream.message', payload: { sessionId: session.id, message: msg as any } });
@@ -715,7 +715,7 @@ async function generateTagsViaCodex(prompt: string): Promise<string[]> {
   const codex = new Codex(codexOpts);
   const thread = codex.startThread({
     model: 'gpt-5.3-codex',
-    workingDirectory: process.cwd(),
+    workingDirectory: homedir(),
     sandboxMode: 'danger-full-access',
     approvalPolicy: 'never',
     skipGitRepoCheck: true,

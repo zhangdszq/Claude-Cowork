@@ -44,6 +44,7 @@ import {
   readSessionState, writeSessionState, clearSessionState,
   readAbstract,
   listSops, readSop, writeSop, searchSops, deleteSop,
+  ScopedMemory,
 } from "./libs/memory-store.js";
 import { 
   loadScheduledTasks, 
@@ -259,7 +260,7 @@ app.on("ready", async () => {
         const display = screen.getDisplayNearestPoint(cursor);
         const { width: screenW } = display.workAreaSize;
         const winWidth = 640;
-        const winHeight = 128;
+        const winHeight = 140;
         const x = display.workArea.x + Math.round((screenW - winWidth) / 2);
         const y = display.workArea.y + Math.round(display.workAreaSize.height * 0.28);
 
@@ -315,7 +316,7 @@ app.on("ready", async () => {
         } else {
             // Always reset to collapsed height before showing
             const b = quickWindow!.getBounds();
-            quickWindow!.setBounds({ x: b.x, y: b.y, width: b.width, height: 128 });
+            quickWindow!.setBounds({ x: b.x, y: b.y, width: b.width, height: 140 });
             quickWindow!.show();
             quickWindow!.focus();
             quickWindow!.webContents.send("quick-window-show");
@@ -686,29 +687,43 @@ app.on("ready", async () => {
     });
 
     // Memory system
-    ipcMainHandle("memory-read", (_: any, target: string, date?: string) => {
+    // The optional last argument `assistantId` scopes per-assistant operations.
+    // Shared operations (long-term, daily, abstract) are unaffected by assistantId.
+    ipcMainHandle("memory-read", (_: any, target: string, date?: string, assistantId?: string) => {
+        const scoped = assistantId ? new ScopedMemory(assistantId) : null;
         if (target === "long-term") return { content: readLongTermMemory() };
         if (target === "daily") return { content: readDailyMemory(date ?? new Date().toISOString().slice(0, 10)) };
+        if (target === "assistant-daily") return { content: scoped ? scoped.readDaily(date ?? new Date().toISOString().slice(0, 10)) : "" };
         if (target === "context") return { content: buildMemoryContext() };
-        if (target === "session-state") return { content: readSessionState() };
+        if (target === "session-state") return { content: scoped ? scoped.readSessionState() : readSessionState() };
         if (target === "abstract") return { content: readAbstract() };
         return { content: "", memoryDir: getMemoryDir() };
     });
 
-    ipcMainHandle("memory-write", (_: any, target: string, content: string, date?: string) => {
+    ipcMainHandle("memory-write", (_: any, target: string, content: string, date?: string, assistantId?: string) => {
+        const scoped = assistantId ? new ScopedMemory(assistantId) : null;
         if (target === "long-term") { writeLongTermMemory(content); return { success: true }; }
         if (target === "daily-append") { appendDailyMemory(content, date); return { success: true }; }
         if (target === "daily") { writeDailyMemory(content, date ?? new Date().toISOString().slice(0, 10)); return { success: true }; }
-        if (target === "session-state") { writeSessionState(content); return { success: true }; }
-        if (target === "session-state-clear") { clearSessionState(); return { success: true }; }
+        if (target === "assistant-daily-append") { scoped?.appendDaily(content, date); return { success: true }; }
+        if (target === "session-state") {
+            if (scoped) scoped.writeSessionState(content); else writeSessionState(content);
+            return { success: true };
+        }
+        if (target === "session-state-clear") {
+            if (scoped) scoped.clearSessionState(); else clearSessionState();
+            return { success: true };
+        }
         return { success: false, error: "Unknown target" };
     });
 
-    ipcMainHandle("memory-list", () => {
+    ipcMainHandle("memory-list", (_: any, assistantId?: string) => {
+        const scoped = assistantId ? new ScopedMemory(assistantId) : null;
         return {
             memoryDir: getMemoryDir(),
-            summary: getMemorySummary(),
+            summary: scoped ? scoped.getMemorySummary() : getMemorySummary(),
             dailies: listDailyMemories(),
+            assistantDailies: scoped ? scoped.listDailies() : [],
         };
     });
 

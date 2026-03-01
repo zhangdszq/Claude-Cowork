@@ -21,6 +21,7 @@ import {
   writeWorkingMemory,
   readWorkingMemory,
   appendDailyMemory,
+  ScopedMemory,
 } from "./memory-store.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -471,53 +472,65 @@ const searchSopsTool = tool(
   },
 );
 
-// ── Working Memory Tools ────────────────────────────────────────────────────
+// ── Working Memory Tools (factory — uses assistantId via closure) ────────────
 
-const saveWorkingMemoryTool = tool(
-  "save_working_memory",
-  "保存工作记忆检查点。在执行长任务时，定期保存关键上下文（当前任务、关键信息、操作历史），" +
-    "确保跨会话的连续性。下次新会话会自动加载这些信息。\n\n" +
-    "适合保存的内容：当前任务目标和进展、关键中间结果、重要决策、相关 SOP 名称。\n" +
-    "不适合保存的内容：临时变量、完整代码、推理过程。",
-  {
-    key_info: z.string().describe("关键上下文信息：当前进展、重要决策、环境事实等"),
-    current_task: z.string().optional().describe("当前正在执行的任务描述"),
-    related_sops: z.array(z.string()).optional().describe("相关的 SOP 名称列表"),
-    history: z.array(z.string()).optional().describe("最近的操作历史摘要（每条一句话）"),
-  },
-  async (input) => {
-    try {
-      const keyInfo = String(input.key_info ?? "").trim();
-      if (!keyInfo) return ok("key_info 不能为空");
+function createSaveWorkingMemoryTool(assistantId?: string) {
+  return tool(
+    "save_working_memory",
+    "保存工作记忆检查点。在执行长任务时，定期保存关键上下文（当前任务、关键信息、操作历史），" +
+      "确保跨会话的连续性。下次新会话会自动加载这些信息。\n\n" +
+      "适合保存的内容：当前任务目标和进展、关键中间结果、重要决策、相关 SOP 名称。\n" +
+      "不适合保存的内容：临时变量、完整代码、推理过程。",
+    {
+      key_info: z.string().describe("关键上下文信息：当前进展、重要决策、环境事实等"),
+      current_task: z.string().optional().describe("当前正在执行的任务描述"),
+      related_sops: z.array(z.string()).optional().describe("相关的 SOP 名称列表"),
+      history: z.array(z.string()).optional().describe("最近的操作历史摘要（每条一句话）"),
+    },
+    async (input) => {
+      try {
+        const keyInfo = String(input.key_info ?? "").trim();
+        if (!keyInfo) return ok("key_info 不能为空");
 
-      writeWorkingMemory({
-        keyInfo,
-        currentTask: input.current_task ? String(input.current_task) : undefined,
-        relatedSops: input.related_sops as string[] | undefined,
-        history: input.history as string[] | undefined,
-      });
+        const checkpoint = {
+          keyInfo,
+          currentTask: input.current_task ? String(input.current_task) : undefined,
+          relatedSops: input.related_sops as string[] | undefined,
+          history: input.history as string[] | undefined,
+        };
 
-      return ok(`工作记忆已保存。内容将在下次会话中自动加载。\n- 关键信息：${keyInfo.slice(0, 100)}...`);
-    } catch (err) {
-      return ok(`保存工作记忆失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  },
-);
+        if (assistantId) {
+          new ScopedMemory(assistantId).writeWorkingMemory(checkpoint);
+        } else {
+          writeWorkingMemory(checkpoint);
+        }
 
-const readWorkingMemoryTool = tool(
-  "read_working_memory",
-  "读取当前的工作记忆检查点，查看上次保存的任务上下文和进展。",
-  {},
-  async () => {
-    try {
-      const content = readWorkingMemory();
-      if (!content?.trim()) return ok("暂无保存的工作记忆。");
-      return ok(content);
-    } catch (err) {
-      return ok(`读取工作记忆失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  },
-);
+        return ok(`工作记忆已保存。内容将在下次会话中自动加载。\n- 关键信息：${keyInfo.slice(0, 100)}...`);
+      } catch (err) {
+        return ok(`保存工作记忆失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
+
+function createReadWorkingMemoryTool(assistantId?: string) {
+  return tool(
+    "read_working_memory",
+    "读取当前的工作记忆检查点，查看上次保存的任务上下文和进展。",
+    {},
+    async () => {
+      try {
+        const content = assistantId
+          ? new ScopedMemory(assistantId).readWorkingMemory()
+          : readWorkingMemory();
+        if (!content?.trim()) return ok("暂无保存的工作记忆。");
+        return ok(content);
+      } catch (err) {
+        return ok(`读取工作记忆失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  );
+}
 
 // ── Memory Distillation ─────────────────────────────────────────────────────
 
@@ -552,7 +565,8 @@ const distillMemoryTool = tool(
 
 // ── Atomic Power Tools (inspired by GenericAgent) ───────────────────────────
 
-const runScriptTool = tool(
+function createRunScriptTool(sessionCwd?: string) {
+  return tool(
   "run_script",
   "执行脚本代码（Python / PowerShell / Node.js），支持超时控制。\n\n" +
     "适合场景：安装依赖、数据处理、系统操作、调用 API、运行复杂脚本。\n" +
@@ -576,7 +590,7 @@ const runScriptTool = tool(
 
     const language = input.language ?? "python";
     const timeout = Math.min(Number(input.timeout ?? 60), 300) * 1000;
-    const cwd = input.cwd ? String(input.cwd) : process.cwd();
+    const cwd = input.cwd ? String(input.cwd) : (sessionCwd || os.homedir());
 
     let cmd: string[];
     let tmpFile: string | null = null;
@@ -639,6 +653,7 @@ const runScriptTool = tool(
     }
   },
 );
+}
 
 const desktopControlTool = tool(
   "desktop_control",
@@ -1084,8 +1099,6 @@ const systemInfoTool = tool(
           `CPU: ${cpus[0]?.model ?? "unknown"} (${cpus.length} cores)`,
           `内存: ${(freeMem / 1024 / 1024 / 1024).toFixed(1)}GB 可用 / ${(totalMem / 1024 / 1024 / 1024).toFixed(1)}GB 总计`,
           `运行时间: ${(os.uptime() / 3600).toFixed(1)} 小时`,
-          `用户目录: ${os.homedir()}`,
-          `临时目录: ${os.tmpdir()}`,
         ];
         return ok(info.join("\n"));
       }
@@ -1147,9 +1160,13 @@ const systemInfoTool = tool(
 
 /**
  * Create a shared MCP server instance for a Claude agent session.
- * Each call returns a fresh McpSdkServerConfigWithInstance.
+ * When assistantId is provided, working memory tools are scoped to
+ * that assistant's private directory. SOP tools remain shared.
+ * When sessionCwd is provided, run_script defaults to that directory.
  */
-export function createSharedMcpServer() {
+export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?: string }) {
+  const assistantId = opts?.assistantId;
+  const sessionCwd = opts?.sessionCwd;
   return createSdkMcpServer({
     name: "vk-shared",
     version: "2.0.0",
@@ -1165,18 +1182,18 @@ export function createSharedMcpServer() {
       takeScreenshotTool,
       screenAnalyzeTool,
       desktopControlTool,
-      // SOP (self-evolution)
+      // SOP (self-evolution — shared across all assistants)
       saveSopTool,
       listSopsTool,
       readSopTool,
       searchSopsTool,
-      // Working Memory
-      saveWorkingMemoryTool,
-      readWorkingMemoryTool,
+      // Working Memory (scoped to assistant if ID provided)
+      createSaveWorkingMemoryTool(assistantId),
+      createReadWorkingMemoryTool(assistantId),
       // Memory Distillation
       distillMemoryTool,
       // Atomic Power Tools
-      runScriptTool,
+      createRunScriptTool(sessionCwd),
       processControlTool,
       clipboardTool,
       systemInfoTool,

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientEvent } from "../types";
 
-const COLLAPSED_HEIGHT = 128;
-const EXPANDED_HEIGHT = 380;
+const COLLAPSED_HEIGHT = 140;
+const EXPANDED_HEIGHT = 392;
 
 export function QuickWindow() {
   const [prompt, setPrompt] = useState("");
@@ -233,164 +233,163 @@ export function QuickWindow() {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-surface-cream select-none overflow-hidden rounded-xl">
-      {/* Input area — always at the top */}
-      <div className="flex flex-col shrink-0">
-        {/* Top: brand + input */}
-        <div className="flex items-center gap-3 px-5 pt-4 pb-2">
-          <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
-            style={{ background: "#2C5F2F" }}
-          >
-            <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    <div className="h-screen w-screen p-[6px] box-border" style={{ background: "transparent" }}>
+      <div
+        className="flex flex-col select-none overflow-hidden rounded-xl h-full"
+        style={{
+          background: "#FAFAF8",
+          border: "1px solid rgba(0,0,0,0.08)",
+          boxShadow: "0 4px 24px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.08)",
+          // @ts-ignore
+          WebkitAppRegion: "drag",
+        }}
+      >
+      {/* Input row */}
+      <div className="flex items-center gap-3 px-4 pt-3.5 pb-2.5" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+        <div
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px]"
+          style={{ background: "linear-gradient(135deg, #2C5F2F 0%, #3a7d3e 100%)" }}
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+          </svg>
+        </div>
+
+        <textarea
+          ref={inputRef}
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="你想让我做什么..."
+          rows={1}
+          disabled={sending}
+          className="flex-1 resize-none bg-transparent text-[14px] text-ink-800 placeholder:text-ink-900/25 focus:outline-none disabled:opacity-50 leading-relaxed"
+          style={{ maxHeight: 64, minHeight: 22 }}
+          onInput={(e) => {
+            const el = e.currentTarget;
+            el.style.height = "auto";
+            el.style.height = Math.min(el.scrollHeight, 64) + "px";
+          }}
+        />
+
+        <button
+          onClick={handleSend}
+          disabled={!prompt.trim() || sending}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-white transition-all disabled:opacity-20"
+          style={{ background: !prompt.trim() || sending ? "#a0a0a0" : "linear-gradient(135deg, #2C5F2F 0%, #3a7d3e 100%)" }}
+        >
+          {sending ? (
+            <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" strokeWidth="2" />
+              <path d="M12 2a10 10 0 0 1 10 10" stroke="white" strokeWidth="2" strokeLinecap="round" />
             </svg>
-          </div>
+          ) : (
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          )}
+        </button>
+      </div>
 
-          <span className="text-[13px] font-semibold text-ink-800 shrink-0">AI Team</span>
-
-          <textarea
-            ref={inputRef}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="你想让我做什么..."
-            rows={1}
-            disabled={sending}
-            className="flex-1 resize-none bg-transparent text-[14px] text-ink-800 placeholder:text-muted-light focus:outline-none disabled:opacity-50 leading-relaxed"
-            style={{ maxHeight: 64, minHeight: 22 }}
-            onInput={(e) => {
-              const el = e.currentTarget;
-              el.style.height = "auto";
-              el.style.height = Math.min(el.scrollHeight, 64) + "px";
-            }}
-          />
-
-          <div className="flex items-center shrink-0">
-            <span className="text-[11px] text-muted-light whitespace-nowrap">
-              {sending ? "发送中..." : "⏎ 发送 · / 技能"}
-            </span>
-          </div>
-        </div>
-
-        {/* Divider */}
-        <div className="mx-5 h-px bg-ink-900/8" />
-
-        {/* Bottom toolbar */}
-        <div className="flex items-center justify-between px-5 py-2.5">
-          <div className="flex items-center gap-1.5" ref={pickerRef}>
-            {/* Assistant button */}
-            <button
-              onClick={() => { setShowAssistantPicker((v) => !v); if (showSkillPicker) closeSkillPicker(); }}
-              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-[5px] text-[12px] font-medium transition-colors ${
-                showAssistantPicker
-                  ? "bg-surface-tertiary text-ink-800"
-                  : "text-muted hover:bg-surface-secondary hover:text-ink-700"
-              }`}
-            >
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                <circle cx="12" cy="7" r="4" />
-              </svg>
-              <span className="max-w-[80px] truncate">{selectedAssistant?.name || "默认助理"}</span>
-              <svg viewBox="0 0 24 24" className="h-2.5 w-2.5 opacity-50" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
-
-            {/* Inline assistant picker */}
-            {showAssistantPicker && assistants.length > 0 && (
-              <div className="flex items-center gap-1">
-                {assistants.map((a) => {
-                  const isActive = a.id === selectedAssistantId;
-                  return (
-                    <button
-                      key={a.id}
-                      onClick={() => {
-                        setSelectedAssistantId(a.id);
-                        setShowAssistantPicker(false);
-                        inputRef.current?.focus();
-                      }}
-                      className={`rounded-lg px-2.5 py-[5px] text-[11px] font-medium transition-colors ${
-                        isActive
-                          ? "bg-accent/10 text-accent border border-accent/20"
-                          : "text-muted hover:bg-surface-secondary hover:text-ink-700 border border-transparent"
-                      }`}
-                    >
-                      {a.name}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Skill button */}
-            {!showAssistantPicker && (
-              activeSkill ? (
-                <div className="flex items-center gap-1 rounded-lg bg-accent/10 pl-2 pr-1 py-[4px] text-[11px] font-medium text-accent max-w-[130px]">
-                  <svg viewBox="0 0 24 24" className="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M9 18h6M10 22h4M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 01-1 1H9a1 1 0 01-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z"/>
-                  </svg>
-                  <span className="truncate">{activeSkill.name}</span>
-                  <button
-                    onClick={handleClearSkill}
-                    className="flex-shrink-0 flex h-4 w-4 items-center justify-center rounded-full hover:bg-accent/20 text-accent/60 hover:text-accent transition-colors"
-                  >
-                    <svg viewBox="0 0 24 24" className="h-2.5 w-2.5"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/></svg>
-                  </button>
-                </div>
-              ) : availableSkills.length > 0 ? (
-                <button
-                  ref={skillBtnRef}
-                  onClick={() => { showSkillPicker ? closeSkillPicker() : openSkillPicker(); }}
-                  className={`flex items-center gap-1 rounded-lg px-2.5 py-[5px] text-[11px] font-medium transition-colors ${
-                    showSkillPicker
-                      ? "bg-accent/10 text-accent"
-                      : "text-muted hover:bg-surface-secondary hover:text-ink-700"
-                  }`}
-                >
-                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path d="M9 18h6M10 22h4M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 01-1 1H9a1 1 0 01-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z"/>
-                  </svg>
-                  技能
-                </button>
-              ) : null
-            )}
-
-            {/* Provider badge */}
-            {!showAssistantPicker && (
-              <div className="flex items-center gap-1.5 rounded-lg px-2.5 py-[5px] bg-surface-secondary text-[11px] font-medium text-muted">
-                <div className="h-1.5 w-1.5 rounded-full bg-success" />
-                {selectedAssistant?.provider === "codex" ? "Codex" : "Claude"}
-              </div>
-            )}
-          </div>
-
-          {/* Send button */}
+      {/* Toolbar */}
+      <div className="flex items-center gap-1 px-4 pb-3 pt-0.5" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+        <div className="flex items-center gap-1" ref={pickerRef}>
+          {/* Assistant chip */}
           <button
-            onClick={handleSend}
-            disabled={!prompt.trim() || sending}
-            className="flex h-8 w-8 items-center justify-center rounded-xl text-white transition-all disabled:opacity-25"
-            style={{ background: "#2C5F2F" }}
+            onClick={() => { setShowAssistantPicker((v) => !v); if (showSkillPicker) closeSkillPicker(); }}
+            className={`flex items-center gap-1.5 rounded-full px-2.5 py-[3px] text-[11px] font-medium transition-all ${
+              showAssistantPicker
+                ? "bg-ink-900/8 text-ink-800"
+                : "bg-ink-900/[0.04] text-ink-500 hover:bg-ink-900/8 hover:text-ink-700"
+            }`}
           >
-            {sending ? (
-              <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" strokeWidth="2" />
-                <path d="M12 2a10 10 0 0 1 10 10" stroke="white" strokeWidth="2" strokeLinecap="round" />
-              </svg>
-            ) : (
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="5" y1="12" x2="19" y2="12" />
-                <polyline points="12 5 19 12 12 19" />
-              </svg>
-            )}
+            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+              <circle cx="12" cy="7" r="4" />
+            </svg>
+            <span className="max-w-[72px] truncate">{selectedAssistant?.name || "默认"}</span>
+            <svg viewBox="0 0 24 24" className="h-2.5 w-2.5 opacity-40" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
           </button>
+
+          {/* Inline assistant picker */}
+          {showAssistantPicker && assistants.length > 0 && (
+            <div className="flex items-center gap-1">
+              {assistants.map((a) => {
+                const isActive = a.id === selectedAssistantId;
+                return (
+                  <button
+                    key={a.id}
+                    onClick={() => {
+                      setSelectedAssistantId(a.id);
+                      setShowAssistantPicker(false);
+                      inputRef.current?.focus();
+                    }}
+                    className={`rounded-full px-2.5 py-[3px] text-[11px] font-medium transition-all ${
+                      isActive
+                        ? "bg-accent/12 text-accent"
+                        : "bg-ink-900/[0.04] text-ink-500 hover:bg-ink-900/8 hover:text-ink-700"
+                    }`}
+                  >
+                    {a.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Skill chip */}
+          {!showAssistantPicker && (
+            activeSkill ? (
+              <div className="flex items-center gap-1 rounded-full bg-accent/10 pl-2 pr-1 py-[3px] text-[10px] font-medium text-accent max-w-[120px]">
+                <svg viewBox="0 0 24 24" className="h-2.5 w-2.5 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M9 18h6M10 22h4M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 01-1 1H9a1 1 0 01-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z"/>
+                </svg>
+                <span className="truncate">{activeSkill.name}</span>
+                <button
+                  onClick={handleClearSkill}
+                  className="flex-shrink-0 flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-accent/20 text-accent/50 hover:text-accent transition-colors"
+                >
+                  <svg viewBox="0 0 24 24" className="h-2 w-2"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/></svg>
+                </button>
+              </div>
+            ) : availableSkills.length > 0 ? (
+              <button
+                ref={skillBtnRef}
+                onClick={() => { showSkillPicker ? closeSkillPicker() : openSkillPicker(); }}
+                className={`flex items-center gap-1 rounded-full px-2.5 py-[3px] text-[11px] font-medium transition-all ${
+                  showSkillPicker
+                    ? "bg-accent/10 text-accent"
+                    : "bg-ink-900/[0.04] text-ink-500 hover:bg-ink-900/8 hover:text-ink-700"
+                }`}
+              >
+                <svg viewBox="0 0 24 24" className="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M9 18h6M10 22h4M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 01-1 1H9a1 1 0 01-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z"/>
+                </svg>
+                技能
+              </button>
+            ) : null
+          )}
+
+          {/* Provider dot */}
+          {!showAssistantPicker && (
+            <div className="flex items-center gap-1 rounded-full px-2 py-[3px] text-[10px] font-medium text-ink-400">
+              <div className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              {selectedAssistant?.provider === "codex" ? "Codex" : "Claude"}
+            </div>
+          )}
         </div>
+
+        <div className="flex-1" />
+        <span className="text-[10px] text-ink-900/20 select-none">
+          {sending ? "发送中..." : "⏎ 发送"}
+        </span>
       </div>
 
       {/* Skill picker — expands downward below the toolbar */}
       {showSkillPicker && (
-        <div ref={skillPickerRef} className="flex-1 flex flex-col min-h-0 border-t border-ink-900/5">
+        <div ref={skillPickerRef} className="flex-1 flex flex-col min-h-0 border-t border-ink-900/5" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
           {/* Search */}
           <div className="px-4 pt-2.5 pb-2">
             <div className="flex items-center gap-2 rounded-lg bg-white border border-ink-900/8 px-2.5 py-1.5">
@@ -460,6 +459,7 @@ export function QuickWindow() {
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }

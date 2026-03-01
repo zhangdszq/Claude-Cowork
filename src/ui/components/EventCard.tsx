@@ -257,6 +257,31 @@ const ToolResult = ({ messageContent }: { messageContent: ToolResultContent }) =
   );
 };
 
+const ThinkingBlock = ({ text }: { text: string }) => {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="my-1">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1.5 text-xs text-ink-400 hover:text-ink-600 transition-colors py-0.5"
+      >
+        <svg
+          className={`h-2.5 w-2.5 shrink-0 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
+          fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"
+        >
+          <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        思考过程
+      </button>
+      {expanded && (
+        <div className="ml-4 mt-1 pl-3 border-l-2 border-ink-900/8 text-sm text-ink-500">
+          <MDContent text={text} />
+        </div>
+      )}
+    </div>
+  );
+};
+
 const AssistantBlockCard = ({
   title,
   text,
@@ -604,7 +629,7 @@ export const MessageCard = memo(function MessageCard({
         {contents.map((content: MessageContent, idx: number) => {
           const isLastContent = idx === contents.length - 1;
           if (content.type === "thinking") {
-            return <AssistantBlockCard key={idx} title="Thinking" text={content.thinking} showIndicator={isLastContent && showIndicator} />;
+            return <ThinkingBlock key={idx} text={content.thinking} />;
           }
           if (content.type === "text") {
             return <AssistantBlockCard key={idx} title={assistantName || "Assistant"} text={content.text} showIndicator={isLastContent && showIndicator} copyable />;

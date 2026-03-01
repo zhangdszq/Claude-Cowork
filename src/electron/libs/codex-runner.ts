@@ -29,7 +29,7 @@ export type RunnerHandle = {
   abort: () => void;
 };
 
-const DEFAULT_CWD = process.cwd();
+const DEFAULT_CWD = homedir();
 
 // ─── Codex binary resolution ─────────────────────────────────
 
@@ -274,11 +274,11 @@ export async function runCodex(
   const { prompt, session, model, onEvent, onSessionUpdate } = options;
   const abortController = new AbortController();
 
-  // Inject smart memory context for new sessions
+  // Inject smart memory context for new sessions (scoped to assistant)
   let effectivePrompt = prompt;
   if (!session.claudeSessionId) {
     try {
-      const memoryCtx = buildSmartMemoryContext(prompt);
+      const memoryCtx = buildSmartMemoryContext(prompt, session.assistantId, session.cwd);
       if (memoryCtx) {
         effectivePrompt = memoryCtx + "\n\n" + prompt;
         console.log("[CodexRunner/fallback] Memory context injected, length:", memoryCtx.length);

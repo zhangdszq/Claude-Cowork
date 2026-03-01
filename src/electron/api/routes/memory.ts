@@ -1,6 +1,11 @@
 /**
  * Memory API routes
- * Provides CRUD endpoints for the dual-layer memory system.
+ * Provides CRUD endpoints for the three-layer memory system:
+ *   - Shared user layer (MEMORY.md)
+ *   - Shared knowledge layer (sops/ + daily/)
+ *   - Per-assistant layer (assistants/{id}/)
+ *
+ * Pass ?assistantId=xxx to scope per-assistant operations.
  */
 import { Hono } from 'hono';
 import {
@@ -13,22 +18,29 @@ import {
   buildMemoryContext,
   getMemoryDir,
   getMemorySummary,
+  ScopedMemory,
 } from '../../libs/memory-store.js';
 
 export const memoryRoutes = new Hono();
+
+function getScopedMemory(c: { req: { query: (k: string) => string | undefined } }): ScopedMemory | null {
+  const assistantId = c.req.query('assistantId');
+  return assistantId ? new ScopedMemory(assistantId) : null;
+}
 
 // GET /memory — full assembled memory context
 memoryRoutes.get('/', (c) => {
   try {
     const context = buildMemoryContext();
-    const summary = getMemorySummary();
+    const scoped = getScopedMemory(c);
+    const summary = scoped ? scoped.getMemorySummary() : getMemorySummary();
     return c.json({ context, summary, memoryDir: getMemoryDir() });
   } catch (error) {
     return c.json({ error: 'Failed to read memory', message: String(error) }, 500);
   }
 });
 
-// GET /memory/long-term — raw MEMORY.md content
+// GET /memory/long-term — raw MEMORY.md content (shared)
 memoryRoutes.get('/long-term', (c) => {
   try {
     const content = readLongTermMemory();
@@ -38,7 +50,7 @@ memoryRoutes.get('/long-term', (c) => {
   }
 });
 
-// PUT /memory/long-term — overwrite MEMORY.md
+// PUT /memory/long-term — overwrite MEMORY.md (shared)
 memoryRoutes.put('/long-term', async (c) => {
   try {
     const { content } = await c.req.json<{ content: string }>();
@@ -49,7 +61,7 @@ memoryRoutes.put('/long-term', async (c) => {
   }
 });
 
-// GET /memory/daily/:date? — get daily memory (defaults to today)
+// GET /memory/daily/:date? — get shared daily memory (defaults to today)
 memoryRoutes.get('/daily/:date?', (c) => {
   try {
     const date = c.req.param('date') ?? new Date().toISOString().slice(0, 10);
@@ -60,7 +72,7 @@ memoryRoutes.get('/daily/:date?', (c) => {
   }
 });
 
-// POST /memory/daily — append to today's daily memory
+// POST /memory/daily — append to today's shared daily memory
 memoryRoutes.post('/daily', async (c) => {
   try {
     const { content, date } = await c.req.json<{ content: string; date?: string }>();
@@ -71,7 +83,7 @@ memoryRoutes.post('/daily', async (c) => {
   }
 });
 
-// PUT /memory/daily/:date — overwrite a specific daily memory
+// PUT /memory/daily/:date — overwrite a specific shared daily memory
 memoryRoutes.put('/daily/:date', async (c) => {
   try {
     const date = c.req.param('date');
@@ -86,6 +98,7 @@ memoryRoutes.put('/daily/:date', async (c) => {
 // GET /memory/list — list all memory files
 memoryRoutes.get('/list', (c) => {
   try {
+    const scoped = getScopedMemory(c);
     const dailies = listDailyMemories();
     const longTerm = readLongTermMemory();
     return c.json({
@@ -93,6 +106,7 @@ memoryRoutes.get('/list', (c) => {
       longTermExists: longTerm.length > 0,
       longTermSize: longTerm.length,
       dailies,
+      assistantDailies: scoped ? scoped.listDailies() : [],
     });
   } catch (error) {
     return c.json({ error: 'Failed to list memories', message: String(error) }, 500);
