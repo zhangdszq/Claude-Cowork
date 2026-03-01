@@ -5,6 +5,7 @@ interface BotConfigModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   assistantName: string;
+  skillNames?: string[];
   provider?: "claude" | "codex";
   model?: string;
   defaultCwd?: string;
@@ -260,6 +261,7 @@ export function BotConfigModal({
   open,
   onOpenChange,
   assistantName,
+  skillNames,
   assistantId,
   provider,
   model,
@@ -427,6 +429,7 @@ export function BotConfigModal({
             proxy: tg.proxy || undefined,
             assistantId,
             assistantName,
+            skillNames,
             provider,
             model,
             defaultCwd,

@@ -149,6 +149,7 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
                     proxy: telegram.proxy,
                     assistantId: assistant.id,
                     assistantName: assistant.name,
+                    skillNames: assistant.skillNames,
                     persona: assistant.persona,
                     coreValues: assistant.coreValues,
                     relationship: assistant.relationship,
@@ -620,6 +621,7 @@ app.on("ready", async () => {
                 operatingGuidelines: assistant.operatingGuidelines,
                 assistantName: assistant.name,
                 defaultCwd: assistant.defaultCwd,
+                skillNames: assistant.skillNames,
             };
             updateDingtalkBotConfig(assistant.id, updates);
             updateTelegramBotConfig(assistant.id, updates);

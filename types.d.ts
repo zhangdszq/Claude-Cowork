@@ -381,6 +381,7 @@ type StartTelegramBotInput = {
     proxy?: string;
     assistantId: string;
     assistantName: string;
+    skillNames?: string[];
     persona?: string;
     provider?: "claude" | "codex";
     model?: string;

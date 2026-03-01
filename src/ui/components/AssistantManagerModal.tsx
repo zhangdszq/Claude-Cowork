@@ -915,6 +915,7 @@ export function AssistantManagerModal({
         onOpenChange={(v) => { if (!v) setBotTargetAssistant(null); }}
         assistantId={botTargetAssistant.id}
         assistantName={botTargetAssistant.name}
+        skillNames={botTargetAssistant.skillNames}
         provider={botTargetAssistant.provider}
         model={botTargetAssistant.model}
         defaultCwd={botTargetAssistant.defaultCwd}

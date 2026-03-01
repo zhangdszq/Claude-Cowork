@@ -20,6 +20,8 @@ import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod";
 import { EventEmitter } from "events";
 import { homedir } from "os";
+import { join } from "path";
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
@@ -53,11 +55,99 @@ export interface TelegramBotOptions {
   requireMention?: boolean;
   /** Owner Telegram user IDs for proactive messaging */
   ownerUserIds?: string[];
+  /** Skill names configured for the assistant */
+  skillNames?: string[];
 }
 
 interface ConvMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+// ─── Skill info loader ───────────────────────────────────────────────────────
+
+interface SkillInfo {
+  name: string;
+  label: string;
+  description: string;
+}
+
+interface SkillCatalogEntry {
+  name: string;
+  label?: string;
+  description?: string;
+}
+
+let _catalogCache: SkillCatalogEntry[] | null = null;
+let _catalogMtime = 0;
+
+function loadSkillCatalog(): SkillCatalogEntry[] {
+  const catalogPath = join(__dirname, "..", "..", "..", "skills-catalog.json");
+  try {
+    const st = statSync(catalogPath);
+    if (_catalogCache && st.mtimeMs === _catalogMtime) return _catalogCache;
+    const raw = JSON.parse(readFileSync(catalogPath, "utf8"));
+    _catalogCache = (raw?.skills ?? []) as SkillCatalogEntry[];
+    _catalogMtime = st.mtimeMs;
+    return _catalogCache;
+  } catch {
+    return _catalogCache ?? [];
+  }
+}
+
+function loadInstalledSkills(): Map<string, SkillInfo> {
+  const result = new Map<string, SkillInfo>();
+  const catalog = loadSkillCatalog();
+  const catalogMap = new Map(catalog.map((s) => [s.name, s]));
+
+  const skillsDirs = [
+    join(homedir(), ".claude", "skills"),
+    join(homedir(), ".cursor", "skills"),
+    join(homedir(), ".codex", "skills"),
+  ];
+
+  for (const dir of skillsDirs) {
+    if (!existsSync(dir)) continue;
+    try {
+      for (const name of readdirSync(dir)) {
+        if (name.startsWith(".") || result.has(name)) continue;
+        const skillDir = join(dir, name);
+        if (!statSync(skillDir).isDirectory()) continue;
+        if (!existsSync(join(skillDir, "SKILL.md"))) continue;
+
+        const catalogEntry = catalogMap.get(name);
+        const label = catalogEntry?.label ?? name;
+        let desc = catalogEntry?.description ?? "";
+
+        if (!desc) {
+          try {
+            const content = readFileSync(join(skillDir, "SKILL.md"), "utf8");
+            const firstLine = content.split("\n").find((l) => l.trim() && !l.trim().startsWith("#"));
+            desc = firstLine?.trim().slice(0, 200) ?? "";
+          } catch { /* ignore */ }
+        }
+
+        result.set(name, { name, label, description: desc });
+      }
+    } catch { /* ignore */ }
+  }
+
+  return result;
+}
+
+function loadSkillContent(skillName: string): string | null {
+  const dirs = [
+    join(homedir(), ".claude", "skills"),
+    join(homedir(), ".cursor", "skills"),
+    join(homedir(), ".codex", "skills"),
+  ];
+  for (const dir of dirs) {
+    const filePath = join(dir, skillName, "SKILL.md");
+    if (existsSync(filePath)) {
+      try { return readFileSync(filePath, "utf8"); } catch { /* ignore */ }
+    }
+  }
+  return null;
 }
 
 // ─── Structured persona builder ──────────────────────────────────────────────
@@ -76,6 +166,12 @@ function buildStructuredPersona(
   if (opts.cognitiveStyle?.trim()) sections.push(`## 你的思维方式\n${opts.cognitiveStyle.trim()}`);
   if (opts.operatingGuidelines?.trim()) sections.push(`## 操作规程\n${opts.operatingGuidelines.trim()}`);
   if (opts.userContext?.trim()) sections.push(`## 关于用户\n${opts.userContext.trim()}`);
+
+  const normalized = (opts.skillNames ?? []).map((s) => s.trim()).filter(Boolean);
+  if (normalized.length > 0) {
+    sections.push(`## 可用技能\n用户可通过 /<技能名> 调用以下技能：\n${normalized.map((s) => `/${s}`).join("\n")}`);
+  }
+
   for (const extra of extras) {
     if (extra?.trim()) sections.push(extra.trim());
   }
@@ -261,11 +357,15 @@ export function getTelegramBotStatus(assistantId: string): TelegramBotStatus {
 
 export function updateTelegramBotConfig(
   assistantId: string,
-  updates: Partial<Pick<TelegramBotOptions, "provider" | "model" | "persona" | "coreValues" | "relationship" | "cognitiveStyle" | "operatingGuidelines" | "userContext" | "assistantName" | "defaultCwd">>,
+  updates: Partial<Pick<TelegramBotOptions, "provider" | "model" | "persona" | "coreValues" | "relationship" | "cognitiveStyle" | "operatingGuidelines" | "userContext" | "assistantName" | "defaultCwd" | "skillNames">>,
 ): void {
   const conn = pool.get(assistantId);
   if (!conn) return;
+  const prevSkills = conn.opts.skillNames;
   Object.assign(conn.opts, updates);
+  if (updates.skillNames && JSON.stringify(updates.skillNames) !== JSON.stringify(prevSkills)) {
+    conn.refreshCommands().catch((err) => console.warn("[Telegram] Failed to refresh commands:", err));
+  }
   console.log(`[Telegram] Config updated for assistant=${assistantId}:`, Object.keys(updates));
 }
 
@@ -458,6 +558,7 @@ class TelegramConnection {
       this.botUsername = me.username ?? "";
       console.log(`[Telegram] Authenticated as @${this.botUsername}`);
 
+      await this.registerCommands();
       this.setupHandlers();
 
       this.bot.start({
@@ -485,6 +586,40 @@ class TelegramConnection {
       this.bot = null;
     }
     this.status = "disconnected";
+  }
+
+  async refreshCommands(): Promise<void> {
+    return this.registerCommands();
+  }
+
+  private async registerCommands(): Promise<void> {
+    if (!this.bot) return;
+    try {
+      const builtinCmds = [
+        { command: "start", description: "开始对话 / 查看欢迎信息" },
+        { command: "myid", description: "查看你的 Telegram ID" },
+        { command: "new", description: "重置当前对话" },
+        { command: "skills", description: "查看可用技能列表" },
+      ];
+
+      const skillCmds: { command: string; description: string }[] = [];
+      const skillNames = this.opts.skillNames ?? [];
+      if (skillNames.length > 0) {
+        const installed = loadInstalledSkills();
+        for (const name of skillNames) {
+          const info = installed.get(name);
+          const cmd = name.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 32);
+          const desc = (info?.label ?? name).slice(0, 256);
+          skillCmds.push({ command: cmd, description: desc });
+        }
+      }
+
+      const allCmds = [...builtinCmds, ...skillCmds].slice(0, 100);
+      await this.bot.api.setMyCommands(allCmds);
+      console.log(`[Telegram] Commands registered: ${builtinCmds.length} builtin + ${skillCmds.length} skills`);
+    } catch (err) {
+      console.warn(`[Telegram] Failed to register commands:`, err);
+    }
   }
 
   async sendProactive(text: string, targets?: string[]): Promise<{ ok: boolean; error?: string }> {
@@ -582,20 +717,78 @@ class TelegramConnection {
       const extracted = await this.extractContent(ctx);
       if (!extracted.text) return;
 
-      // Built-in /myid command
+      // Built-in commands
       const cmdText = extracted.text.trim();
-      if (cmdText === "/myid" || cmdText === "/start") {
+      if (cmdText === "/start") {
         const userId = msg.from?.id ?? "未知";
         const username = msg.from?.username ? `@${msg.from.username}` : "无";
-        const reply = cmdText === "/start"
-          ? `你好！我是 ${this.opts.assistantName}，你的 AI 助手。\n\n你的 Telegram ID: <code>${userId}</code>\n用户名: ${username}\n\n直接发消息给我开始聊天吧！`
-          : `你的 Telegram ID: <code>${userId}</code>\n用户名: ${username}\n群组 ID: <code>${chatId}</code>`;
-        await ctx.reply(reply, { parse_mode: "HTML" });
+        const skillNames = this.opts.skillNames ?? [];
+        let skillLines = "";
+        if (skillNames.length > 0) {
+          const installed = loadInstalledSkills();
+          const lines = skillNames.map((name) => {
+            const info = installed.get(name);
+            const cmd = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+            return `/${cmd} — ${info?.label ?? name}`;
+          });
+          skillLines = `\n\n<b>可用技能：</b>\n${lines.join("\n")}`;
+        }
+        await ctx.reply(
+          `你好！我是 <b>${escapeHtml(this.opts.assistantName)}</b>，你的 AI 助手。\n\n` +
+          `你的 Telegram ID: <code>${userId}</code>\n用户名: ${username}\n\n` +
+          `直接发消息给我开始聊天吧！\n\n` +
+          `<b>可用命令：</b>\n` +
+          `/new — 重置对话\n` +
+          `/myid — 查看你的 ID\n` +
+          `/skills — 查看可用技能` +
+          skillLines,
+          { parse_mode: "HTML" },
+        );
+        return;
+      }
+      if (cmdText === "/myid") {
+        const userId = msg.from?.id ?? "未知";
+        const username = msg.from?.username ? `@${msg.from.username}` : "无";
+        await ctx.reply(
+          `你的 Telegram ID: <code>${userId}</code>\n用户名: ${username}\n群组 ID: <code>${chatId}</code>`,
+          { parse_mode: "HTML" },
+        );
+        return;
+      }
+      if (cmdText === "/new" || cmdText === "/reset") {
+        const historyKey = `${this.opts.assistantId}:${chatId}`;
+        histories.delete(historyKey);
+        botClaudeSessionIds.delete(historyKey);
+        botSessionIds.delete(historyKey);
+        await ctx.reply("对话已重置，开始新的对话吧！");
+        return;
+      }
+      if (cmdText === "/skills") {
+        const skillNames = this.opts.skillNames ?? [];
+        if (skillNames.length === 0) {
+          await ctx.reply("当前助手未配置任何技能。\n可在「助手管理」中添加技能。");
+          return;
+        }
+        const installed = loadInstalledSkills();
+        const lines = skillNames.map((name) => {
+          const info = installed.get(name);
+          const cmd = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+          const desc = info?.description ? ` — ${info.description.slice(0, 80)}` : "";
+          return `/${cmd}  <b>${info?.label ?? name}</b>${desc}`;
+        });
+        await ctx.reply(
+          `<b>可用技能（${skillNames.length}）：</b>\n\n${lines.join("\n\n")}\n\n` +
+          `💡 直接发送 <code>/技能名 你的需求</code> 即可调用`,
+          { parse_mode: "HTML" },
+        );
         return;
       }
 
+      // Skill command detection: /skillname [args]
+      const skillContext = this.resolveSkillCommand(cmdText);
+
       // Append file paths
-      let fullText = extracted.text;
+      let fullText = skillContext?.userText ?? extracted.text;
       if (extracted.filePaths?.length) {
         const pathsNote = extracted.filePaths.map((p: string) => `文件路径: ${p}`).join("\n");
         fullText = `${fullText}\n\n${pathsNote}`;
@@ -607,7 +800,7 @@ class TelegramConnection {
       await ctx.replyWithChatAction("typing").catch(() => {});
 
       // Generate and deliver reply
-      await this.generateAndDeliver(ctx, fullText, chatId);
+      await this.generateAndDeliver(ctx, fullText, chatId, skillContext?.skillContent);
     } finally {
       this.inflight.delete(dedupKey);
     }
@@ -693,12 +886,41 @@ class TelegramConnection {
     return { text: "" };
   }
 
+  // ── Skill command resolution ────────────────────────────────────────────────
+
+  private resolveSkillCommand(text: string): { skillContent: string; userText: string } | null {
+    if (!text.startsWith("/")) return null;
+    const skillNames = this.opts.skillNames ?? [];
+    if (skillNames.length === 0) return null;
+
+    const match = text.match(/^\/(\S+)(?:\s+(.*))?$/s);
+    if (!match) return null;
+    const [, cmd, args] = match;
+
+    const normalizedCmd = cmd.toLowerCase().replace(/@\S+$/, "");
+    const matched = skillNames.find(
+      (name) => name.toLowerCase().replace(/[^a-z0-9_]/g, "_") === normalizedCmd || name.toLowerCase() === normalizedCmd,
+    );
+    if (!matched) return null;
+
+    const content = loadSkillContent(matched);
+    if (!content) {
+      console.warn(`[Telegram] Skill "${matched}" SKILL.md not found`);
+      return null;
+    }
+
+    const userText = args?.trim() || `请执行技能 ${matched}`;
+    console.log(`[Telegram] Skill command: /${normalizedCmd} → ${matched} (${content.length} chars)`);
+    return { skillContent: content, userText };
+  }
+
   // ── Generate reply and deliver ──────────────────────────────────────────────
 
   private async generateAndDeliver(
     ctx: Context,
     userText: string,
     chatId: string,
+    skillContent?: string,
   ): Promise<void> {
     const historyKey = `${this.opts.assistantId}:${chatId}`;
     const history = getHistory(historyKey);
@@ -724,7 +946,11 @@ class TelegramConnection {
     const nowStr = new Date().toLocaleString("zh-CN", { timeZone: tz, hour12: false });
     const currentTimeContext = `## 当前时间\n消息发送时间：${nowStr}（时区：${tz}）`;
 
-    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext);
+    const skillSection = skillContent
+      ? `## 当前激活技能\n请严格按照以下技能说明执行用户请求：\n\n${skillContent}`
+      : undefined;
+
+    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, skillSection);
 
     let replyText: string;
 
