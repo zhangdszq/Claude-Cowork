@@ -15,7 +15,7 @@ interface SchedulerModalProps {
 }
 
 type EditMode = "calendar" | "create" | "edit";
-type ScheduleTypeOption = "once" | "interval" | "daily" | "heartbeat" | "hook";
+type ScheduleTypeOption = "once" | "interval" | "daily" | "hook";
 
 // Weekday labels and JS day indices (Mon-first display order)
 const WEEKDAY_OPTIONS: { label: string; value: number }[] = [
@@ -95,7 +95,7 @@ const getTaskDisplayDate = (task: ScheduledTask): Date | null => {
 
 // Returns true if task should appear on this calendar day
 const isTaskOnDay = (task: ScheduledTask, date: Date): boolean => {
-  // Heartbeat and hook tasks are not time-point tasks — skip calendar display
+  // Hook tasks are not time-point tasks — skip calendar display
   if (task.scheduleType === "heartbeat" || task.scheduleType === "hook") return false;
   if (task.scheduleType === "once" || task.scheduleType === "interval") {
     const d = getTaskDisplayDate(task);
@@ -131,8 +131,6 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
   const [intervalUnit, setIntervalUnit] = useState<"minutes" | "hours" | "days" | "weeks">("hours");
   const [dailyTime, setDailyTime] = useState("09:00");
   const [dailyDays, setDailyDays] = useState<number[]>([]);
-  const [heartbeatInterval, setHeartbeatInterval] = useState(30);
-  const [suppressIfShort, setSuppressIfShort] = useState(true);
   const [hookEvent, setHookEvent] = useState<"startup" | "session.complete">("startup");
   const [hookFilterAssistantId, setHookFilterAssistantId] = useState("");
   const [hookFilterOnlyOnError, setHookFilterOnlyOnError] = useState(false);
@@ -206,7 +204,6 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     setScheduleType("once"); setScheduledTime("");
     setIntervalValue(1); setIntervalUnit("hours");
     setDailyTime("09:00"); setDailyDays([]);
-    setHeartbeatInterval(30); setSuppressIfShort(true);
     setHookEvent("startup"); setHookFilterAssistantId(""); setHookFilterOnlyOnError(false);
     setFormAssistantId(""); setEditingTask(null);
   };
@@ -229,14 +226,12 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
     setName(task.name);
     setPrompt(task.prompt);
     setCwd(task.cwd || "");
-    setScheduleType(task.scheduleType);
+    setScheduleType(task.scheduleType === "heartbeat" ? "interval" : task.scheduleType as ScheduleTypeOption);
     if (task.scheduledTime) setScheduledTime(toLocalDateTimeString(new Date(task.scheduledTime)));
     setIntervalValue(task.intervalValue || 1);
     setIntervalUnit(task.intervalUnit || "hours");
     setDailyTime(task.dailyTime || "09:00");
     setDailyDays(task.dailyDays || []);
-    setHeartbeatInterval(task.heartbeatInterval ?? 30);
-    setSuppressIfShort(task.suppressIfShort ?? true);
     setHookEvent(task.hookEvent ?? "startup");
     setHookFilterAssistantId(task.hookFilter?.assistantId ?? "");
     setHookFilterOnlyOnError(task.hookFilter?.onlyOnError ?? false);
@@ -259,8 +254,8 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
         intervalUnit: scheduleType === "interval" ? intervalUnit : undefined,
         dailyTime: scheduleType === "daily" ? dailyTime : undefined,
         dailyDays: scheduleType === "daily" ? dailyDays : undefined,
-        heartbeatInterval: scheduleType === "heartbeat" ? heartbeatInterval : undefined,
-        suppressIfShort: scheduleType === "heartbeat" ? suppressIfShort : undefined,
+        heartbeatInterval: undefined,
+        suppressIfShort: undefined,
         hookEvent: scheduleType === "hook" ? hookEvent : undefined,
         hookFilter: scheduleType === "hook" ? {
           assistantId: hookFilterAssistantId || undefined,
@@ -661,12 +656,11 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
                   <div className="border-t border-ink-900/10 pt-4">
                     <span className="text-xs font-medium text-muted">执行方式</span>
                     <div className="mt-3 grid grid-cols-3 gap-2">
-                      {(["once", "interval", "daily", "heartbeat", "hook"] as const).map((type) => {
+                      {(["once", "interval", "daily", "hook"] as const).map((type) => {
                         const labels: Record<string, string> = {
                           once: "单次执行",
                           interval: "间隔重复",
                           daily: "指定时间",
-                          heartbeat: "心跳巡检",
                           hook: "事件钩子",
                         };
                         return (
@@ -780,33 +774,6 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
                             </p>
                           )}
                         </div>
-                      </div>
-                    )}
-
-                    {scheduleType === "heartbeat" && (
-                      <div className="mt-4 space-y-3">
-                        <label className="block">
-                          <span className="text-xs font-medium text-muted">巡检间隔（分钟）</span>
-                          <input
-                            type="number"
-                            min="5"
-                            max="1440"
-                            value={heartbeatInterval}
-                            onChange={(e) => setHeartbeatInterval(parseInt(e.target.value) || 30)}
-                            className="mt-1.5 w-full rounded-xl border border-ink-900/10 bg-surface-secondary px-4 py-2.5 text-sm text-ink-800 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
-                          />
-                          <p className="mt-1 text-xs text-muted">每 {heartbeatInterval} 分钟检查一次，无任务时自动隐藏</p>
-                        </label>
-                        <div className="flex items-center gap-3">
-                          <span className="text-xs font-medium text-muted">无动作时隐藏会话</span>
-                          <button
-                            onClick={() => setSuppressIfShort(!suppressIfShort)}
-                            className={`relative w-10 h-6 rounded-full transition-colors ${suppressIfShort ? "bg-accent" : "bg-ink-900/20"}`}
-                          >
-                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${suppressIfShort ? "left-5" : "left-1"}`} />
-                          </button>
-                        </div>
-                        <p className="text-xs text-muted">当 Agent 回复 &lt;no-action&gt; 或回复不足 80 字时，该会话不显示在侧边栏</p>
                       </div>
                     )}
 

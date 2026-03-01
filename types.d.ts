@@ -31,10 +31,15 @@ type OpenAILoginResult = {
 type UserSettings = {
     anthropicBaseUrl?: string;
     anthropicAuthToken?: string;
+    anthropicModel?: string;
     proxyEnabled?: boolean;
     proxyUrl?: string;
     openaiTokens?: OpenAITokens;
     webhookToken?: string;
+    userName?: string;
+    workDescription?: string;
+    globalPrompt?: string;
+    quickWindowShortcut?: string;
 }
 
 type ScheduledTaskHookFilter = {
@@ -133,6 +138,12 @@ type AssistantConfig = {
     skillNames?: string[];
     skillTags?: string[];
     persona?: string;
+    coreValues?: string;
+    relationship?: string;
+    cognitiveStyle?: string;
+    operatingGuidelines?: string;
+    heartbeatInterval?: number;
+    heartbeatRules?: string;
     defaultCwd?: string;
     bots?: Partial<Record<BotPlatformType, BotPlatformConfig>>;
 }
@@ -140,6 +151,7 @@ type AssistantConfig = {
 type AssistantsConfig = {
     assistants: AssistantConfig[];
     defaultAssistantId?: string;
+    userContext?: string;
 }
 
 type ClaudeConfigInfo = {
@@ -400,6 +412,8 @@ type EventPayloadMapping = {
     "delete-scheduled-task": boolean;
     "read-dir": DirEntry[];
     "generate-skill-tags": string[];
+    "get-quick-window-shortcut": string;
+    "save-quick-window-shortcut": boolean;
 }
 
 interface Window {
@@ -415,7 +429,7 @@ interface Window {
         getUserSettings: () => Promise<UserSettings>;
         saveUserSettings: (settings: UserSettings) => Promise<boolean>;
         checkEnvironment: () => Promise<EnvironmentCheckResult>;
-        validateApiConfig: (baseUrl?: string, authToken?: string) => Promise<ValidateApiResult>;
+        validateApiConfig: (baseUrl?: string, authToken?: string, model?: string) => Promise<ValidateApiResult>;
         requestFolderAccess: (folderPath?: string) => Promise<FolderAccessResult>;
         openPrivacySettings: () => Promise<boolean>;
         openPath: (targetPath: string) => Promise<boolean>;
@@ -476,5 +490,14 @@ interface Window {
         onSchedulerRunTask: (callback: (task: SchedulerRunTaskPayload) => void) => UnsubscribeFunction;
         readDir: (dirPath: string) => Promise<DirEntry[]>;
         generateSkillTags: (persona: string, skillNames: string[], assistantName: string) => Promise<string[]>;
+        // Quick window
+        getQuickWindowShortcut: () => Promise<string>;
+        saveQuickWindowShortcut: (shortcut: string) => Promise<boolean>;
+        isQuickWindow: () => boolean;
+        hideQuickWindow: () => void;
+        resizeQuickWindow: (height: number) => void;
+        showMainWindow: () => void;
+        onQuickWindowShow: (callback: () => void) => UnsubscribeFunction;
+        onQuickWindowSession: (callback: (data: { assistantId?: string }) => void) => UnsubscribeFunction;
     }
 }

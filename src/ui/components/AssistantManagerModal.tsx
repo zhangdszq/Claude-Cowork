@@ -17,6 +17,12 @@ type EditingAssistant = {
   skillNames: string[];
   skillTags: string[];
   persona: string;
+  coreValues: string;
+  relationship: string;
+  cognitiveStyle: string;
+  operatingGuidelines: string;
+  heartbeatInterval: number;
+  heartbeatRules: string;
 };
 
 function emptyAssistant(): EditingAssistant {
@@ -28,6 +34,12 @@ function emptyAssistant(): EditingAssistant {
     skillNames: [],
     skillTags: [],
     persona: "",
+    coreValues: "",
+    relationship: "",
+    cognitiveStyle: "",
+    operatingGuidelines: "",
+    heartbeatInterval: 30,
+    heartbeatRules: "",
   };
 }
 
@@ -87,7 +99,6 @@ export function AssistantManagerModal({
 
     const existing = assistants.find((a) => a.id === editing.id);
     const updated: AssistantConfig = {
-      // Preserve fields not managed by this form (bots, defaultCwd, etc.)
       ...existing,
       id: editing.id || `assistant-${Date.now()}`,
       name: editing.name.trim(),
@@ -96,6 +107,12 @@ export function AssistantManagerModal({
       skillNames: editing.skillNames,
       skillTags: editing.skillTags.length > 0 ? editing.skillTags : undefined,
       persona: editing.persona.trim() || undefined,
+      coreValues: editing.coreValues.trim() || undefined,
+      relationship: editing.relationship.trim() || undefined,
+      cognitiveStyle: editing.cognitiveStyle.trim() || undefined,
+      operatingGuidelines: editing.operatingGuidelines.trim() || undefined,
+      heartbeatInterval: editing.heartbeatInterval,
+      heartbeatRules: editing.heartbeatRules.trim() || undefined,
     };
 
     let nextList: AssistantConfig[];
@@ -188,6 +205,12 @@ export function AssistantManagerModal({
       skillNames: assistant.skillNames ?? [],
       skillTags: assistant.skillTags ?? [],
       persona: assistant.persona ?? "",
+      coreValues: assistant.coreValues ?? "",
+      relationship: assistant.relationship ?? "",
+      cognitiveStyle: assistant.cognitiveStyle ?? "",
+      operatingGuidelines: assistant.operatingGuidelines ?? "",
+      heartbeatInterval: assistant.heartbeatInterval ?? 30,
+      heartbeatRules: assistant.heartbeatRules ?? "",
     });
     setIsNew(false);
   };
@@ -263,8 +286,9 @@ export function AssistantManagerModal({
 
               {/* 左右两栏主体 */}
               <div className="flex flex-1 gap-5 min-h-0 overflow-hidden">
-                {/* 左栏：基本信息 */}
-                <div className="flex flex-1 flex-col gap-3 min-w-0 min-h-0">
+                {/* 左栏：基本信息 + 人格 + 心跳 */}
+                <div className="flex flex-1 flex-col min-w-0 min-h-0 overflow-y-auto pr-1">
+                  <div className="flex flex-col gap-3">
                   {/* 名称 */}
                   <div className="flex flex-col gap-1">
                     <span className="text-xs font-medium text-muted">名称</span>
@@ -306,24 +330,109 @@ export function AssistantManagerModal({
                     </div>
                   </div>
 
-                  {/* 人格设定 */}
-                  <div className="flex flex-1 flex-col gap-1 min-h-0">
-                    <span className="text-xs font-medium text-muted">人格设定</span>
+                  {/* ── Section 1: 人格设定 ── */}
+                  <div className="border-t border-ink-900/6 pt-3 mt-1">
+                    <span className="text-xs font-semibold text-ink-700 tracking-wide">人格设定</span>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted">身份角色</span>
                     <textarea
-                      className="flex-1 min-h-[80px] rounded-xl border border-ink-900/10 bg-surface-secondary p-3 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors resize-none"
-                      placeholder="例如：你是一位经验丰富的市场营销专家，擅长数据分析和竞品调研，说话简洁有条理。"
+                      className="min-h-[56px] rounded-xl border border-ink-900/10 bg-surface-secondary p-3 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors resize-none"
+                      placeholder="例如：你是一位经验丰富的市场营销专家，擅长数据分析和竞品调研。"
+                      rows={2}
                       value={editing.persona}
                       onChange={(e) => setEditing({ ...editing, persona: e.target.value })}
                     />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted">核心价值观</span>
+                    <textarea
+                      className="min-h-[56px] rounded-xl border border-ink-900/10 bg-surface-secondary p-3 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors resize-none"
+                      placeholder="定义助理的行为准则与底线"
+                      rows={3}
+                      value={editing.coreValues}
+                      onChange={(e) => setEditing({ ...editing, coreValues: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted">关系定义</span>
+                    <textarea
+                      className="min-h-[56px] rounded-xl border border-ink-900/10 bg-surface-secondary p-3 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors resize-none"
+                      placeholder="定义助理与用户之间的关系"
+                      rows={2}
+                      value={editing.relationship}
+                      onChange={(e) => setEditing({ ...editing, relationship: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted">思维方式</span>
+                    <textarea
+                      className="min-h-[56px] rounded-xl border border-ink-900/10 bg-surface-secondary p-3 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors resize-none"
+                      placeholder="定义助理的行为模式与决策风格"
+                      rows={2}
+                      value={editing.cognitiveStyle}
+                      onChange={(e) => setEditing({ ...editing, cognitiveStyle: e.target.value })}
+                    />
+                  </div>
+
+                  {/* ── Section 2: 操作规程 ── */}
+                  <div className="border-t border-ink-900/6 pt-3 mt-1">
+                    <span className="text-xs font-semibold text-ink-700 tracking-wide">操作规程</span>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <textarea
+                      className="min-h-[56px] rounded-xl border border-ink-900/10 bg-surface-secondary p-3 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors resize-none"
+                      placeholder="回复规范、输出格式要求等（主软件和 Bot 统一使用）"
+                      rows={3}
+                      value={editing.operatingGuidelines}
+                      onChange={(e) => setEditing({ ...editing, operatingGuidelines: e.target.value })}
+                    />
+                  </div>
+
+                  {/* ── Section 3: 心跳配置 ── */}
+                  <div className="border-t border-ink-900/6 pt-3 mt-1">
+                    <span className="text-xs font-semibold text-ink-700 tracking-wide">心跳巡检</span>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted">巡检间隔（分钟）</span>
+                    <input
+                      type="number"
+                      min="5"
+                      max="1440"
+                      className="rounded-xl border border-ink-900/10 bg-surface-secondary px-3.5 py-2 text-sm text-ink-800 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                      value={editing.heartbeatInterval}
+                      onChange={(e) => setEditing({ ...editing, heartbeatInterval: parseInt(e.target.value) || 30 })}
+                    />
                     <span className="text-[11px] text-muted-light">
-                      定义助理的角色与行为方式，会在每次对话开头注入。
+                      每 {editing.heartbeatInterval} 分钟自动巡检一次
                     </span>
                   </div>
 
-                  {/* 技能标签 */}
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-muted">心跳行为规则</span>
+                    <textarea
+                      className="min-h-[56px] rounded-xl border border-ink-900/10 bg-surface-secondary p-3 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors resize-none"
+                      placeholder="什么该报、什么该省略、什么时候保持沉默"
+                      rows={3}
+                      value={editing.heartbeatRules}
+                      onChange={(e) => setEditing({ ...editing, heartbeatRules: e.target.value })}
+                    />
+                  </div>
+
+                  {/* ── 技能标签 ── */}
+                  <div className="border-t border-ink-900/6 pt-3 mt-1">
+                    <span className="text-xs font-semibold text-ink-700 tracking-wide">技能标签</span>
+                  </div>
+
                   <div className="flex flex-col gap-1.5">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium text-muted">技能标签</span>
+                      <span className="text-xs font-medium text-muted">自定义标签</span>
                       <button
                         onClick={handleGenerateTags}
                         disabled={generatingTags || !editing.name.trim()}
@@ -375,6 +484,7 @@ export function AssistantManagerModal({
                     <span className="text-[11px] text-muted-light">
                       显示在对话框下方的快捷提示，点击「AI 生成」自动提取。
                     </span>
+                  </div>
                   </div>
                 </div>
 

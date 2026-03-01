@@ -162,7 +162,7 @@ export function stopSession(sessionId: string): boolean {
 
 // Run Claude query
 export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerEvent> {
-  const { prompt, session, resumeSessionId, onSessionUpdate } = options;
+  const { prompt, session, resumeSessionId, model, onSessionUpdate } = options;
   const abortController = new AbortController();
 
   // Track this controller - use externalId if available for cross-process stop
@@ -178,6 +178,12 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
   // Get CLI path and environment dynamically (env vars are set after module load)
   const claudeCodePath = getClaudeCodePath();
   const enhancedEnv = getEnhancedEnv();
+
+  // Per-assistant model override: if the assistant has an explicit model configured,
+  // use it instead of the global ANTHROPIC_MODEL environment variable.
+  if (model) {
+    enhancedEnv.ANTHROPIC_MODEL = model;
+  }
 
   // Inject smart memory context into prompt (only for new sessions, not resume)
   let effectivePrompt = prompt;

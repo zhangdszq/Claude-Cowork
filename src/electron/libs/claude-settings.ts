@@ -6,6 +6,7 @@ import { loadUserSettings } from "./user-settings.js";
 
 const CLAUDE_SETTINGS_ENV_KEYS = [
   "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
   "ANTHROPIC_BASE_URL",
   "ANTHROPIC_DEFAULT_HAIKU_MODEL",
   "ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -22,9 +23,13 @@ export function loadClaudeSettingsEnv(): ClaudeSettingsEnv {
   // Apply user settings to process.env if set
   if (userSettings.anthropicAuthToken) {
     process.env.ANTHROPIC_AUTH_TOKEN = userSettings.anthropicAuthToken;
+    process.env.ANTHROPIC_API_KEY = userSettings.anthropicAuthToken;
   }
   if (userSettings.anthropicBaseUrl) {
     process.env.ANTHROPIC_BASE_URL = userSettings.anthropicBaseUrl;
+  }
+  if (userSettings.anthropicModel) {
+    process.env.ANTHROPIC_MODEL = userSettings.anthropicModel;
   }
 
   // Then load ~/.claude/settings.json as fallback

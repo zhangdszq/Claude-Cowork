@@ -24,5 +24,7 @@ export function ipcWebContentsSend<Key extends keyof EventPayloadMapping>(key: K
 export function validateEventFrame(frame: WebFrameMain) {
     if (isDev() && new URL(frame.url).host === `localhost:${DEV_PORT}`) return;
 
-    if (frame.url !== pathToFileURL(getUIPath()).toString()) throw new Error("Malicious event");
+    const frameOrigin = new URL(frame.url).origin + new URL(frame.url).pathname;
+    const expectedOrigin = pathToFileURL(getUIPath()).toString();
+    if (frameOrigin !== expectedOrigin) throw new Error("Malicious event");
 }

@@ -32,6 +32,7 @@ export function createSession(options: {
   externalId?: string;
   assistantId?: string;
   assistantSkillNames?: string[];
+  background?: boolean;
 }): Session {
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -45,6 +46,7 @@ export function createSession(options: {
     lastPrompt: options.prompt,
     assistantId: options.assistantId,
     assistantSkillNames: options.assistantSkillNames ?? [],
+    background: options.background,
     pendingPermissions: new Map(),
     createdAt: now,
     updatedAt: now,
@@ -77,6 +79,7 @@ export function listSessions(): StoredSession[] {
       claudeSessionId: s.claudeSessionId,
       assistantId: s.assistantId,
       assistantSkillNames: s.assistantSkillNames,
+      background: s.background,
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
     }))

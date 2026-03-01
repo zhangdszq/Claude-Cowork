@@ -110,10 +110,12 @@ export type ValidateApiResult = {
 
 export async function validateApiConfig(
   baseUrl?: string,
-  authToken?: string
+  authToken?: string,
+  model?: string
 ): Promise<ValidateApiResult> {
   const url = (baseUrl?.trim() || "https://api.anthropic.com").replace(/\/$/, "");
   const token = authToken?.trim() || claudeCodeEnv.ANTHROPIC_AUTH_TOKEN;
+  const modelId = model?.trim() || "claude-sonnet-4-20250514";
 
   if (!token) {
     return { valid: false, message: "API Token 是必需的" };
@@ -128,7 +130,7 @@ export async function validateApiConfig(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: modelId,
         max_tokens: 1,
         messages: [{ role: "user", content: "hi" }],
       }),

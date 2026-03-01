@@ -7,6 +7,13 @@ export type PermissionRequest = {
   input: unknown;
 };
 
+export type HeartbeatReport = {
+  assistantId: string;
+  assistantName: string;
+  text: string;
+  ts: number;
+};
+
 export type SessionView = {
   id: string;
   title: string;
@@ -14,6 +21,7 @@ export type SessionView = {
   cwd?: string;
   provider?: AgentProvider;
   assistantId?: string;
+  background?: boolean;
   messages: StreamMessage[];
   permissionRequests: PermissionRequest[];
   lastPrompt?: string;
@@ -34,11 +42,12 @@ interface AppState {
   historyRequested: Set<string>;
   showSystemInfo: boolean;  // Toggle for showing System Init and Session Result
   provider: AgentProvider;  // Current agent provider selection
-  codexModel: string;       // Codex model to use
+  assistantModel: string;   // Per-assistant model override (works for both Claude and Codex)
   selectedAssistantId: string | null;
   selectedAssistantSkillNames: string[];
   selectedAssistantSkillTags: string[];
   selectedAssistantPersona: string;
+  heartbeatReports: HeartbeatReport[];
 
   setPrompt: (prompt: string) => void;
   setCwd: (cwd: string) => void;
@@ -53,8 +62,9 @@ interface AppState {
   revertSessionToBeforeLastPrompt: (sessionId: string) => void;
   setShowSystemInfo: (show: boolean) => void;
   setProvider: (provider: AgentProvider) => void;
-  setCodexModel: (model: string) => void;
+  setAssistantModel: (model: string) => void;
   setSelectedAssistant: (assistantId: string, skillNames?: string[], provider?: AgentProvider, model?: string, persona?: string, skillTags?: string[]) => void;
+  dismissHeartbeatReport: (ts: number) => void;
 }
 
 function createSession(id: string): SessionView {
@@ -73,11 +83,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   historyRequested: new Set(),
   showSystemInfo: false,  // Default to hidden
   provider: "claude",
-  codexModel: "gpt-5.3-codex",
+  assistantModel: "",
   selectedAssistantId: null,
   selectedAssistantSkillNames: [],
   selectedAssistantSkillTags: [],
   selectedAssistantPersona: "",
+  heartbeatReports: [],
 
   setPrompt: (prompt) => set({ prompt }),
   setCwd: (cwd) => set({ cwd }),
@@ -87,15 +98,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveSessionId: (id) => set({ activeSessionId: id }),
   setShowSystemInfo: (showSystemInfo) => set({ showSystemInfo }),
   setProvider: (provider) => set({ provider }),
-  setCodexModel: (codexModel) => set({ codexModel }),
-  setSelectedAssistant: (assistantId, skillNames = [], provider, model, persona, skillTags = []) =>
+  setAssistantModel: (assistantModel) => set({ assistantModel }),
+  setSelectedAssistant: (assistantId, skillNames = [], provider, model, persona, skillTags = []) => {
+    try { localStorage.setItem("vk-cowork-selected-assistant", assistantId); } catch {}
     set((state) => ({
       selectedAssistantId: assistantId,
       selectedAssistantSkillNames: skillNames,
       selectedAssistantSkillTags: skillTags,
       selectedAssistantPersona: persona ?? "",
       provider: provider ?? state.provider,
-      codexModel: model ?? state.codexModel,
+      assistantModel: model ?? "",
+    }));
+  },
+
+  dismissHeartbeatReport: (ts) =>
+    set((state) => ({
+      heartbeatReports: state.heartbeatReports.filter((r) => r.ts !== ts),
     })),
 
   markHistoryRequested: (sessionId) => {
@@ -137,6 +155,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             cwd: session.cwd,
             provider: session.provider,
             assistantId: session.assistantId,
+            background: session.background,
             createdAt: session.createdAt,
             updatedAt: session.updatedAt
           };
@@ -144,15 +163,16 @@ export const useAppStore = create<AppState>((set, get) => ({
 
         set({ sessions: nextSessions, sessionsLoaded: true });
 
-        const hasSessions = event.payload.sessions.length > 0;
+        const visibleSessions = event.payload.sessions.filter(s => !s.background);
+        const hasSessions = visibleSessions.length > 0;
         set({ showStartModal: !hasSessions });
 
         if (!hasSessions) {
           get().setActiveSessionId(null);
         }
 
-        if (!state.activeSessionId && event.payload.sessions.length > 0) {
-          const sorted = [...event.payload.sessions].sort((a, b) => {
+        if (!state.activeSessionId && visibleSessions.length > 0) {
+          const sorted = [...visibleSessions].sort((a, b) => {
             const aTime = a.updatedAt ?? a.createdAt ?? 0;
             const bTime = b.updatedAt ?? b.createdAt ?? 0;
             return aTime - bTime;
@@ -205,7 +225,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       case "session.status": {
-        const { sessionId, status, title, cwd, provider: sessionProvider, assistantId } = event.payload;
+        const { sessionId, status, title, cwd, provider: sessionProvider, assistantId, background } = event.payload;
         set((state) => {
           const existing = state.sessions[sessionId] ?? createSession(sessionId);
           return {
@@ -218,13 +238,14 @@ export const useAppStore = create<AppState>((set, get) => ({
                 cwd: cwd ?? existing.cwd,
                 provider: sessionProvider ?? existing.provider,
                 assistantId: assistantId ?? existing.assistantId,
+                background: background ?? existing.background,
                 updatedAt: Date.now()
               }
             }
           };
         });
 
-        if (state.pendingStart) {
+        if (state.pendingStart && !background) {
           get().setActiveSessionId(sessionId);
           set({ pendingStart: false, showStartModal: false });
         }
@@ -300,6 +321,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       case "runner.error": {
         set({ globalError: event.payload.message });
+        break;
+      }
+
+      case "heartbeat.report": {
+        const report = event.payload;
+        set((state) => ({
+          heartbeatReports: [...state.heartbeatReports, report],
+        }));
         break;
       }
     }

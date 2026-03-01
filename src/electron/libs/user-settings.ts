@@ -12,6 +12,7 @@ export interface OpenAITokens {
 export interface UserSettings {
   anthropicBaseUrl?: string;
   anthropicAuthToken?: string;
+  anthropicModel?: string;
   // Proxy settings
   proxyEnabled?: boolean;
   proxyUrl?: string;  // e.g., http://127.0.0.1:7890 or socks5://127.0.0.1:1080
@@ -19,6 +20,12 @@ export interface UserSettings {
   openaiTokens?: OpenAITokens;
   // Webhook auth token — set to require Authorization: Bearer <token> on /webhook routes
   webhookToken?: string;
+  // Personalization
+  userName?: string;
+  workDescription?: string;
+  globalPrompt?: string;
+  // Quick window global shortcut (Electron accelerator format, e.g. "Alt+Space")
+  quickWindowShortcut?: string;
 }
 
 const SETTINGS_FILE = join(app.getPath("userData"), "user-settings.json");

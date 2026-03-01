@@ -4,6 +4,7 @@ export type AgentProvider = "claude" | "codex";
 
 export type ClaudeSettingsEnv = {
   ANTHROPIC_AUTH_TOKEN: string;
+  ANTHROPIC_API_KEY: string;
   ANTHROPIC_BASE_URL: string;
   ANTHROPIC_DEFAULT_HAIKU_MODEL: string;
   ANTHROPIC_DEFAULT_OPUS_MODEL: string;
@@ -30,6 +31,7 @@ export type SessionInfo = {
   cwd?: string;
   provider?: AgentProvider;
   assistantId?: string;
+  background?: boolean;
   createdAt: number;
   updatedAt: number;
 };
@@ -45,16 +47,17 @@ export type PendingPermissionInfo = {
 export type ServerEvent =
   | { type: "stream.message"; payload: { sessionId: string; message: StreamMessage } }
   | { type: "stream.user_prompt"; payload: { sessionId: string; prompt: string } }
-  | { type: "session.status"; payload: { sessionId: string; status: SessionStatus; title?: string; cwd?: string; error?: string; provider?: AgentProvider; assistantId?: string } }
+  | { type: "session.status"; payload: { sessionId: string; status: SessionStatus; title?: string; cwd?: string; error?: string; provider?: AgentProvider; assistantId?: string; background?: boolean } }
   | { type: "session.list"; payload: { sessions: SessionInfo[] } }
   | { type: "session.history"; payload: { sessionId: string; status: SessionStatus; messages: StreamMessage[]; pendingPermissions?: PendingPermissionInfo[] } }
   | { type: "session.deleted"; payload: { sessionId: string } }
   | { type: "permission.request"; payload: { sessionId: string; toolUseId: string; toolName: string; input: unknown } }
-  | { type: "runner.error"; payload: { sessionId?: string; message: string } };
+  | { type: "runner.error"; payload: { sessionId?: string; message: string } }
+  | { type: "heartbeat.report"; payload: { assistantId: string; assistantName: string; text: string; ts: number } };
 
 // Client -> Server events
 export type ClientEvent =
-  | { type: "session.start"; payload: { title: string; prompt: string; cwd?: string; allowedTools?: string; provider?: AgentProvider; model?: string; assistantId?: string; assistantSkillNames?: string[]; assistantPersona?: string } }
+  | { type: "session.start"; payload: { title: string; prompt: string; cwd?: string; allowedTools?: string; provider?: AgentProvider; model?: string; assistantId?: string; assistantSkillNames?: string[]; assistantPersona?: string; background?: boolean } }
   | { type: "session.continue"; payload: { sessionId: string; prompt: string } }
   | { type: "session.stop"; payload: { sessionId: string } }
   | { type: "session.delete"; payload: { sessionId: string } }

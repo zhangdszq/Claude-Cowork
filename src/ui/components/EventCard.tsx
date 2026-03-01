@@ -512,13 +512,13 @@ function parseUserPrompt(raw: string): { attachments: { path: string; name: stri
   return { attachments, text: textLines.join("\n").trim() };
 }
 
-const UserMessageCard = ({ message, showIndicator = false }: { message: { type: "user_prompt"; prompt: string }; showIndicator?: boolean }) => {
+const UserMessageCard = ({ message, showIndicator = false, userName = "User" }: { message: { type: "user_prompt"; prompt: string }; showIndicator?: boolean; userName?: string }) => {
   const { attachments, text } = parseUserPrompt(message.prompt);
   return (
     <div className="flex flex-col mt-4">
       <div className="header text-accent flex items-center gap-2">
         <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
-        User
+        {userName}
       </div>
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-1.5 mb-1">
@@ -554,6 +554,7 @@ export const MessageCard = memo(function MessageCard({
   isRunning = false,
   onAskUserQuestionAnswer,
   assistantName,
+  userName,
 }: {
   message: StreamMessage;
   isLast?: boolean;
@@ -561,11 +562,12 @@ export const MessageCard = memo(function MessageCard({
   showSystemInfo?: boolean;
   onAskUserQuestionAnswer?: (toolUseId: string, answers: Record<string, string>) => void;
   assistantName?: string;
+  userName?: string;
 }) {
   const showIndicator = isLast && isRunning;
 
   if (message.type === "user_prompt") {
-    return <UserMessageCard message={message} showIndicator={showIndicator} />;
+    return <UserMessageCard message={message} showIndicator={showIndicator} userName={userName} />;
   }
 
   if (message.type === "skill_loaded") {
@@ -658,6 +660,7 @@ export function ProcessGroup({
   showSystemInfo,
   onAskUserQuestionAnswer,
   assistantName,
+  userName,
 }: {
   messages: StreamMessage[];
   isLast?: boolean;
@@ -665,6 +668,7 @@ export function ProcessGroup({
   showSystemInfo: boolean;
   onAskUserQuestionAnswer?: (toolUseId: string, answers: Record<string, string>) => void;
   assistantName?: string;
+  userName?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -733,6 +737,7 @@ export function ProcessGroup({
                 showSystemInfo={showSystemInfo}
                 onAskUserQuestionAnswer={onAskUserQuestionAnswer}
                 assistantName={assistantName}
+                userName={userName}
               />
             );
           })}

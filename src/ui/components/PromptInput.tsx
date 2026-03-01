@@ -181,7 +181,7 @@ export function usePromptActions(
   const setPendingStart = useAppStore((state) => state.setPendingStart);
   const setGlobalError = useAppStore((state) => state.setGlobalError);
   const provider = useAppStore((state) => state.provider);
-  const codexModel = useAppStore((state) => state.codexModel);
+  const assistantModel = useAppStore((state) => state.assistantModel);
   const selectedAssistantId = useAppStore((state) => state.selectedAssistantId);
   const selectedAssistantSkillNames = useAppStore((state) => state.selectedAssistantSkillNames);
   const selectedAssistantPersona = useAppStore((state) => state.selectedAssistantPersona);
@@ -376,7 +376,7 @@ export function usePromptActions(
           cwd: cwd.trim() || undefined,
           allowedTools: DEFAULT_ALLOWED_TOOLS,
           provider,
-          ...(provider === "codex" ? { model: codexModel } : {}),
+          ...(assistantModel ? { model: assistantModel } : {}),
           ...(selectedAssistantId ? { assistantId: selectedAssistantId } : {}),
           ...(selectedAssistantPersona ? { assistantPersona: selectedAssistantPersona } : {}),
           ...(resolvedSkillNames ? { assistantSkillNames: resolvedSkillNames } : {}),
@@ -390,26 +390,12 @@ export function usePromptActions(
       sendEvent({ type: "session.continue", payload: { sessionId: activeSessionId, prompt: finalPrompt } });
     }
     setPrompt("");
-  }, [activeSession, activeSessionId, cwd, attachments, prompt, provider, codexModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona, sendEvent, setGlobalError, setPendingStart, setPrompt, activeSkillName, optionSkills, onAutoSelectSkill]);
+  }, [activeSession, activeSessionId, cwd, attachments, prompt, provider, assistantModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona, sendEvent, setGlobalError, setPendingStart, setPrompt, activeSkillName, optionSkills, onAutoSelectSkill]);
 
   const handleStop = useCallback(() => {
     if (!activeSessionId) return;
     sendEvent({ type: "session.stop", payload: { sessionId: activeSessionId } });
-    // Restore the last user prompt into the input box
-    const session = useAppStore.getState().sessions[activeSessionId];
-    if (session) {
-      const msgs = session.messages;
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        const msg = msgs[i] as any;
-        if (msg.type === "user_prompt" && msg.prompt) {
-          setPrompt(msg.prompt);
-          break;
-        }
-      }
-    }
-    // Revert conversation area to before the last prompt was sent
-    useAppStore.getState().revertSessionToBeforeLastPrompt(activeSessionId);
-  }, [activeSessionId, sendEvent, setPrompt]);
+  }, [activeSessionId, sendEvent]);
 
   // handleStartFromModal can be called with optional params (for scheduled tasks)
   const handleStartFromModal = useCallback((params?: { prompt?: string; cwd?: string; title?: string; assistantId?: string }) => {
@@ -440,7 +426,7 @@ export function usePromptActions(
           cwd: effectiveCwd, 
           allowedTools: DEFAULT_ALLOWED_TOOLS,
           provider,
-          ...(provider === "codex" ? { model: codexModel } : {}),
+          ...(assistantModel ? { model: assistantModel } : {}),
           ...(effectiveAssistantId ? { assistantId: effectiveAssistantId } : {}),
           ...(selectedAssistantPersona ? { assistantPersona: selectedAssistantPersona } : {}),
         }
@@ -450,7 +436,7 @@ export function usePromptActions(
     
     // Otherwise use normal flow
     handleSend();
-  }, [cwd, prompt, handleSend, sendEvent, setGlobalError, setPendingStart, provider, codexModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona]);
+  }, [cwd, prompt, handleSend, sendEvent, setGlobalError, setPendingStart, provider, assistantModel, selectedAssistantId, selectedAssistantSkillNames, selectedAssistantPersona]);
 
   return { 
     prompt, 

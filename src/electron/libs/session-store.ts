@@ -20,6 +20,7 @@ export type Session = {
   model?: string;
   assistantId?: string;
   assistantSkillNames?: string[];
+  background?: boolean;
   hidden?: boolean;
   pendingPermissions: Map<string, PendingPermission>;
   abortController?: AbortController;
@@ -67,7 +68,7 @@ export class SessionStore {
     this.loadSessions();
   }
 
-  createSession(options: { cwd?: string; allowedTools?: string; prompt?: string; title: string; provider?: AgentProvider; model?: string; assistantId?: string; assistantSkillNames?: string[] }): Session {
+  createSession(options: { cwd?: string; allowedTools?: string; prompt?: string; title: string; provider?: AgentProvider; model?: string; assistantId?: string; assistantSkillNames?: string[]; background?: boolean }): Session {
     const id = crypto.randomUUID();
     const now = Date.now();
     const session: Session = {
@@ -81,6 +82,7 @@ export class SessionStore {
       model: options.model,
       assistantId: options.assistantId,
       assistantSkillNames: options.assistantSkillNames ?? [],
+      background: options.background,
       pendingPermissions: new Map()
     };
     this.sessions.set(id, session);

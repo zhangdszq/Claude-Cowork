@@ -109,6 +109,9 @@ export async function startEmbeddedApi(port: number = DEFAULT_PORT): Promise<boo
       if (settings.anthropicBaseUrl) {
         process.env.ANTHROPIC_BASE_URL = settings.anthropicBaseUrl;
       }
+      if (settings.anthropicModel) {
+        process.env.ANTHROPIC_MODEL = settings.anthropicModel;
+      }
       // Proxy settings
       if (settings.proxyEnabled && settings.proxyUrl) {
         process.env.PROXY_URL = settings.proxyUrl;

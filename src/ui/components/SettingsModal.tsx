@@ -6,7 +6,7 @@ interface SettingsModalProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type SectionId = "api" | "proxy" | "openai" | "memory";
+type SectionId = "personalize" | "api" | "proxy" | "openai" | "memory" | "shortcut";
 
 interface NavItem {
   id: SectionId;
@@ -15,6 +15,16 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
+  {
+    id: "personalize",
+    label: "个性化",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+        <circle cx="12" cy="7" r="4" />
+      </svg>
+    ),
+  },
   {
     id: "api",
     label: "API 设置",
@@ -54,14 +64,31 @@ const NAV_ITEMS: NavItem[] = [
       </svg>
     ),
   },
+  {
+    id: "shortcut",
+    label: "快捷键",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="2" y="4" width="20" height="16" rx="2" />
+        <path d="M6 8h4M14 8h4M8 12h8M10 16h4" />
+      </svg>
+    ),
+  },
 ];
 
 export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
-  const [activeSection, setActiveSection] = useState<SectionId>("api");
+  const [activeSection, setActiveSection] = useState<SectionId>("personalize");
+
+  // Personalization
+  const [userName, setUserName] = useState("");
+  const [workDescription, setWorkDescription] = useState("");
+  const [globalPrompt, setGlobalPrompt] = useState("");
+  const [userContext, setUserContext] = useState("");
 
   // API settings
   const [baseUrl, setBaseUrl] = useState("");
   const [authToken, setAuthToken] = useState("");
+  const [modelName, setModelName] = useState("claude-opus-4-6-thinking");
   const [showToken, setShowToken] = useState(false);
 
   // Proxy settings
@@ -77,6 +104,11 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
 
   // Memory state
   const [memoryDir, setMemoryDir] = useState("");
+
+  // Shortcut state
+  const [quickShortcut, setQuickShortcut] = useState("Alt+Space");
+  const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
+  const [shortcutSaved, setShortcutSaved] = useState(false);
 
   // UI state
   const [saving, setSaving] = useState(false);
@@ -107,45 +139,56 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
   useEffect(() => {
     if (open) {
       window.electron.getUserSettings().then((settings) => {
+        setUserName(settings.userName ?? "");
+        setWorkDescription(settings.workDescription ?? "");
+        setGlobalPrompt(settings.globalPrompt ?? "");
         setBaseUrl(settings.anthropicBaseUrl ?? "");
         setAuthToken(settings.anthropicAuthToken ?? "");
+        setModelName(settings.anthropicModel ?? "claude-opus-4-6-thinking");
         setProxyEnabled(settings.proxyEnabled ?? false);
         setProxyUrl(settings.proxyUrl ?? "");
         setSaved(false);
         setValidationError(null);
       });
+      window.electron.getAssistantsConfig().then((config) => {
+        setUserContext(config.userContext ?? "");
+      });
       loadOpenAIStatus();
       loadMemoryDir();
       setOpenaiError(null);
+      window.electron.getQuickWindowShortcut().then(setQuickShortcut).catch(() => {});
+      setShortcutSaved(false);
     }
   }, [open]);
 
   const handleSave = async () => {
     setValidationError(null);
 
-    const hasCustomConfig = baseUrl.trim() || authToken.trim();
-
-    if (hasCustomConfig) {
-      setValidating(true);
-      try {
-        const result = await window.electron.validateApiConfig(
-          baseUrl.trim() || undefined,
-          authToken.trim() || undefined
-        );
-        if (!result.valid) {
-          setValidationError(result.message);
+    if (activeSection === "api") {
+      const hasCustomConfig = baseUrl.trim() || authToken.trim();
+      if (hasCustomConfig) {
+        setValidating(true);
+        try {
+          const result = await window.electron.validateApiConfig(
+            baseUrl.trim() || undefined,
+            authToken.trim() || undefined,
+            modelName.trim() || undefined
+          );
+          if (!result.valid) {
+            setValidationError(result.message);
+            setValidating(false);
+            return;
+          }
+        } catch (error) {
+          setValidationError("验证失败: " + (error instanceof Error ? error.message : String(error)));
           setValidating(false);
           return;
         }
-      } catch (error) {
-        setValidationError("验证失败: " + (error instanceof Error ? error.message : String(error)));
         setValidating(false);
-        return;
       }
-      setValidating(false);
     }
 
-    if (proxyEnabled && proxyUrl.trim()) {
+    if (activeSection === "proxy" && proxyEnabled && proxyUrl.trim()) {
       const proxyPattern = /^(https?|socks5?):\/\/[^\s]+$/i;
       if (!proxyPattern.test(proxyUrl.trim())) {
         setValidationError("代理地址格式无效，应为 http://host:port 或 socks5://host:port");
@@ -155,12 +198,29 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
 
     setSaving(true);
     try {
-      await window.electron.saveUserSettings({
-        anthropicBaseUrl: baseUrl.trim() || undefined,
-        anthropicAuthToken: authToken.trim() || undefined,
-        proxyEnabled,
-        proxyUrl: proxyUrl.trim() || undefined,
-      });
+      if (activeSection === "shortcut") {
+        await window.electron.saveQuickWindowShortcut(quickShortcut);
+        setShortcutSaved(true);
+        setTimeout(() => setShortcutSaved(false), 2000);
+      } else {
+        await window.electron.saveUserSettings({
+          anthropicBaseUrl: baseUrl.trim() || undefined,
+          anthropicAuthToken: authToken.trim() || undefined,
+          anthropicModel: modelName.trim() || undefined,
+          proxyEnabled,
+          proxyUrl: proxyUrl.trim() || undefined,
+          userName: userName.trim(),
+          workDescription: workDescription.trim(),
+          globalPrompt: globalPrompt.trim(),
+        });
+        if (activeSection === "personalize") {
+          const assistantsConfig = await window.electron.getAssistantsConfig();
+          await window.electron.saveAssistantsConfig({
+            ...assistantsConfig,
+            userContext: userContext.trim() || undefined,
+          });
+        }
+      }
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (error) {
@@ -183,7 +243,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
 
   const hasApiChanges = baseUrl.trim() !== "" || authToken.trim() !== "";
   const hasProxyChanges = proxyEnabled || proxyUrl.trim() !== "";
-  const showSaveButton = activeSection === "api" || activeSection === "proxy";
+  const showSaveButton = activeSection === "personalize" || activeSection === "api" || activeSection === "proxy" || activeSection === "shortcut";
 
   const currentNavItem = NAV_ITEMS.find((item) => item.id === activeSection);
 
@@ -239,6 +299,67 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
 
             {/* Right content area */}
             <main className="flex-1 overflow-y-auto px-6 py-5" style={{ background: '#F6F4F0' }}>
+
+              {/* Personalization */}
+              {activeSection === "personalize" && (
+                <div className="grid gap-5">
+                  <label className="grid gap-1.5">
+                    <span className="text-[13px] font-medium text-ink-800">姓名</span>
+                    <span className="text-[11px] text-muted-light">让 AI 知道你是谁</span>
+                    <input
+                      type="text"
+                      className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors"
+                      onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                      onBlur={(e) => e.currentTarget.style.borderColor = ''}
+                      placeholder="输入你的名字"
+                      value={userName}
+                      onChange={(e) => setUserName(e.target.value)}
+                    />
+                  </label>
+
+                  <label className="grid gap-1.5">
+                    <span className="text-[13px] font-medium text-ink-800">工作描述</span>
+                    <span className="text-[11px] text-muted-light">帮助 AI 理解你的背景，以便提供更贴合的回答</span>
+                    <textarea
+                      className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors resize-none"
+                      onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                      onBlur={(e) => e.currentTarget.style.borderColor = ''}
+                      placeholder="例如：我是一名前端工程师，主要使用 React 和 TypeScript 开发 Web 应用"
+                      rows={3}
+                      value={workDescription}
+                      onChange={(e) => setWorkDescription(e.target.value)}
+                    />
+                  </label>
+
+                  <label className="grid gap-1.5">
+                    <span className="text-[13px] font-medium text-ink-800">全局提示词</span>
+                    <span className="text-[11px] text-muted-light">自定义指令会附加到每次对话的系统提示词中</span>
+                    <textarea
+                      className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors resize-none"
+                      onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                      onBlur={(e) => e.currentTarget.style.borderColor = ''}
+                      placeholder="给 AI 的自定义指令，例如：请用中文回答，代码注释用英文"
+                      rows={5}
+                      value={globalPrompt}
+                      onChange={(e) => setGlobalPrompt(e.target.value)}
+                    />
+                  </label>
+
+                  <label className="grid gap-1.5">
+                    <span className="text-[13px] font-medium text-ink-800">关于我</span>
+                    <span className="text-[11px] text-muted-light">所有助理共享的用户信息，注入到每次对话中</span>
+                    <textarea
+                      className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors resize-none"
+                      onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                      onBlur={(e) => e.currentTarget.style.borderColor = ''}
+                      placeholder="所有助理共享的用户信息：姓名、时区、工作领域、沟通偏好等"
+                      rows={4}
+                      value={userContext}
+                      onChange={(e) => setUserContext(e.target.value)}
+                    />
+                  </label>
+                </div>
+              )}
 
               {/* API Settings */}
               {activeSection === "api" && (
@@ -299,6 +420,22 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                         console.anthropic.com
                       </a>
                       {" "}获取 API Key
+                    </span>
+                  </label>
+
+                  <label className="grid gap-1.5">
+                    <span className="text-[11px] font-medium text-ink-500 uppercase tracking-wide">模型</span>
+                    <input
+                      type="text"
+                      className="rounded-xl border border-ink-900/10 bg-white/70 px-4 py-2.5 text-[13px] text-ink-800 placeholder:text-muted-light focus:outline-none transition-colors font-mono"
+                      onFocus={(e) => e.currentTarget.style.borderColor = '#2C5F2F'}
+                      onBlur={(e) => e.currentTarget.style.borderColor = ''}
+                      placeholder="claude-opus-4-6-thinking"
+                      value={modelName}
+                      onChange={(e) => setModelName(e.target.value)}
+                    />
+                    <span className="text-[11px] text-muted-light">
+                      Claude 模型名称，如 claude-opus-4-6-thinking、claude-sonnet-4-20250514 等
                     </span>
                   </label>
 
@@ -548,6 +685,131 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                     <p className="text-xs text-info leading-relaxed">
                       <strong>说明：</strong>记忆目录包含 MEMORY.md（长期记忆）和 daily/ 文件夹（每日记忆），
                       可直接用编辑器查看和修改。
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Shortcut Settings */}
+              {activeSection === "shortcut" && (
+                <div className="grid gap-5">
+                  <p className="text-[13px] text-muted">配置全局快捷键，快速唤起 AI 快捷对话窗口</p>
+
+                  <div className="rounded-xl border border-ink-900/10 bg-white/70 p-4">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent/10 flex-shrink-0">
+                        <svg viewBox="0 0 24 24" className="h-5 w-5 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
+                          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-ink-800">快捷工作窗口</p>
+                        <p className="text-[11px] text-muted-light">随时按下快捷键即可唤起一个轻量对话窗口</p>
+                      </div>
+                    </div>
+
+                    <label className="grid gap-2">
+                      <span className="text-[11px] font-medium text-ink-500 uppercase tracking-wide">唤起快捷键</span>
+                      <div
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (!isRecordingShortcut) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+
+                          const parts: string[] = [];
+                          if (e.ctrlKey) parts.push("Ctrl");
+                          if (e.altKey) parts.push("Alt");
+                          if (e.shiftKey) parts.push("Shift");
+                          if (e.metaKey) parts.push("Meta");
+
+                          const key = e.key;
+                          const ignoredKeys = new Set(["Control", "Alt", "Shift", "Meta"]);
+                          if (!ignoredKeys.has(key)) {
+                            let keyName = key;
+                            if (key === " ") keyName = "Space";
+                            else if (key.length === 1) keyName = key.toUpperCase();
+                            parts.push(keyName);
+
+                            setQuickShortcut(parts.join("+"));
+                            setIsRecordingShortcut(false);
+                          }
+                        }}
+                        onBlur={() => setIsRecordingShortcut(false)}
+                        className={`flex items-center justify-between rounded-xl border px-4 py-3 text-[13px] cursor-pointer transition-all ${
+                          isRecordingShortcut
+                            ? "border-accent bg-accent/5 ring-2 ring-accent/20"
+                            : "border-ink-900/10 bg-white/70 hover:border-ink-900/20"
+                        }`}
+                        onClick={() => setIsRecordingShortcut(true)}
+                      >
+                        <div className="flex items-center gap-2">
+                          {isRecordingShortcut ? (
+                            <span className="text-accent font-medium animate-pulse">请按下快捷键组合...</span>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              {quickShortcut.split("+").map((key, i) => (
+                                <span key={i}>
+                                  {i > 0 && <span className="text-muted-light mx-0.5">+</span>}
+                                  <kbd className="inline-flex h-6 min-w-[24px] items-center justify-center rounded-md border border-ink-900/15 bg-surface-secondary px-1.5 text-[11px] font-medium text-ink-700 shadow-sm">
+                                    {key}
+                                  </kbd>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setIsRecordingShortcut(!isRecordingShortcut);
+                          }}
+                          className="text-[11px] font-medium text-accent hover:text-accent-hover transition-colors"
+                        >
+                          {isRecordingShortcut ? "取消" : "修改"}
+                        </button>
+                      </div>
+                    </label>
+
+                    {shortcutSaved && (
+                      <div className="mt-3 flex items-center gap-2 text-xs text-success">
+                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M5 12l4 4L19 6" />
+                        </svg>
+                        快捷键已更新
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Preset shortcuts */}
+                  <div>
+                    <span className="text-[11px] font-medium text-ink-500 uppercase tracking-wide block mb-2">常用快捷键</span>
+                    <div className="flex flex-wrap gap-2">
+                      {["Alt+Space", "Ctrl+Space", "Ctrl+Shift+K", "Ctrl+Alt+N", "Alt+Q"].map((preset) => (
+                        <button
+                          key={preset}
+                          onClick={() => {
+                            setQuickShortcut(preset);
+                            setIsRecordingShortcut(false);
+                          }}
+                          className={`rounded-lg border px-3 py-1.5 text-[11px] font-medium transition-colors ${
+                            quickShortcut === preset
+                              ? "border-accent/30 bg-accent/8 text-accent"
+                              : "border-ink-900/10 bg-white/70 text-ink-600 hover:bg-surface-secondary hover:text-ink-800"
+                          }`}
+                        >
+                          {preset}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-info/20 bg-info/5 p-3">
+                    <p className="text-xs text-info leading-relaxed">
+                      <strong>说明：</strong>全局快捷键在应用后台运行时也能使用。
+                      如果快捷键与其他应用冲突，请更换为其他组合键。
+                      修改后请点击"保存配置"生效。
                     </p>
                   </div>
                 </div>

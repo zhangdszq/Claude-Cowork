@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import * as Dialog from "@radix-ui/react-dialog";
 import { useAppStore } from "../store/useAppStore";
 import { SettingsModal } from "./SettingsModal";
 import { AssistantManagerModal } from "./AssistantManagerModal";
@@ -27,6 +26,7 @@ interface SidebarProps {
   onOpenMcp?: () => void;
   onNoWorkspace?: () => void;
   taskPanelVisible: boolean;
+  onToggleTaskPanel: () => void;
   onEffectiveWidthChange?: (width: number) => void;
 }
 
@@ -39,6 +39,7 @@ export function Sidebar({
   onOpenMcp,
   onNoWorkspace,
   taskPanelVisible,
+  onToggleTaskPanel,
   onEffectiveWidthChange,
 }: SidebarProps) {
   const sessions = useAppStore((state) => state.sessions);
@@ -49,12 +50,9 @@ export function Sidebar({
   const setCwd = useAppStore((state) => state.setCwd);
 
   const [assistants, setAssistants] = useState<AssistantConfig[]>([]);
-  const [resumeSessionId, setResumeSessionId] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showAssistantManager, setShowAssistantManager] = useState(false);
   const [showScheduler, setShowScheduler] = useState(false);
-  const closeTimerRef = useRef<number | null>(null);
 
   const effectiveWidth = taskPanelVisible ? width : ASSISTANT_PANEL_WIDTH;
 
@@ -107,43 +105,11 @@ export function Sidebar({
 
   const filteredSessions = useMemo(() => {
     if (!currentAssistant) {
-      return sessionList.filter((session) => !session.assistantId);
+      return sessionList.filter((session) => !session.assistantId && !session.background);
     }
-    return sessionList.filter((session) => session.assistantId === currentAssistant.id);
+    return sessionList.filter((session) => session.assistantId === currentAssistant.id && !session.background);
   }, [sessionList, currentAssistant]);
 
-  useEffect(() => {
-    setCopied(false);
-    if (closeTimerRef.current) {
-      window.clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = null;
-    }
-  }, [resumeSessionId]);
-
-  useEffect(() => {
-    return () => {
-      if (closeTimerRef.current) {
-        window.clearTimeout(closeTimerRef.current);
-      }
-    };
-  }, []);
-
-  const handleCopyCommand = async () => {
-    if (!resumeSessionId) return;
-    const command = `claude --resume ${resumeSessionId}`;
-    try {
-      await navigator.clipboard.writeText(command);
-    } catch {
-      return;
-    }
-    setCopied(true);
-    if (closeTimerRef.current) {
-      window.clearTimeout(closeTimerRef.current);
-    }
-    closeTimerRef.current = window.setTimeout(() => {
-      setResumeSessionId(null);
-    }, 3000);
-  };
 
   const handleSelectAssistant = (assistant?: AssistantConfig) => {
     if (!assistant) return;
@@ -154,6 +120,10 @@ export function Sidebar({
     // 自动定位到该助理最新的一个会话（sessionList 已按 updatedAt 降序排列）
     const latestSession = sessionList.find((s) => s.assistantId === assistant.id);
     setActiveSessionId(latestSession?.id ?? null);
+    // 切换助理时自动折叠历史任务面板
+    if (taskPanelVisible) {
+      onToggleTaskPanel();
+    }
     // 若该助理没有保存工作区，提示用户先选择工作区
     if (!savedCwd) {
       onNoWorkspace?.();
@@ -168,7 +138,7 @@ export function Sidebar({
 
   return (
     <aside
-      className="fixed inset-y-0 left-0 flex h-full flex-col border-r border-ink-900/5 bg-[#FAF9F6] pb-4 pt-12"
+      className="fixed inset-y-0 left-0 flex h-full flex-col border-r border-ink-900/5 bg-[#FAF9F6] pb-4 pt-12 overflow-hidden"
       style={{ width: `${effectiveWidth}px`, transition: "width 0.2s ease" }}
     >
       <div
@@ -178,7 +148,7 @@ export function Sidebar({
 
       <div className="flex min-h-0 flex-1">
         <div
-          className="flex flex-col border-r border-ink-900/5 py-3 transition-[width] duration-200 overflow-hidden"
+          className="flex shrink-0 flex-col border-r border-ink-900/5 py-3 overflow-hidden"
           style={{ width: `${ASSISTANT_PANEL_WIDTH}px` }}
         >
           {/* Assistant list */}
@@ -189,15 +159,14 @@ export function Sidebar({
             {assistants.map((assistant) => {
               const selected = currentAssistant?.id === assistant.id;
               return (
-                <button
+                <div
                   key={assistant.id}
-                  type="button"
-                  onClick={() => handleSelectAssistant(assistant)}
-                  className={`flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-all ${
+                  className={`group relative flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-all ${
                     selected
-                      ? "bg-accent/10 text-accent"
-                      : "text-ink-700 hover:bg-ink-900/5"
+                      ? "bg-accent/10 text-accent cursor-default"
+                      : "text-ink-700 hover:bg-ink-900/5 cursor-pointer"
                   }`}
+                  onClick={() => handleSelectAssistant(assistant)}
                 >
                   <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold ${
                     selected
@@ -206,10 +175,30 @@ export function Sidebar({
                   }`}>
                     {getAssistantInitial(assistant.name)}
                   </span>
-                  <span className="truncate text-[12px] font-medium leading-snug">
+                  <span className="truncate text-[12px] font-medium leading-snug flex-1 min-w-0">
                     {assistant.name}
                   </span>
-                </button>
+                  {selected && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleTaskPanel();
+                      }}
+                      className={`shrink-0 rounded-md p-1 cursor-pointer transition-opacity ${
+                        taskPanelVisible
+                          ? "text-accent opacity-100"
+                          : "opacity-0 group-hover:opacity-100 text-muted hover:text-ink-700"
+                      }`}
+                      title="历史任务"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M12 7v5l3 3" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -374,12 +363,6 @@ export function Sidebar({
                           </svg>
                           删除任务
                         </DropdownMenu.Item>
-                        <DropdownMenu.Item className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-ink-700 outline-none hover:bg-ink-900/5" onSelect={() => setResumeSessionId(session.id)}>
-                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-ink-400" fill="none" stroke="currentColor" strokeWidth="1.8">
-                            <path d="M4 5h16v14H4z" /><path d="M7 9h10M7 12h6" /><path d="M13 15l3 2-3 2" />
-                          </svg>
-                          在 Claude Code 中恢复
-                        </DropdownMenu.Item>
                       </DropdownMenu.Content>
                     </DropdownMenu.Portal>
                   </DropdownMenu.Root>
@@ -391,34 +374,6 @@ export function Sidebar({
         </div>
         )}
       </div>
-
-      <Dialog.Root open={!!resumeSessionId} onOpenChange={(open) => !open && setResumeSessionId(null)}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 bg-ink-900/40 backdrop-blur-sm" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 w-full max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-6 shadow-xl">
-            <div className="flex items-start justify-between gap-4">
-              <Dialog.Title className="text-lg font-semibold text-ink-800">Resume</Dialog.Title>
-              <Dialog.Close asChild>
-                <button className="rounded-full p-1 text-ink-500 hover:bg-ink-900/10" aria-label="Close dialog">
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M6 6l12 12M18 6l-12 12" />
-                  </svg>
-                </button>
-              </Dialog.Close>
-            </div>
-            <div className="mt-4 flex items-center gap-2 rounded-xl border border-ink-900/10 bg-surface px-3 py-2 font-mono text-xs text-ink-700">
-              <span className="flex-1 break-all">{resumeSessionId ? `claude --resume ${resumeSessionId}` : ""}</span>
-              <button className="rounded-lg p-1.5 text-ink-600 hover:bg-ink-900/10" onClick={handleCopyCommand} aria-label="Copy resume command">
-                {copied ? (
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12l4 4L19 6" /></svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
-                )}
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
 
       <SettingsModal open={showSettings} onOpenChange={setShowSettings} />
 

@@ -13,6 +13,15 @@ import {
   loadScheduledTasks,
   deleteScheduledTask,
 } from "./scheduler.js";
+import {
+  readSop,
+  writeSop,
+  listSops,
+  searchSops,
+  writeWorkingMemory,
+  readWorkingMemory,
+  appendDailyMemory,
+} from "./memory-store.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -369,6 +378,771 @@ const takeScreenshotTool = tool(
   },
 );
 
+// ── SOP Tools (Self-Evolution) ───────────────────────────────────────────────
+
+const saveSopTool = tool(
+  "save_sop",
+  "保存或更新一个标准操作流程（SOP）。当完成复杂任务后，将经过验证的操作步骤沉淀为可复用的 SOP。\n\n" +
+    "SOP 应包含：前置条件、关键步骤（按顺序）、踩坑点和注意事项、验证方法。\n" +
+    "命名规则：用简短的任务描述，如 '部署-nextjs-到-vercel'、'配置-eslint-prettier'。\n" +
+    "只记录经过实践验证成功的流程，不要记录未验证的猜测。",
+  {
+    name: z.string().describe("SOP 名称，简短描述任务（用中划线连接，如 '配置-docker-compose'）"),
+    content: z.string().describe("SOP 内容（Markdown 格式），包含前置条件、步骤、注意事项等"),
+  },
+  async (input) => {
+    try {
+      const name = String(input.name ?? "").trim();
+      if (!name) return ok("名称不能为空");
+      const content = String(input.content ?? "").trim();
+      if (!content) return ok("内容不能为空");
+
+      const existing = readSop(name);
+      writeSop(name, content);
+
+      const action = existing ? "更新" : "创建";
+      return ok(`SOP ${action}成功：${name}\n大小：${content.length} 字符\n路径：~/.vk-cowork/memory/sops/${name}.md`);
+    } catch (err) {
+      return ok(`保存 SOP 失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const listSopsTool = tool(
+  "list_sops",
+  "列出所有已保存的 SOP（标准操作流程），返回名称、描述、更新时间。",
+  {},
+  async () => {
+    try {
+      const sops = listSops();
+      if (sops.length === 0) return ok("暂无保存的 SOP。完成复杂任务后可用 save_sop 沉淀操作流程。");
+
+      const lines = sops.map(s =>
+        `- **${s.name}**${s.description ? ` — ${s.description}` : ""}\n  更新：${s.updatedAt} | 大小：${(s.size / 1024).toFixed(1)}KB`
+      );
+      return ok(`**SOP 列表（共 ${sops.length} 个）**\n\n${lines.join("\n\n")}`);
+    } catch (err) {
+      return ok(`列出 SOP 失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const readSopTool = tool(
+  "read_sop",
+  "读取指定名称的 SOP 完整内容。",
+  {
+    name: z.string().describe("SOP 名称"),
+  },
+  async (input) => {
+    try {
+      const name = String(input.name ?? "").trim();
+      if (!name) return ok("名称不能为空");
+
+      const content = readSop(name);
+      if (!content) return ok(`未找到名为 '${name}' 的 SOP。用 list_sops 查看可用列表。`);
+      return ok(`# SOP: ${name}\n\n${content}`);
+    } catch (err) {
+      return ok(`读取 SOP 失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const searchSopsTool = tool(
+  "search_sops",
+  "按关键词搜索相关 SOP，返回匹配度最高的结果。在执行新任务前应先搜索是否已有可复用的 SOP。",
+  {
+    query: z.string().describe("搜索关键词或任务描述"),
+  },
+  async (input) => {
+    try {
+      const query = String(input.query ?? "").trim();
+      if (!query) return ok("搜索词不能为空");
+
+      const results = searchSops(query);
+      if (results.length === 0) return ok(`未找到与 '${query}' 相关的 SOP。`);
+
+      const lines = results.slice(0, 5).map(s =>
+        `- **${s.name}**${s.description ? ` — ${s.description}` : ""}`
+      );
+      return ok(`**搜索 '${query}' 的相关 SOP：**\n\n${lines.join("\n")}\n\n使用 read_sop 查看完整内容。`);
+    } catch (err) {
+      return ok(`搜索 SOP 失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+// ── Working Memory Tools ────────────────────────────────────────────────────
+
+const saveWorkingMemoryTool = tool(
+  "save_working_memory",
+  "保存工作记忆检查点。在执行长任务时，定期保存关键上下文（当前任务、关键信息、操作历史），" +
+    "确保跨会话的连续性。下次新会话会自动加载这些信息。\n\n" +
+    "适合保存的内容：当前任务目标和进展、关键中间结果、重要决策、相关 SOP 名称。\n" +
+    "不适合保存的内容：临时变量、完整代码、推理过程。",
+  {
+    key_info: z.string().describe("关键上下文信息：当前进展、重要决策、环境事实等"),
+    current_task: z.string().optional().describe("当前正在执行的任务描述"),
+    related_sops: z.array(z.string()).optional().describe("相关的 SOP 名称列表"),
+    history: z.array(z.string()).optional().describe("最近的操作历史摘要（每条一句话）"),
+  },
+  async (input) => {
+    try {
+      const keyInfo = String(input.key_info ?? "").trim();
+      if (!keyInfo) return ok("key_info 不能为空");
+
+      writeWorkingMemory({
+        keyInfo,
+        currentTask: input.current_task ? String(input.current_task) : undefined,
+        relatedSops: input.related_sops as string[] | undefined,
+        history: input.history as string[] | undefined,
+      });
+
+      return ok(`工作记忆已保存。内容将在下次会话中自动加载。\n- 关键信息：${keyInfo.slice(0, 100)}...`);
+    } catch (err) {
+      return ok(`保存工作记忆失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const readWorkingMemoryTool = tool(
+  "read_working_memory",
+  "读取当前的工作记忆检查点，查看上次保存的任务上下文和进展。",
+  {},
+  async () => {
+    try {
+      const content = readWorkingMemory();
+      if (!content?.trim()) return ok("暂无保存的工作记忆。");
+      return ok(content);
+    } catch (err) {
+      return ok(`读取工作记忆失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+// ── Memory Distillation ─────────────────────────────────────────────────────
+
+const distillMemoryTool = tool(
+  "distill_memory",
+  "任务完成后调用此工具，触发结构化记忆蒸馏。系统会引导你提取本次任务中值得长期保留的信息。\n" +
+    "适合时机：完成复杂任务后、发现重要环境事实后、踩坑并找到解决方案后。",
+  {},
+  async () => {
+    const managementSop = readSop("memory-management");
+    const sopSection = managementSop
+      ? `\n以下是你的记忆管理 SOP，请严格遵循：\n${managementSop}\n`
+      : "";
+
+    return ok(
+      `[记忆蒸馏启动]${sopSection}\n` +
+      `请回顾本次任务，按以下规则提取信息：\n\n` +
+      `1. **环境事实**（路径/凭证/配置）→ 写入 MEMORY.md，标注 [P1|expire:90天后日期]\n` +
+      `2. **用户偏好/决策** → 写入 MEMORY.md，标注 [P0]\n` +
+      `3. **复杂任务流程**（多步骤、有踩坑点）→ 用 save_sop 保存\n` +
+      `4. **本次会话摘要** → 追加到 daily/今日.md\n` +
+      `5. **未完成任务/下次需继续的上下文** → 用 save_working_memory 保存\n\n` +
+      `━━ 禁止记忆 ━━\n` +
+      `- 临时变量、具体推理过程\n` +
+      `- 未经验证的猜测\n` +
+      `- 通用常识（你本来就知道的）\n` +
+      `- 可以轻松复现的细节\n\n` +
+      `请立即执行上述操作，完成后无需报告。`
+    );
+  },
+);
+
+// ── Atomic Power Tools (inspired by GenericAgent) ───────────────────────────
+
+const runScriptTool = tool(
+  "run_script",
+  "执行脚本代码（Python / PowerShell / Node.js），支持超时控制。\n\n" +
+    "适合场景：安装依赖、数据处理、系统操作、调用 API、运行复杂脚本。\n" +
+    "与 Bash 工具的区别：支持多行脚本、超时保护、丰富的输出格式化。\n\n" +
+    "注意：Python 脚本会保存为临时文件执行（文件模式），PowerShell/Node 直接执行。",
+  {
+    code: z.string().describe("要执行的代码"),
+    language: z.enum(["python", "powershell", "node"]).describe("脚本语言"),
+    timeout: z.number().optional().describe("超时秒数，默认 60 秒，最大 300 秒"),
+    cwd: z.string().optional().describe("工作目录（可选）"),
+  },
+  async (input) => {
+    const { exec, spawn } = await import("child_process");
+    const { promisify } = await import("util");
+    const fs = await import("fs");
+    const path = await import("path");
+    const os = await import("os");
+
+    const code = String(input.code ?? "").trim();
+    if (!code) return ok("代码不能为空");
+
+    const language = input.language ?? "python";
+    const timeout = Math.min(Number(input.timeout ?? 60), 300) * 1000;
+    const cwd = input.cwd ? String(input.cwd) : process.cwd();
+
+    let cmd: string[];
+    let tmpFile: string | null = null;
+
+    if (language === "python") {
+      tmpFile = path.join(os.tmpdir(), `vk-script-${Date.now()}.py`);
+      fs.writeFileSync(tmpFile, code, "utf8");
+      const pythonCmd = process.platform === "win32" ? "python" : "python3";
+      cmd = [pythonCmd, "-X", "utf8", "-u", tmpFile];
+    } else if (language === "powershell") {
+      if (process.platform === "win32") {
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", code];
+      } else {
+        cmd = ["pwsh", "-NoProfile", "-NonInteractive", "-Command", code];
+      }
+    } else {
+      cmd = ["node", "-e", code];
+    }
+
+    try {
+      const result = await new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+        const proc = spawn(cmd[0], cmd.slice(1), {
+          cwd,
+          timeout,
+          shell: false,
+          windowsHide: true,
+          env: process.env,
+        });
+
+        let stdout = "";
+        let stderr = "";
+
+        proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
+        proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+
+        proc.on("close", (exitCode) => {
+          resolve({ stdout, stderr, exitCode: exitCode ?? -1 });
+        });
+
+        proc.on("error", (err) => {
+          resolve({ stdout, stderr: stderr + "\n" + err.message, exitCode: -1 });
+        });
+      });
+
+      const maxLen = 8000;
+      let output = result.stdout;
+      if (result.stderr) output += (output ? "\n" : "") + `[STDERR]\n${result.stderr}`;
+      if (output.length > maxLen) {
+        output = output.slice(0, maxLen / 2) + "\n...[truncated]...\n" + output.slice(-maxLen / 2);
+      }
+
+      const status = result.exitCode === 0 ? "✅" : "❌";
+      return ok(`${status} Exit code: ${result.exitCode}\n\n${output || "(no output)"}`);
+    } catch (err) {
+      return ok(`执行失败: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      if (tmpFile && fs.existsSync(tmpFile)) {
+        try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+      }
+    }
+  },
+);
+
+const desktopControlTool = tool(
+  "desktop_control",
+  "发送键盘输入或执行桌面自动化操作。\n\n" +
+    "支持的操作类型：\n" +
+    "- type: 输入文字\n" +
+    "- key: 按下特定按键（如 Enter, Tab, Escape, ctrl+c, alt+f4）\n" +
+    "- mouse_click: 在指定坐标点击（x, y）\n" +
+    "- mouse_move: 移动鼠标到指定坐标\n\n" +
+    "注意：操作直接作用于桌面，请确认目标窗口已获得焦点。",
+  {
+    action: z.enum(["type", "key", "mouse_click", "mouse_move"]).describe("操作类型"),
+    text: z.string().optional().describe("要输入的文字（action=type 时必填）"),
+    key: z.string().optional().describe("按键名（action=key 时必填，如 'Enter', 'Tab', 'ctrl+c', 'alt+f4'）"),
+    x: z.number().optional().describe("鼠标 X 坐标（mouse 操作时必填）"),
+    y: z.number().optional().describe("鼠标 Y 坐标（mouse 操作时必填）"),
+    button: z.enum(["left", "right", "middle"]).optional().describe("鼠标按钮，默认 left"),
+  },
+  async (input) => {
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+
+    const action = input.action;
+    const platform = process.platform;
+
+    try {
+      if (platform === "win32") {
+        return ok(await desktopControlWindows(execAsync, action, input));
+      } else if (platform === "darwin") {
+        return ok(await desktopControlMac(execAsync, action, input));
+      } else {
+        return ok(await desktopControlLinux(execAsync, action, input));
+      }
+    } catch (err) {
+      return ok(`桌面操作失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+type ExecFn = (cmd: string) => Promise<{ stdout: string; stderr: string }>;
+
+async function desktopControlWindows(
+  execAsync: ExecFn,
+  action: string,
+  input: { text?: string; key?: string; x?: number; y?: number; button?: string },
+): Promise<string> {
+  if (action === "type" && input.text) {
+    const escaped = input.text.replace(/'/g, "''");
+    await execAsync(
+      `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${escaped}')"`,
+    );
+    return `已输入文字: ${input.text.slice(0, 50)}`;
+  }
+
+  if (action === "key" && input.key) {
+    const keyMap: Record<string, string> = {
+      enter: "{ENTER}", tab: "{TAB}", escape: "{ESC}", backspace: "{BS}",
+      delete: "{DEL}", up: "{UP}", down: "{DOWN}", left: "{LEFT}", right: "{RIGHT}",
+      home: "{HOME}", end: "{END}", "page_up": "{PGUP}", "page_down": "{PGDN}",
+      f1: "{F1}", f2: "{F2}", f3: "{F3}", f4: "{F4}", f5: "{F5}",
+      space: " ",
+    };
+    let sendKey = input.key.toLowerCase();
+
+    if (sendKey.includes("+")) {
+      const parts = sendKey.split("+");
+      const modifiers = parts.slice(0, -1);
+      const baseKey = parts[parts.length - 1];
+      let prefix = "";
+      for (const m of modifiers) {
+        if (m === "ctrl") prefix += "^";
+        else if (m === "alt") prefix += "%";
+        else if (m === "shift") prefix += "+";
+      }
+      sendKey = prefix + (keyMap[baseKey] ?? baseKey);
+    } else {
+      sendKey = keyMap[sendKey] ?? sendKey;
+    }
+
+    const escaped = sendKey.replace(/'/g, "''");
+    await execAsync(
+      `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${escaped}')"`,
+    );
+    return `已按下: ${input.key}`;
+  }
+
+  if (action === "mouse_click" && input.x != null && input.y != null) {
+    const btn = input.button === "right" ? 2 : 0;
+    await execAsync(
+      `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; ` +
+        `[System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${input.x},${input.y}); ` +
+        `Add-Type @'
+using System; using System.Runtime.InteropServices;
+public class MouseOp { [DllImport(\\"user32.dll\\")] public static extern void mouse_event(int f,int dx,int dy,int d,int e); }
+'@; ` +
+        `[MouseOp]::mouse_event(${btn === 0 ? "0x0002,0,0,0,0); [MouseOp]::mouse_event(0x0004" : "0x0008,0,0,0,0); [MouseOp]::mouse_event(0x0010"},0,0,0,0)"`,
+    );
+    return `已点击 (${input.x}, ${input.y}) [${input.button ?? "left"}]`;
+  }
+
+  if (action === "mouse_move" && input.x != null && input.y != null) {
+    await execAsync(
+      `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; ` +
+        `[System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${input.x},${input.y})"`,
+    );
+    return `鼠标已移动到 (${input.x}, ${input.y})`;
+  }
+
+  return "无效操作，请检查参数";
+}
+
+async function desktopControlMac(
+  execAsync: ExecFn,
+  action: string,
+  input: { text?: string; key?: string; x?: number; y?: number; button?: string },
+): Promise<string> {
+  if (action === "type" && input.text) {
+    const escaped = input.text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    await execAsync(`osascript -e 'tell application "System Events" to keystroke "${escaped}"'`);
+    return `已输入文字: ${input.text.slice(0, 50)}`;
+  }
+
+  if (action === "key" && input.key) {
+    const keyMap: Record<string, number> = {
+      enter: 36, tab: 48, escape: 53, backspace: 51, delete: 117,
+      up: 126, down: 125, left: 123, right: 124, space: 49,
+      home: 115, end: 119,
+    };
+    let keyLower = input.key.toLowerCase();
+    const parts = keyLower.split("+");
+
+    if (parts.length > 1) {
+      const modifiers = parts.slice(0, -1);
+      const baseKey = parts[parts.length - 1];
+      const modStr = modifiers.map(m => {
+        if (m === "ctrl") return "control down";
+        if (m === "alt" || m === "option") return "option down";
+        if (m === "shift") return "shift down";
+        if (m === "cmd" || m === "command") return "command down";
+        return "";
+      }).filter(Boolean).join(", ");
+
+      const code = keyMap[baseKey];
+      if (code !== undefined) {
+        await execAsync(`osascript -e 'tell application "System Events" to key code ${code} using {${modStr}}'`);
+      } else {
+        await execAsync(`osascript -e 'tell application "System Events" to keystroke "${baseKey}" using {${modStr}}'`);
+      }
+    } else {
+      const code = keyMap[keyLower];
+      if (code !== undefined) {
+        await execAsync(`osascript -e 'tell application "System Events" to key code ${code}'`);
+      } else {
+        await execAsync(`osascript -e 'tell application "System Events" to keystroke "${keyLower}"'`);
+      }
+    }
+    return `已按下: ${input.key}`;
+  }
+
+  if ((action === "mouse_click" || action === "mouse_move") && input.x != null && input.y != null) {
+    if (action === "mouse_click") {
+      await execAsync(
+        `osascript -e 'tell application "System Events" to click at {${input.x}, ${input.y}}'`,
+      );
+      return `已点击 (${input.x}, ${input.y})`;
+    }
+    return "macOS 不支持 osascript 移动鼠标，建议安装 cliclick";
+  }
+
+  return "无效操作，请检查参数";
+}
+
+async function desktopControlLinux(
+  execAsync: ExecFn,
+  action: string,
+  input: { text?: string; key?: string; x?: number; y?: number; button?: string },
+): Promise<string> {
+  if (action === "type" && input.text) {
+    const escaped = input.text.replace(/'/g, "'\\''");
+    await execAsync(`xdotool type -- '${escaped}'`);
+    return `已输入文字: ${input.text.slice(0, 50)}`;
+  }
+
+  if (action === "key" && input.key) {
+    const keyStr = input.key.replace(/\+/g, "+");
+    await execAsync(`xdotool key -- ${keyStr}`);
+    return `已按下: ${input.key}`;
+  }
+
+  if (action === "mouse_click" && input.x != null && input.y != null) {
+    const btn = input.button === "right" ? "3" : input.button === "middle" ? "2" : "1";
+    await execAsync(`xdotool mousemove ${input.x} ${input.y} click ${btn}`);
+    return `已点击 (${input.x}, ${input.y}) [${input.button ?? "left"}]`;
+  }
+
+  if (action === "mouse_move" && input.x != null && input.y != null) {
+    await execAsync(`xdotool mousemove ${input.x} ${input.y}`);
+    return `鼠标已移动到 (${input.x}, ${input.y})`;
+  }
+
+  return "无效操作，请检查参数。Linux 需要安装 xdotool: sudo apt install xdotool";
+}
+
+const screenAnalyzeTool = tool(
+  "screen_analyze",
+  "截取桌面屏幕截图并返回文件路径和基本信息。\n" +
+    "比 take_screenshot 更强大：支持指定区域截图、自动记录截图时的活动窗口信息。\n" +
+    "截图保存为临时文件，可用于后续分析或发送给用户。",
+  {
+    region: z.object({
+      x: z.number(),
+      y: z.number(),
+      width: z.number(),
+      height: z.number(),
+    }).optional().describe("截取区域（可选，不填则截全屏）"),
+    description: z.string().optional().describe("截图目的描述（用于记录）"),
+  },
+  async (input) => {
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+    const os = await import("os");
+    const path = await import("path");
+    const fs = await import("fs");
+
+    const filePath = path.join(os.tmpdir(), `vk-screen-${Date.now()}.png`);
+    const platform = process.platform;
+
+    try {
+      let activeWindow = "unknown";
+
+      if (platform === "darwin") {
+        try {
+          const { stdout } = await execAsync(`osascript -e 'tell application "System Events" to get name of first process whose frontmost is true'`);
+          activeWindow = stdout.trim();
+        } catch { /* ignore */ }
+
+        if (input.region) {
+          const r = input.region;
+          await execAsync(`screencapture -R${r.x},${r.y},${r.width},${r.height} -x "${filePath}"`);
+        } else {
+          await execAsync(`screencapture -x "${filePath}"`);
+        }
+      } else if (platform === "win32") {
+        try {
+          const { stdout } = await execAsync(
+            `powershell -Command "(Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | Sort-Object CPU -Descending | Select-Object -First 1).MainWindowTitle"`,
+          );
+          activeWindow = stdout.trim();
+        } catch { /* ignore */ }
+
+        if (input.region) {
+          const r = input.region;
+          await execAsync(
+            `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; ` +
+              `$b=New-Object System.Drawing.Bitmap(${r.width},${r.height}); ` +
+              `$g=[System.Drawing.Graphics]::FromImage($b); ` +
+              `$g.CopyFromScreen(${r.x},${r.y},0,0,[System.Drawing.Size]::new(${r.width},${r.height})); ` +
+              `$b.Save('${filePath}')"`,
+          );
+        } else {
+          await execAsync(
+            `powershell -Command "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; ` +
+              `$b=New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width,[System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); ` +
+              `$g=[System.Drawing.Graphics]::FromImage($b); ` +
+              `$g.CopyFromScreen(0,0,0,0,$b.Size); ` +
+              `$b.Save('${filePath}')"`,
+          );
+        }
+      } else {
+        try {
+          const { stdout } = await execAsync(`xdotool getactivewindow getwindowname`);
+          activeWindow = stdout.trim();
+        } catch { /* ignore */ }
+
+        if (input.region) {
+          const r = input.region;
+          await execAsync(`gnome-screenshot -a -f "${filePath}" 2>/dev/null || scrot -a ${r.x},${r.y},${r.width},${r.height} "${filePath}"`);
+        } else {
+          await execAsync(`gnome-screenshot -f "${filePath}" 2>/dev/null || scrot "${filePath}"`);
+        }
+      }
+
+      if (!fs.existsSync(filePath)) {
+        return { content: [{ type: "text" as const, text: "截图文件未生成" }], isError: true };
+      }
+
+      const stat = fs.statSync(filePath);
+      const info: string[] = [
+        `截图已保存: ${filePath}`,
+        `文件大小: ${(stat.size / 1024).toFixed(1)}KB`,
+        `活动窗口: ${activeWindow}`,
+        `时间: ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+      ];
+      if (input.region) {
+        info.push(`区域: (${input.region.x},${input.region.y}) ${input.region.width}x${input.region.height}`);
+      }
+      if (input.description) {
+        info.push(`用途: ${input.description}`);
+      }
+
+      return ok(info.join("\n"));
+    } catch (err) {
+      return ok(`截图失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const processControlTool = tool(
+  "process_control",
+  "管理系统进程：列出进程、终止进程、检查端口占用。\n\n" +
+    "适合场景：排查端口冲突、关闭僵尸进程、查看资源占用。",
+  {
+    action: z.enum(["list", "kill", "find_by_port"]).describe("操作类型"),
+    pid: z.number().optional().describe("进程 PID（action=kill 时必填）"),
+    port: z.number().optional().describe("端口号（action=find_by_port 时必填）"),
+    filter: z.string().optional().describe("进程名过滤（action=list 时可选）"),
+  },
+  async (input) => {
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+    const platform = process.platform;
+
+    try {
+      if (input.action === "list") {
+        const filter = input.filter ? String(input.filter) : "";
+        let cmd: string;
+        if (platform === "win32") {
+          cmd = filter
+            ? `tasklist /FI "IMAGENAME eq *${filter}*" /FO CSV /NH`
+            : `powershell -Command "Get-Process | Sort-Object CPU -Descending | Select-Object -First 20 Id,ProcessName,CPU,WorkingSet | Format-Table -AutoSize"`;
+        } else {
+          cmd = filter
+            ? `ps aux | grep -i "${filter}" | head -20`
+            : `ps aux --sort=-%cpu | head -20`;
+        }
+        const { stdout } = await execAsync(cmd);
+        return ok(stdout || "无结果");
+      }
+
+      if (input.action === "kill" && input.pid != null) {
+        if (platform === "win32") {
+          await execAsync(`taskkill /PID ${input.pid} /F`);
+        } else {
+          await execAsync(`kill -9 ${input.pid}`);
+        }
+        return ok(`进程 ${input.pid} 已终止`);
+      }
+
+      if (input.action === "find_by_port" && input.port != null) {
+        let cmd: string;
+        if (platform === "win32") {
+          cmd = `netstat -ano | findstr :${input.port}`;
+        } else {
+          cmd = `lsof -i :${input.port} 2>/dev/null || netstat -tlnp 2>/dev/null | grep :${input.port}`;
+        }
+        const { stdout } = await execAsync(cmd);
+        return ok(stdout || `端口 ${input.port} 未被占用`);
+      }
+
+      return ok("无效操作，请检查参数");
+    } catch (err) {
+      return ok(`进程操作失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const clipboardTool = tool(
+  "clipboard",
+  "读取或写入系统剪贴板内容。\n\n" +
+    "适合场景：获取用户复制的内容、将结果放入剪贴板方便粘贴。",
+  {
+    action: z.enum(["read", "write"]).describe("操作类型"),
+    content: z.string().optional().describe("要写入剪贴板的内容（action=write 时必填）"),
+  },
+  async (input) => {
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+    const platform = process.platform;
+
+    try {
+      if (input.action === "read") {
+        let cmd: string;
+        if (platform === "win32") {
+          cmd = `powershell -Command "Get-Clipboard"`;
+        } else if (platform === "darwin") {
+          cmd = "pbpaste";
+        } else {
+          cmd = "xclip -selection clipboard -o 2>/dev/null || xsel --clipboard --output";
+        }
+        const { stdout } = await execAsync(cmd);
+        return ok(stdout || "(剪贴板为空)");
+      }
+
+      if (input.action === "write" && input.content) {
+        const content = input.content;
+        if (platform === "win32") {
+          const escaped = content.replace(/'/g, "''");
+          await execAsync(`powershell -Command "Set-Clipboard -Value '${escaped}'"`);
+        } else if (platform === "darwin") {
+          const escaped = content.replace(/'/g, "'\\''");
+          await execAsync(`echo '${escaped}' | pbcopy`);
+        } else {
+          const escaped = content.replace(/'/g, "'\\''");
+          await execAsync(`echo '${escaped}' | xclip -selection clipboard 2>/dev/null || echo '${escaped}' | xsel --clipboard --input`);
+        }
+        return ok(`已写入剪贴板: ${content.slice(0, 100)}${content.length > 100 ? "..." : ""}`);
+      }
+
+      return ok("无效操作，请检查参数");
+    } catch (err) {
+      return ok(`剪贴板操作失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const systemInfoTool = tool(
+  "system_info",
+  "获取系统环境信息：OS 版本、CPU/内存使用、磁盘空间、网络接口、已安装的工具版本。\n" +
+    "适合场景：环境检查、排障、了解当前系统状态。",
+  {
+    category: z.enum(["overview", "disk", "network", "tools"]).optional().describe("信息类别，默认 overview"),
+  },
+  async (input) => {
+    const os = await import("os");
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+
+    const category = input.category ?? "overview";
+
+    try {
+      if (category === "overview") {
+        const cpus = os.cpus();
+        const totalMem = os.totalmem();
+        const freeMem = os.freemem();
+        const info = [
+          `平台: ${os.platform()} ${os.arch()} ${os.release()}`,
+          `主机名: ${os.hostname()}`,
+          `CPU: ${cpus[0]?.model ?? "unknown"} (${cpus.length} cores)`,
+          `内存: ${(freeMem / 1024 / 1024 / 1024).toFixed(1)}GB 可用 / ${(totalMem / 1024 / 1024 / 1024).toFixed(1)}GB 总计`,
+          `运行时间: ${(os.uptime() / 3600).toFixed(1)} 小时`,
+          `用户目录: ${os.homedir()}`,
+          `临时目录: ${os.tmpdir()}`,
+        ];
+        return ok(info.join("\n"));
+      }
+
+      if (category === "disk") {
+        let cmd: string;
+        if (process.platform === "win32") {
+          cmd = `powershell -Command "Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free,@{Name='Size(GB)';Expression={[math]::Round(($_.Used+$_.Free)/1GB,1)}} -AutoSize"`;
+        } else {
+          cmd = "df -h";
+        }
+        const { stdout } = await execAsync(cmd);
+        return ok(stdout);
+      }
+
+      if (category === "network") {
+        const interfaces = os.networkInterfaces();
+        const lines: string[] = [];
+        for (const [name, addrs] of Object.entries(interfaces)) {
+          if (!addrs) continue;
+          for (const addr of addrs) {
+            if (addr.family === "IPv4" && !addr.internal) {
+              lines.push(`${name}: ${addr.address}`);
+            }
+          }
+        }
+        return ok(lines.length ? lines.join("\n") : "无活动网络接口");
+      }
+
+      if (category === "tools") {
+        const checks = [
+          { name: "Node.js", cmd: "node --version" },
+          { name: "npm", cmd: "npm --version" },
+          { name: "Python", cmd: process.platform === "win32" ? "python --version" : "python3 --version" },
+          { name: "pip", cmd: process.platform === "win32" ? "pip --version" : "pip3 --version" },
+          { name: "Git", cmd: "git --version" },
+          { name: "Docker", cmd: "docker --version" },
+        ];
+        const results: string[] = [];
+        for (const check of checks) {
+          try {
+            const { stdout } = await execAsync(check.cmd);
+            results.push(`${check.name}: ${stdout.trim()}`);
+          } catch {
+            results.push(`${check.name}: 未安装`);
+          }
+        }
+        return ok(results.join("\n"));
+      }
+
+      return ok("未知类别");
+    } catch (err) {
+      return ok(`获取系统信息失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
 // ── Factory ─────────────────────────────────────────────────────────────────
 
 /**
@@ -378,14 +1152,34 @@ const takeScreenshotTool = tool(
 export function createSharedMcpServer() {
   return createSdkMcpServer({
     name: "vk-shared",
-    version: "1.0.0",
+    version: "2.0.0",
     tools: [
+      // Scheduler
       createScheduledTaskTool,
       listScheduledTasksTool,
       deleteScheduledTaskTool,
+      // Web
       webSearchTool,
       webFetchTool,
+      // Screen & Desktop
       takeScreenshotTool,
+      screenAnalyzeTool,
+      desktopControlTool,
+      // SOP (self-evolution)
+      saveSopTool,
+      listSopsTool,
+      readSopTool,
+      searchSopsTool,
+      // Working Memory
+      saveWorkingMemoryTool,
+      readWorkingMemoryTool,
+      // Memory Distillation
+      distillMemoryTool,
+      // Atomic Power Tools
+      runScriptTool,
+      processControlTool,
+      clipboardTool,
+      systemInfoTool,
     ],
   });
 }

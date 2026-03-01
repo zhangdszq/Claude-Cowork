@@ -151,14 +151,8 @@ export function calculateNextRun(task: ScheduledTask): string | undefined {
     return scheduled > now ? task.scheduledTime : undefined;
   }
   
-  if (task.scheduleType === "heartbeat") {
-    const intervalMinutes = task.heartbeatInterval ?? 30;
-    const lastRun = task.lastRun ? new Date(task.lastRun) : now;
-    const nextRun = new Date(lastRun.getTime() + intervalMinutes * 60 * 1000);
-    return nextRun <= now
-      ? new Date(now.getTime() + intervalMinutes * 60 * 1000).toISOString()
-      : nextRun.toISOString();
-  }
+  // Heartbeat tasks are now handled by heartbeat.ts process-level timer
+  if (task.scheduleType === "heartbeat") return undefined;
 
   if (task.scheduleType === "interval") {
     if (!task.intervalValue || !task.intervalUnit) return undefined;

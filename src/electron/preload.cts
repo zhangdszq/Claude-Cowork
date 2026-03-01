@@ -35,8 +35,8 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("save-user-settings", settings),
     checkEnvironment: () => 
         ipcInvoke("check-environment"),
-    validateApiConfig: (baseUrl?: string, authToken?: string) => 
-        ipcInvoke("validate-api-config", baseUrl, authToken),
+    validateApiConfig: (baseUrl?: string, authToken?: string, model?: string) => 
+        ipcInvoke("validate-api-config", baseUrl, authToken, model),
     requestFolderAccess: (folderPath?: string) => 
         ipcInvoke("request-folder-access", folderPath),
     openPrivacySettings: () => 
@@ -160,6 +160,33 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("read-dir", dirPath),
     generateSkillTags: (persona: string, skillNames: string[], assistantName: string) =>
         ipcInvoke("generate-skill-tags", persona, skillNames, assistantName),
+    // Quick window
+    getQuickWindowShortcut: () =>
+        ipcInvoke("get-quick-window-shortcut"),
+    saveQuickWindowShortcut: (shortcut: string) =>
+        ipcInvoke("save-quick-window-shortcut", shortcut),
+    isQuickWindow: () => {
+        return new URLSearchParams(window.location.search).get("mode") === "quick";
+    },
+    hideQuickWindow: () => {
+        electron.ipcRenderer.send("hide-quick-window");
+    },
+    resizeQuickWindow: (height: number) => {
+        electron.ipcRenderer.send("resize-quick-window", height);
+    },
+    showMainWindow: () => {
+        electron.ipcRenderer.send("show-main-window");
+    },
+    onQuickWindowShow: (callback: () => void) => {
+        const cb = () => callback();
+        electron.ipcRenderer.on("quick-window-show", cb);
+        return () => electron.ipcRenderer.off("quick-window-show", cb);
+    },
+    onQuickWindowSession: (callback: (data: { assistantId?: string }) => void) => {
+        const cb = (_: Electron.IpcRendererEvent, data: any) => callback(data);
+        electron.ipcRenderer.on("quick-window-session", cb);
+        return () => electron.ipcRenderer.off("quick-window-session", cb);
+    },
 } satisfies Window['electron'])
 
 function ipcInvoke<Key extends keyof EventPayloadMapping>(key: Key, ...args: any[]): Promise<EventPayloadMapping[Key]> {

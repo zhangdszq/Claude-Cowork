@@ -52,6 +52,11 @@ export interface DingtalkBotOptions {
   assistantId: string;
   assistantName: string;
   persona?: string;
+  coreValues?: string;
+  relationship?: string;
+  cognitiveStyle?: string;
+  operatingGuidelines?: string;
+  userContext?: string;
   // AI config
   provider?: "claude" | "codex";
   model?: string;
@@ -390,6 +395,28 @@ async function downloadMediaToTempFile(
   }
 }
 
+// ─── Structured persona builder ──────────────────────────────────────────────
+
+function buildStructuredPersona(
+  opts: DingtalkBotOptions,
+  ...extras: (string | undefined | null)[]
+): string {
+  const sections: string[] = [];
+  const nameLine = `你的名字是「${opts.assistantName}」。`;
+  const p = opts.persona?.trim();
+  if (p) sections.push(`## 你的身份\n${nameLine}\n${p}`);
+  else sections.push(`## 你的身份\n${nameLine}\n你是一个智能助手，请简洁有用地回答问题。`);
+  if (opts.coreValues?.trim()) sections.push(`## 核心价值观\n${opts.coreValues.trim()}`);
+  if (opts.relationship?.trim()) sections.push(`## 与用户的关系\n${opts.relationship.trim()}`);
+  if (opts.cognitiveStyle?.trim()) sections.push(`## 你的思维方式\n${opts.cognitiveStyle.trim()}`);
+  if (opts.operatingGuidelines?.trim()) sections.push(`## 操作规程\n${opts.operatingGuidelines.trim()}`);
+  if (opts.userContext?.trim()) sections.push(`## 关于用户\n${opts.userContext.trim()}`);
+  for (const extra of extras) {
+    if (extra?.trim()) sections.push(extra.trim());
+  }
+  return sections.join("\n\n");
+}
+
 // ─── Message deduplication ────────────────────────────────────────────────────
 
 const DEDUP_TTL_MS = 5 * 60 * 1000;
@@ -705,7 +732,7 @@ export function getDingtalkBotStatus(assistantId: string): DingtalkBotStatus {
 /** Update runtime config of a running bot without restarting the connection. */
 export function updateDingtalkBotConfig(
   assistantId: string,
-  updates: Partial<Pick<DingtalkBotOptions, "provider" | "model" | "persona" | "assistantName" | "defaultCwd">>,
+  updates: Partial<Pick<DingtalkBotOptions, "provider" | "model" | "persona" | "coreValues" | "relationship" | "cognitiveStyle" | "operatingGuidelines" | "userContext" | "assistantName" | "defaultCwd">>,
 ): void {
   const conn = pool.get(assistantId);
   if (!conn) return;
@@ -1546,25 +1573,13 @@ class DingtalkConnection {
     while (history.length > MAX_TURNS * 2) history.shift();
 
     const memoryContext = buildSmartMemoryContext(userText);
-    const basePersona =
-      this.opts.persona?.trim() ||
-      `你是 ${this.opts.assistantName}，一个智能助手，请简洁有用地回答问题。`;
-
-    const outputRules = `## 回复规范（必须遵守）
-- 直接给出结果，不要叙述你的思考过程或执行步骤
-- 调用工具时保持沉默，只在工具全部完成后给出一句话结论
-- 截图/发文件类任务：工具执行完只需回复"已发送"或简短说明，不要写"我先截图再上传再发送…"
-- 禁止把工具调用的中间状态、路径、API 返回值等细节写进最终回复
-- 遇到障碍或工具调用失败时，主动换方法重试，穷尽所有可用工具和途径，直到完成任务或确认客观上不可完成为止`;
 
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const msgNow = msg.createAt ?? Date.now();
     const nowStr = new Date(msgNow).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
     const currentTimeContext = `## 当前时间\n消息发送时间：${nowStr}（时区：${tz}）\n创建定时任务时，若需要相对时间（如"X分钟后"），请使用 delay_minutes 参数，服务器会自动计算。`;
 
-    const system = [basePersona, outputRules, currentTimeContext, memoryContext]
-      .filter(Boolean)
-      .join("\n\n");
+    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext);
 
     let replyText: string;
 

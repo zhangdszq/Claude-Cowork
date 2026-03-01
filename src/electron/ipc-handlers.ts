@@ -19,6 +19,7 @@ import { join } from 'path';
 import { existsSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { loadScheduledTasks, runHookTasks } from './libs/scheduler.js';
+import { loadAssistantsConfig } from './libs/assistants-config.js';
 
 // Local session store for persistence (SQLite)
 const DB_PATH = join(app.getPath('userData'), 'sessions.db');
@@ -156,17 +157,26 @@ function useEmbeddedApi(): boolean {
   return isEmbeddedApiRunning();
 }
 
-function applyAssistantContext(prompt: string, skillNames?: string[], persona?: string): string {
-  const parts: string[] = [];
-  if (persona?.trim()) {
-    parts.push(`[System Persona] ${persona.trim()}`);
-  }
-  const normalized = (skillNames ?? []).map((item) => item.trim()).filter(Boolean);
-  if (normalized.length > 0) {
-    parts.push(normalized.map((skill) => `/${skill}`).join("\n"));
-  }
-  if (parts.length === 0) return prompt;
-  return `${parts.join("\n\n")}\n\n${prompt}`;
+function applyAssistantContext(prompt: string, skillNames?: string[], persona?: string, assistantId?: string): string {
+  const config = assistantId ? loadAssistantsConfig() : undefined;
+  const assistant = config?.assistants.find((a: any) => a.id === assistantId);
+
+  const sections: string[] = [];
+  const name = assistant?.name;
+  const p = persona || assistant?.persona;
+  const identity = [name ? `你的名字是「${name}」。` : "", p?.trim() ?? ""].filter(Boolean).join("\n");
+  if (identity) sections.push(`## 你的身份\n${identity}`);
+  if (assistant?.coreValues?.trim()) sections.push(`## 核心价值观\n${assistant.coreValues.trim()}`);
+  if (assistant?.relationship?.trim()) sections.push(`## 与用户的关系\n${assistant.relationship.trim()}`);
+  if (assistant?.cognitiveStyle?.trim()) sections.push(`## 你的思维方式\n${assistant.cognitiveStyle.trim()}`);
+  if (assistant?.operatingGuidelines?.trim()) sections.push(`## 操作规程\n${assistant.operatingGuidelines.trim()}`);
+  if (config?.userContext?.trim()) sections.push(`## 关于用户\n${config.userContext.trim()}`);
+
+  const normalized = (skillNames ?? []).map((s) => s.trim()).filter(Boolean);
+  if (normalized.length > 0) sections.push(normalized.map((s) => `/${s}`).join("\n"));
+
+  if (sections.length === 0) return prompt;
+  return `${sections.join("\n\n")}\n\n${prompt}`;
 }
 
 export async function handleClientEvent(event: ClientEvent) {
@@ -214,7 +224,10 @@ export async function handleClientEvent(event: ClientEvent) {
     ensureAgentsMd(event.payload.cwd);
 
     const provider = event.payload.provider ?? 'claude';
-    const effectivePrompt = applyAssistantContext(event.payload.prompt, event.payload.assistantSkillNames, event.payload.assistantPersona);
+    if (event.payload.assistantSkillNames?.length) {
+      console.log('[IPC] session.start with skills:', event.payload.assistantSkillNames);
+    }
+    const effectivePrompt = applyAssistantContext(event.payload.prompt, event.payload.assistantSkillNames, event.payload.assistantPersona, event.payload.assistantId);
     const session = sessions.createSession({
       cwd: event.payload.cwd,
       title: event.payload.title,
@@ -224,6 +237,7 @@ export async function handleClientEvent(event: ClientEvent) {
       model: event.payload.model,
       assistantId: event.payload.assistantId,
       assistantSkillNames: event.payload.assistantSkillNames,
+      background: event.payload.background,
     });
 
     sessions.updateSession(session.id, {
@@ -240,6 +254,7 @@ export async function handleClientEvent(event: ClientEvent) {
         cwd: session.cwd,
         provider,
         assistantId: session.assistantId,
+        background: session.background,
       },
     });
 

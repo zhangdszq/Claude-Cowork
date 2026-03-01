@@ -11,6 +11,12 @@ export type AssistantConfig = {
   skillNames?: string[];
   skillTags?: string[];
   persona?: string;
+  coreValues?: string;
+  relationship?: string;
+  cognitiveStyle?: string;
+  operatingGuidelines?: string;
+  heartbeatInterval?: number;
+  heartbeatRules?: string;
   defaultCwd?: string;
   bots?: Record<string, unknown>;
 };
@@ -18,6 +24,7 @@ export type AssistantConfig = {
 export type AssistantsConfig = {
   assistants: AssistantConfig[];
   defaultAssistantId?: string;
+  userContext?: string;
 };
 
 const VK_COWORK_DIR = join(homedir(), ".vk-cowork");
@@ -25,28 +32,73 @@ const ASSISTANTS_FILE = join(VK_COWORK_DIR, "assistants-config.json");
 
 /**
  * Determine which provider to use for the default assistant based on what has
- * been configured.  Codex takes priority when both are available.
+ * been configured.  Claude takes priority when both are available, because
+ * it is the primary agent framework and users who have also logged into
+ * OpenAI still expect Claude to be the default.
  *
- * - Codex:  openaiTokens in user-settings  OR  ~/.codex/auth.json exists
  * - Claude: anthropicAuthToken in user-settings  OR  ANTHROPIC_AUTH_TOKEN env var
+ * - Codex:  openaiTokens in user-settings  OR  ~/.codex/auth.json exists
  *
  * Falls back to "claude" when neither is configured.
  */
 function resolveDefaultProvider(): "claude" | "codex" {
   const settings = loadUserSettings();
 
-  const hasCodex =
-    !!settings.openaiTokens?.accessToken ||
-    existsSync(join(homedir(), ".codex", "auth.json"));
-
   const hasClaude =
     !!settings.anthropicAuthToken ||
     !!process.env.ANTHROPIC_AUTH_TOKEN;
 
-  if (hasCodex) return "codex";
+  const hasCodex =
+    !!settings.openaiTokens?.accessToken ||
+    existsSync(join(homedir(), ".codex", "auth.json"));
+
   if (hasClaude) return "claude";
+  if (hasCodex) return "codex";
   return "claude";
 }
+
+// ─── Per-assistant defaults (backfilled on upgrade) ─────────────────────────
+
+export const DEFAULT_PERSONA = `你是小助理，用户的私人 AI 伙伴。
+- 有温度但不啰嗦，像一个靠谱的老同事
+- 你有自己的判断力和性格，不是一个无条件顺从的工具
+- 你记得和用户之间发生过的事情，会基于共同经历调整自己的行为`;
+
+export const DEFAULT_CORE_VALUES = `1. 有用比好听重要 — 不表演、不客套、不堆砌，直接给方案和结果
+2. 接手就负责 — 不回来说"我做不到因为…"，带着解决方案回来
+3. 提前想一步 — 最好的帮助是不需要开口要的
+4. 诚实沟通 — 不确定就说不确定，做错了就承认，不回避实质问题
+5. 尊重隐私 — 不主动探询用户不愿分享的信息，对已知隐私严格保密`;
+
+export const DEFAULT_RELATIONSHIP = `我为你工作，但不卑不亢。更像一个值得信赖的幕僚：
+- 被问到时给出真实看法，不说"你说得对但是…"这类废话
+- 认为重要时主动提建议，而不是等着被问
+- 对明显有问题的事情会礼貌反驳一次，但不反复纠缠
+- 最终尊重你的决定，执行时全力以赴
+- 关系随时间成长 — 合作越久越了解你的偏好，不需要反复解释`;
+
+export const DEFAULT_COGNITIVE_STYLE = `- 默认行动：明显有帮助就直接做，不为小事请示
+- 大事请示：对外沟通、重大决策、不可逆操作先确认
+- 记下来：可能以后有用的信息先记录到记忆
+- 从纠正中学习：你指出的问题我会更新认知，不犯同样的错
+- 结构化思维：复杂问题先拆解再逐步解决，不一股脑堆砌
+- 承认边界：超出能力范围的事坦诚说明，给出替代方案`;
+
+export const DEFAULT_OPERATING_GUIDELINES = `- 直接给出结果，不要叙述思考过程或执行步骤
+- 调用工具时保持沉默，只在工具全部完成后给出结论
+- 禁止把工具调用的中间状态、路径、API 返回值写进最终回复
+- 遇到障碍时主动换方法重试，穷尽所有途径
+- 截图/发文件类任务：工具执行完只需回复"已完成"或简短说明
+- 多步骤任务先做完再汇报，不要边做边播报进度`;
+
+export const DEFAULT_HEARTBEAT_RULES = `- 检查未处理的消息和待办事项
+- 重要/紧急事项立即汇报
+- 不重要的信息积累到日报
+- 没有值得汇报的事就输出 <no-action> 保持沉默
+- 晚 22 点至早 8 点只报紧急事项
+- 汇报时简明扼要，不重复已知信息`;
+
+export const DEFAULT_USER_CONTEXT = "";
 
 function buildDefaultAssistants(): AssistantConfig[] {
   return [
@@ -55,7 +107,13 @@ function buildDefaultAssistants(): AssistantConfig[] {
       name: "小助理",
       provider: resolveDefaultProvider(),
       skillNames: [],
-      persona: "你是一个通用小助理，乐于帮忙，回答简洁实用。",
+      persona: DEFAULT_PERSONA,
+      coreValues: DEFAULT_CORE_VALUES,
+      relationship: DEFAULT_RELATIONSHIP,
+      cognitiveStyle: DEFAULT_COGNITIVE_STYLE,
+      operatingGuidelines: DEFAULT_OPERATING_GUIDELINES,
+      heartbeatInterval: 30,
+      heartbeatRules: DEFAULT_HEARTBEAT_RULES,
     },
   ];
 }
@@ -74,6 +132,10 @@ function ensureDirectory() {
   }
 }
 
+function optStr(val: unknown): string | undefined {
+  return val ? String(val) : undefined;
+}
+
 function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsConfig {
   const rawAssistants = Array.isArray(input?.assistants) ? input.assistants : [];
   const assistants = rawAssistants
@@ -82,14 +144,21 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
       id: String(item.id),
       name: String(item.name),
       provider: item.provider === "codex" ? "codex" : "claude",
-      model: item.model ? String(item.model) : undefined,
+      model: optStr(item.model),
       skillNames: Array.isArray(item.skillNames)
         ? item.skillNames.filter(Boolean).map((name) => String(name))
         : [],
       skillTags: Array.isArray(item.skillTags)
         ? item.skillTags.filter(Boolean).map((tag) => String(tag))
         : undefined,
-      persona: item.persona ? String(item.persona) : undefined,
+      persona: optStr(item.persona) ?? DEFAULT_PERSONA,
+      coreValues: optStr(item.coreValues) ?? DEFAULT_CORE_VALUES,
+      relationship: optStr(item.relationship) ?? DEFAULT_RELATIONSHIP,
+      cognitiveStyle: optStr(item.cognitiveStyle) ?? DEFAULT_COGNITIVE_STYLE,
+      operatingGuidelines: optStr(item.operatingGuidelines) ?? DEFAULT_OPERATING_GUIDELINES,
+      heartbeatInterval: typeof item.heartbeatInterval === "number" ? item.heartbeatInterval : 30,
+      heartbeatRules: optStr(item.heartbeatRules) ?? DEFAULT_HEARTBEAT_RULES,
+      defaultCwd: optStr(item.defaultCwd),
       bots: item.bots && typeof item.bots === "object" ? item.bots : undefined,
     }));
 
@@ -104,6 +173,7 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
   return {
     assistants,
     defaultAssistantId: defaultExists ? preferredDefault : assistants[0]?.id,
+    userContext: optStr(input?.userContext),
   };
 }
 

@@ -138,6 +138,9 @@ export async function startSidecar(): Promise<boolean> {
     if (settings.anthropicBaseUrl) {
       env.ANTHROPIC_BASE_URL = settings.anthropicBaseUrl;
     }
+    if (settings.anthropicModel) {
+      env.ANTHROPIC_MODEL = settings.anthropicModel;
+    }
     // Proxy settings
     if (settings.proxyEnabled && settings.proxyUrl) {
       env.PROXY_URL = settings.proxyUrl;

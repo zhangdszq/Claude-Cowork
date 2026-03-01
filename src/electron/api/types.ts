@@ -26,6 +26,7 @@ export type Session = {
   model?: string;
   assistantId?: string;
   assistantSkillNames?: string[];
+  background?: boolean;
   pendingPermissions: Map<string, PendingPermission>;
   abortController?: AbortController;
   createdAt: number;
@@ -42,6 +43,7 @@ export type StoredSession = {
   claudeSessionId?: string;
   assistantId?: string;
   assistantSkillNames?: string[];
+  background?: boolean;
   createdAt: number;
   updatedAt: number;
 };

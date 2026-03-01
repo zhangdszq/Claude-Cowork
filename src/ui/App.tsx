@@ -284,6 +284,14 @@ function App() {
   const setCwd = useAppStore((s) => s.setCwd);
   const showSystemInfo = useAppStore((s) => s.showSystemInfo);
 
+  // User display name from personalization settings
+  const [userName, setUserName] = useState("User");
+  useEffect(() => {
+    window.electron.getUserSettings().then((s) => {
+      if (s.userName?.trim()) setUserName(s.userName.trim());
+    }).catch(() => {});
+  }, []);
+
   // Assistants list for resolving assistant names
   const [assistantsList, setAssistantsList] = useState<AssistantConfig[]>([]);
   const refreshAssistantsList = useCallback(() => {
@@ -441,6 +449,31 @@ function App() {
 
   const { connected, sendEvent } = useIPC(onEvent);
   const { handleStartFromModal } = usePromptActions(sendEvent);
+
+  // Listen for quick-window session start — switch assistant & set pendingStart
+  useEffect(() => {
+    const unsubscribe = window.electron.onQuickWindowSession((data) => {
+      console.log("[QuickWindow] received quick-window-session in main renderer:", data);
+      if (data.assistantId) {
+        const assistant = assistantsList.find((a) => a.id === data.assistantId);
+        if (assistant) {
+          console.log("[QuickWindow] switching to assistant:", assistant.name);
+          useAppStore.getState().setSelectedAssistant(
+            assistant.id,
+            assistant.skillNames ?? [],
+            assistant.provider,
+            assistant.model,
+            assistant.persona,
+            assistant.skillTags ?? [],
+          );
+        } else {
+          console.log("[QuickWindow] assistant not found in list, id:", data.assistantId);
+        }
+      }
+      useAppStore.getState().setPendingStart(true);
+    });
+    return unsubscribe;
+  }, [assistantsList]);
 
   // Listen for scheduler task execution events
   useEffect(() => {
@@ -798,6 +831,7 @@ function App() {
         onOpenMcp={handleOpenMcp}
         onNoWorkspace={() => setShowWorkspacePicker(true)}
         taskPanelVisible={taskPanelVisible}
+        onToggleTaskPanel={handleToggleTaskPanel}
         onEffectiveWidthChange={setEffectiveSidebarWidth}
       />
 
@@ -819,22 +853,6 @@ function App() {
             {activeSession?.title || "AI Team"}
           </span>
           <div className="flex items-center gap-1 shrink-0" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-            {/* History tasks toggle */}
-            <button
-              onClick={handleToggleTaskPanel}
-              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                taskPanelVisible
-                  ? "bg-accent/10 text-accent"
-                  : "text-muted hover:bg-surface-tertiary hover:text-ink-700"
-              }`}
-              title="历史任务"
-            >
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <circle cx="12" cy="12" r="9" />
-                <path d="M12 7v5l3 3" />
-              </svg>
-              {!headerCompact && <span>历史任务</span>}
-            </button>
             {/* New task */}
             <button
               onClick={handleNewSession}
@@ -961,6 +979,7 @@ function App() {
                       showSystemInfo={false}
                       onAskUserQuestionAnswer={handleAskUserQuestionAnswer}
                       assistantName={activeAssistantName}
+                      userName={userName}
                     />
                   );
                 }
@@ -973,6 +992,7 @@ function App() {
                     showSystemInfo={showSystemInfo}
                     onAskUserQuestionAnswer={handleAskUserQuestionAnswer}
                     assistantName={activeAssistantName}
+                    userName={userName}
                   />
                 );
               })

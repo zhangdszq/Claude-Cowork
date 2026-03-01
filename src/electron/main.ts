@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, protocol } from "electron"
+import { app, BrowserWindow, ipcMain, dialog, shell, protocol, globalShortcut, screen } from "electron"
 import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
 import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources } from "./test.js";
@@ -43,6 +43,7 @@ import {
   runMemoryJanitor, refreshRootAbstract,
   readSessionState, writeSessionState, clearSessionState,
   readAbstract,
+  listSops, readSop, writeSop, searchSops, deleteSop,
 } from "./libs/memory-store.js";
 import { 
   loadScheduledTasks, 
@@ -55,6 +56,7 @@ import {
   runHookTasks,
   type ScheduledTask
 } from "./libs/scheduler.js";
+import { startHeartbeatLoop, stopHeartbeatLoop, startMemoryCompactTimer, stopMemoryCompactTimer } from "./libs/heartbeat.js";
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
@@ -92,6 +94,11 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
                     assistantId: assistant.id,
                     assistantName: assistant.name,
                     persona: assistant.persona,
+                    coreValues: assistant.coreValues,
+                    relationship: assistant.relationship,
+                    cognitiveStyle: assistant.cognitiveStyle,
+                    operatingGuidelines: assistant.operatingGuidelines,
+                    userContext: config.userContext,
                     provider: assistant.provider,
                     model: assistant.model,
                     defaultCwd: assistant.defaultCwd,
@@ -130,6 +137,11 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
                     assistantId: assistant.id,
                     assistantName: assistant.name,
                     persona: assistant.persona,
+                    coreValues: assistant.coreValues,
+                    relationship: assistant.relationship,
+                    cognitiveStyle: assistant.cognitiveStyle,
+                    operatingGuidelines: assistant.operatingGuidelines,
+                    userContext: config.userContext,
                     provider: assistant.provider,
                     model: assistant.model,
                     defaultCwd: assistant.defaultCwd,
@@ -151,6 +163,8 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
 protocol.registerSchemesAsPrivileged([
     { scheme: "localfile", privileges: { secure: true, standard: true, supportFetchAPI: true, bypassCSP: true } }
 ]);
+
+let isQuitting = false;
 
 app.on("ready", async () => {
     // Serve local files via localfile:// — file:// is blocked from http://localhost by Chromium
@@ -200,27 +214,213 @@ app.on("ready", async () => {
     } else {
         console.error("Failed to start embedded API server");
     }
-    const mainWindow = new BrowserWindow({
-        width: 1200,
-        height: 800,
-        minWidth: 900,
-        minHeight: 600,
-        webPreferences: {
-            preload: getPreloadPath(),
-        },
-        icon: getIconPath(),
-        titleBarStyle: "hiddenInset",
-        backgroundColor: "#FAF9F6",
-        trafficLightPosition: { x: 15, y: 18 }
-    });
+    function createMainWindow(): BrowserWindow {
+        const win = new BrowserWindow({
+            width: 1200,
+            height: 800,
+            minWidth: 900,
+            minHeight: 600,
+            webPreferences: {
+                preload: getPreloadPath(),
+            },
+            icon: getIconPath(),
+            titleBarStyle: "hiddenInset",
+            backgroundColor: "#FAF9F6",
+            trafficLightPosition: { x: 15, y: 18 }
+        });
 
-    if (isDev()) {
-        mainWindow.loadURL(`http://localhost:${DEV_PORT}`);
-    } else {
-        mainWindow.loadFile(getUIPath());
+        if (isDev()) {
+            win.loadURL(`http://localhost:${DEV_PORT}`);
+        } else {
+            win.loadFile(getUIPath());
+        }
+
+        // Hide instead of close so the app stays alive for quick window
+        win.on("close", (e) => {
+            if (!isQuitting) {
+                e.preventDefault();
+                win.hide();
+            }
+        });
+
+        pollResources(win);
+        return win;
     }
 
-    pollResources(mainWindow);
+    let mainWindow = createMainWindow();
+
+    // ─── Quick Window ────────────────────────────────────────────────
+    const DEFAULT_QUICK_SHORTCUT = "Alt+Space";
+    let quickWindow: BrowserWindow | null = null;
+    let suppressBlur = false;
+
+    function createQuickWindow() {
+        const cursor = screen.getCursorScreenPoint();
+        const display = screen.getDisplayNearestPoint(cursor);
+        const { width: screenW } = display.workAreaSize;
+        const winWidth = 640;
+        const winHeight = 128;
+        const x = display.workArea.x + Math.round((screenW - winWidth) / 2);
+        const y = display.workArea.y + Math.round(display.workAreaSize.height * 0.28);
+
+        quickWindow = new BrowserWindow({
+            width: winWidth,
+            height: winHeight,
+            x,
+            y,
+            frame: false,
+            transparent: true,
+            resizable: false,
+            movable: true,
+            alwaysOnTop: true,
+            skipTaskbar: true,
+            show: false,
+            hasShadow: true,
+            roundedCorners: true,
+            webPreferences: {
+                preload: getPreloadPath(),
+            },
+        });
+
+        const quickUrl = isDev()
+            ? `http://localhost:${DEV_PORT}?mode=quick`
+            : getUIPath();
+
+        if (isDev()) {
+            quickWindow.loadURL(quickUrl);
+        } else {
+            quickWindow.loadFile(quickUrl, { query: { mode: "quick" } });
+        }
+
+        quickWindow.on("blur", () => {
+            setTimeout(() => {
+                if (suppressBlur) return;
+                if (quickWindow && !quickWindow.isDestroyed() && quickWindow.isVisible()) {
+                    quickWindow.hide();
+                }
+            }, 100);
+        });
+
+        quickWindow.on("closed", () => {
+            quickWindow = null;
+        });
+    }
+
+    function toggleQuickWindow() {
+        if (!quickWindow || quickWindow.isDestroyed()) {
+            createQuickWindow();
+        }
+        if (quickWindow!.isVisible()) {
+            quickWindow!.hide();
+        } else {
+            // Always reset to collapsed height before showing
+            const b = quickWindow!.getBounds();
+            quickWindow!.setBounds({ x: b.x, y: b.y, width: b.width, height: 128 });
+            quickWindow!.show();
+            quickWindow!.focus();
+            quickWindow!.webContents.send("quick-window-show");
+        }
+    }
+
+    function registerQuickShortcut(accelerator: string) {
+        globalShortcut.unregisterAll();
+        if (!accelerator) return;
+        try {
+            globalShortcut.register(accelerator, toggleQuickWindow);
+        } catch (e) {
+            console.warn("[QuickWindow] Failed to register shortcut:", accelerator, e);
+        }
+    }
+
+    const savedShortcut = loadUserSettings().quickWindowShortcut ?? DEFAULT_QUICK_SHORTCUT;
+    registerQuickShortcut(savedShortcut);
+
+    ipcMainHandle("get-quick-window-shortcut", () => {
+        return loadUserSettings().quickWindowShortcut ?? DEFAULT_QUICK_SHORTCUT;
+    });
+
+    ipcMainHandle("save-quick-window-shortcut", (_: any, shortcut: string) => {
+        const settings = loadUserSettings();
+        settings.quickWindowShortcut = shortcut;
+        saveUserSettings(settings);
+        registerQuickShortcut(shortcut);
+        return true;
+    });
+
+    ipcMain.on("resize-quick-window", (_: any, height: number) => {
+        if (quickWindow && !quickWindow.isDestroyed()) {
+            // Suppress blur during resize — Windows fires blur on setBounds
+            suppressBlur = true;
+            const bounds = quickWindow.getBounds();
+            quickWindow.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: Math.round(height) });
+            // Re-focus after resize to reclaim input
+            quickWindow.focus();
+            setTimeout(() => { suppressBlur = false; }, 300);
+        }
+    });
+
+    ipcMain.on("hide-quick-window", () => {
+        quickWindow?.hide();
+    });
+
+    let showMainPending = false;
+
+    function showMainWindowNow() {
+        if (showMainPending) return;
+        showMainPending = true;
+        suppressBlur = true;
+
+        console.log("[QuickWindow] showMainWindowNow called");
+
+        if (mainWindow.isDestroyed()) {
+            console.log("[QuickWindow] main window destroyed, recreating");
+            mainWindow = createMainWindow();
+            // Hide quick window after main is created
+            if (quickWindow && !quickWindow.isDestroyed()) quickWindow.hide();
+            showMainPending = false;
+            suppressBlur = false;
+            return;
+        }
+
+        // Step 1: Prepare main window (restore/show) but don't focus yet
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        if (!mainWindow.isVisible()) mainWindow.show();
+
+        // Step 2: Make main window always-on-top (above the quick window)
+        mainWindow.setAlwaysOnTop(true, "screen-saver");
+        mainWindow.moveTop();
+
+        // Step 3: Now hide the quick window
+        if (quickWindow && !quickWindow.isDestroyed() && quickWindow.isVisible()) {
+            quickWindow.hide();
+            console.log("[QuickWindow] quick window hidden");
+        }
+
+        // Step 4: Focus main window after a tick (let Windows process the hide)
+        setTimeout(() => {
+            if (mainWindow.isDestroyed()) {
+                showMainPending = false;
+                suppressBlur = false;
+                return;
+            }
+
+            app.focus({ steal: true });
+            mainWindow.focus();
+            console.log("[QuickWindow] main window focused");
+
+            // Step 5: Release alwaysOnTop after focus is stable
+            setTimeout(() => {
+                showMainPending = false;
+                suppressBlur = false;
+                if (!mainWindow.isDestroyed()) {
+                    mainWindow.setAlwaysOnTop(false);
+                    console.log("[QuickWindow] alwaysOnTop released");
+                }
+            }, 800);
+        }, 100);
+    }
+
+    ipcMain.on("show-main-window", showMainWindowNow);
 
     // Initialize scheduler — inject sessionRunner so tasks fire directly in main process
     startScheduler();
@@ -231,28 +431,9 @@ app.on("ready", async () => {
         try { runHookTasks("startup"); } catch (e) { console.warn("[Startup] Hook error:", e); }
     }, 5000);
 
-    // Register weekly L2→L1 memory compaction task (once, idempotent)
-    try {
-        const existing = loadScheduledTasks();
-        const hasCompact = existing.some(t => t.id?.startsWith("memory-compact-"));
-        if (!hasCompact) {
-            addScheduledTask({
-                name: "记忆压缩 L2→L1",
-                enabled: true,
-                prompt: `请执行每周记忆压缩任务：
-1. 读取 ~/.vk-cowork/memory/daily/ 目录下最近 7 天的日志文件（L2）
-2. 将本周的关键事件、决策、和洞察提炼，追加到 ~/.vk-cowork/memory/insights/${new Date().toISOString().slice(0, 7)}.md（L1）
-3. 更新 ~/.vk-cowork/memory/insights/.abstract 索引
-完成后汇报压缩了哪些内容。`,
-                scheduleType: "daily",
-                dailyTime: "03:00",
-                dailyDays: [1], // 每周一凌晨 3 点
-            });
-            console.log("[Memory] Weekly L2→L1 compaction task registered.");
-        }
-    } catch (e) {
-        console.warn("[Memory] Failed to register compaction task:", e);
-    }
+    // Start process-level heartbeat loop (replaces scheduler-based heartbeat)
+    startHeartbeatLoop(handleClientEvent);
+    startMemoryCompactTimer(handleClientEvent);
 
     // Auto-connect all bots that were previously connected
     autoConnectBots(mainWindow);
@@ -262,8 +443,33 @@ app.on("ready", async () => {
     });
 
     // Handle client events
-    ipcMain.on("client-event", (_, event: ClientEvent) => {
+    ipcMain.on("client-event", (ipcEvent, event: ClientEvent) => {
+        if (event.type === "session.start") {
+            const isFromQuick = quickWindow && !quickWindow.isDestroyed() && ipcEvent.sender === quickWindow.webContents;
+            const isFromMain = !mainWindow.isDestroyed() && ipcEvent.sender === mainWindow.webContents;
+            console.log(`[IPC] session.start received — fromQuick=${isFromQuick}, fromMain=${isFromMain}, quickWindow=${!!quickWindow}, assistantId=${event.payload.assistantId}`);
+        }
+
         handleClientEvent(event);
+
+        // If session.start came from the quick window, auto-show main window
+        if (
+            event.type === "session.start" &&
+            quickWindow &&
+            !quickWindow.isDestroyed() &&
+            ipcEvent.sender === quickWindow.webContents
+        ) {
+            console.log("[QuickWindow] session.start from quick window, showing main");
+
+            // Tell the main window to prepare for the incoming session
+            if (!mainWindow.isDestroyed()) {
+                mainWindow.webContents.send("quick-window-session", {
+                    assistantId: event.payload.assistantId,
+                });
+            }
+
+            setTimeout(() => showMainWindowNow(), 150);
+        }
     });
 
     // Handle session title generation (simple fallback - can be enhanced later)
@@ -324,12 +530,16 @@ app.on("ready", async () => {
 
     ipcMainHandle("save-assistants-config", (_: any, config: AssistantsConfig) => {
         const result = saveAssistantsConfig(config);
-        // Sync provider/model/persona changes to already-running bots
         for (const assistant of config.assistants) {
             updateDingtalkBotConfig(assistant.id, {
                 provider: assistant.provider,
                 model: assistant.model,
                 persona: assistant.persona,
+                coreValues: assistant.coreValues,
+                relationship: assistant.relationship,
+                cognitiveStyle: assistant.cognitiveStyle,
+                operatingGuidelines: assistant.operatingGuidelines,
+                userContext: config.userContext,
                 assistantName: assistant.name,
                 defaultCwd: assistant.defaultCwd,
             });
@@ -457,8 +667,8 @@ app.on("ready", async () => {
     });
 
     // Handle API config validation
-    ipcMainHandle("validate-api-config", async (_: any, baseUrl?: string, authToken?: string) => {
-        return await validateApiConfig(baseUrl, authToken);
+    ipcMainHandle("validate-api-config", async (_: any, baseUrl?: string, authToken?: string, model?: string) => {
+        return await validateApiConfig(baseUrl, authToken, model);
     });
 
     // OpenAI Codex OAuth handlers
@@ -977,8 +1187,20 @@ app.on("ready", async () => {
     });
 });
 
-// Stop embedded API when app is quitting
+// Keep app alive when all windows are closed (quick window shortcut stays active)
+app.on("window-all-closed", () => {
+    // Don't quit — the global shortcut should remain active
+    // On macOS this is default behavior; on Windows/Linux we explicitly prevent quit
+});
+
+// Mark quitting so main window close handler allows actual destroy
+app.on("before-quit", () => {
+    isQuitting = true;
+});
+
+// Stop embedded API and unregister shortcuts when app is quitting
 app.on("will-quit", () => {
+    globalShortcut.unregisterAll();
     console.log("Stopping embedded API server...");
     stopEmbeddedApi();
 });
