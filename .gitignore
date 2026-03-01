@@ -36,4 +36,7 @@ src-api/target/
 
 .env
 
+# MCP config (contains access tokens)
+config/mcporter.json
+
 win-nsis/
