@@ -82,7 +82,15 @@ const PLATFORMS: PlatformMeta[] = [
 ];
 
 type FormState = {
-  telegram: { token: string; proxy: string };
+  telegram: {
+    token: string;
+    proxy: string;
+    dmPolicy: "open" | "allowlist";
+    groupPolicy: "open" | "allowlist";
+    allowFrom: string;
+    requireMention: boolean;
+    ownerUserIds: string;
+  };
   feishu: { appId: string; appSecret: string; domain: "feishu" | "lark" };
   wecom: { corpId: string; agentId: string; secret: string };
   discord: { token: string };
@@ -103,7 +111,7 @@ type FormState = {
 
 function buildDefaultForm(): FormState {
   return {
-    telegram: { token: "", proxy: "" },
+    telegram: { token: "", proxy: "", dmPolicy: "open", groupPolicy: "open", allowFrom: "", requireMention: true, ownerUserIds: "" },
     feishu: { appId: "", appSecret: "", domain: "feishu" },
     wecom: { corpId: "", agentId: "", secret: "" },
     discord: { token: "" },
@@ -127,7 +135,15 @@ function botsToForm(bots: Partial<Record<BotPlatformType, BotPlatformConfig>>): 
   const form = buildDefaultForm();
   const t = bots.telegram as any;
   if (t) {
-    form.telegram = { token: t.token ?? "", proxy: t.proxy ?? "" };
+    form.telegram = {
+      token: t.token ?? "",
+      proxy: t.proxy ?? "",
+      dmPolicy: t.dmPolicy ?? "open",
+      groupPolicy: t.groupPolicy ?? "open",
+      allowFrom: (t.allowFrom ?? []).join(","),
+      requireMention: t.requireMention ?? true,
+      ownerUserIds: (t.ownerUserIds ?? []).join(","),
+    };
   }
   const f = bots.feishu as any;
   if (f) {
@@ -166,7 +182,21 @@ function formToPlatformConfig(
   connected: boolean
 ): BotPlatformConfig {
   if (platform === "telegram") {
-    return { platform: "telegram", token: form.telegram.token, proxy: form.telegram.proxy || undefined, connected };
+    return {
+      platform: "telegram",
+      token: form.telegram.token,
+      proxy: form.telegram.proxy || undefined,
+      dmPolicy: form.telegram.dmPolicy,
+      groupPolicy: form.telegram.groupPolicy,
+      allowFrom: form.telegram.allowFrom
+        ? form.telegram.allowFrom.split(",").map((s) => s.trim()).filter(Boolean)
+        : undefined,
+      requireMention: form.telegram.requireMention,
+      ownerUserIds: form.telegram.ownerUserIds
+        ? form.telegram.ownerUserIds.split(",").map((s) => s.trim()).filter(Boolean)
+        : undefined,
+      connected,
+    };
   }
   if (platform === "feishu") {
     return { platform: "feishu", appId: form.feishu.appId, appSecret: form.feishu.appSecret, domain: form.feishu.domain, connected };
@@ -224,6 +254,7 @@ function FormField({
 // Platform-specific status indicator
 type DingtalkStatus = DingtalkBotStatus | null;
 type FeishuStatus = FeishuBotStatus | null;
+type TgStatus = TelegramBotStatus | null;
 
 export function BotConfigModal({
   open,
@@ -245,8 +276,10 @@ export function BotConfigModal({
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [dingtalkStatus, setDingtalkStatus] = useState<DingtalkStatus>(null);
   const [feishuStatus, setFeishuStatus] = useState<FeishuStatus>(null);
+  const [telegramStatus, setTelegramStatus] = useState<TgStatus>(null);
   const unsubRef = useRef<(() => void) | null>(null);
   const unsubFeishuRef = useRef<(() => void) | null>(null);
+  const unsubTelegramRef = useRef<(() => void) | null>(null);
 
   // Load initial status and subscribe to updates for real-time bot platforms
   useEffect(() => {
@@ -261,6 +294,11 @@ export function BotConfigModal({
       setDingtalkAdvanced(true);
     }
 
+    // Get current Telegram status
+    window.electron.getTelegramBotStatus(assistantId).then((r) => {
+      setTelegramStatus(r.status);
+    });
+
     // Get current DingTalk status
     window.electron.getDingtalkBotStatus(assistantId).then((r) => {
       setDingtalkStatus(r.status);
@@ -270,6 +308,19 @@ export function BotConfigModal({
     window.electron.getFeishuBotStatus(assistantId).then((r) => {
       setFeishuStatus(r.status);
     });
+
+    // Subscribe to Telegram live status updates
+    const unsubTg = window.electron.onTelegramBotStatus((id, status, detail) => {
+      if (id !== assistantId) return;
+      setTelegramStatus(status);
+      if (status === "error" && detail) {
+        setTestResult({ success: false, message: detail });
+      }
+      if (status === "connected") {
+        setTestResult({ success: true, message: "Telegram 连接成功，机器人正在监听消息" });
+      }
+    });
+    unsubTelegramRef.current = unsubTg;
 
     // Subscribe to DingTalk live status updates
     const unsubDt = window.electron.onDingtalkBotStatus((id, status, detail) => {
@@ -298,8 +349,10 @@ export function BotConfigModal({
     unsubFeishuRef.current = unsubFs;
 
     return () => {
+      unsubTg();
       unsubDt();
       unsubFs();
+      unsubTelegramRef.current = null;
       unsubRef.current = null;
       unsubFeishuRef.current = null;
     };
@@ -312,9 +365,11 @@ export function BotConfigModal({
   const currentPlatformCfg = bots[selectedPlatform];
   const isConnected = currentPlatformCfg?.connected ?? false;
 
-  // For DingTalk and Feishu, use real-time status; for others, use config flag
+  // For real-time platforms, use live status; for others, use config flag
   const effectiveStatus =
-    selectedPlatform === "dingtalk"
+    selectedPlatform === "telegram"
+      ? telegramStatus ?? (isConnected ? "connected" : "disconnected")
+      : selectedPlatform === "dingtalk"
       ? dingtalkStatus ?? (isConnected ? "connected" : "disconnected")
       : selectedPlatform === "feishu"
       ? feishuStatus ?? (isConnected ? "connected" : "disconnected")
@@ -348,8 +403,56 @@ export function BotConfigModal({
     }
   };
 
+  const [telegramAdvanced, setTelegramAdvanced] = useState(false);
+
   const handleToggleConnect = async () => {
-    if (selectedPlatform === "dingtalk") {
+    if (selectedPlatform === "telegram") {
+      if (effectiveStatus === "connected" || effectiveStatus === "connecting") {
+        await window.electron.stopTelegramBot(assistantId);
+        const platformCfg = formToPlatformConfig("telegram", form, false);
+        const nextBots = { ...bots, telegram: platformCfg };
+        setBots(nextBots);
+        onSave(nextBots);
+      } else {
+        const tg = form.telegram;
+        if (!tg.token) {
+          setTestResult({ success: false, message: "请先填写 Bot Token" });
+          return;
+        }
+        setConnecting(true);
+        setTestResult(null);
+        try {
+          const result = await window.electron.startTelegramBot({
+            token: tg.token,
+            proxy: tg.proxy || undefined,
+            assistantId,
+            assistantName,
+            provider,
+            model,
+            defaultCwd,
+            dmPolicy: tg.dmPolicy,
+            groupPolicy: tg.groupPolicy,
+            allowFrom: tg.allowFrom
+              ? tg.allowFrom.split(",").map((s) => s.trim()).filter(Boolean)
+              : undefined,
+            requireMention: tg.requireMention,
+            ownerUserIds: tg.ownerUserIds
+              ? tg.ownerUserIds.split(",").map((s) => s.trim()).filter(Boolean)
+              : undefined,
+          });
+          if (result.status === "error") {
+            setTestResult({ success: false, message: result.detail ?? "连接失败" });
+          } else {
+            const platformCfg = formToPlatformConfig("telegram", form, true);
+            const nextBots = { ...bots, telegram: platformCfg };
+            setBots(nextBots);
+            onSave(nextBots);
+          }
+        } finally {
+          setConnecting(false);
+        }
+      }
+    } else if (selectedPlatform === "dingtalk") {
       if (effectiveStatus === "connected" || effectiveStatus === "connecting") {
         await window.electron.stopDingtalkBot(assistantId);
         const platformCfg = formToPlatformConfig("dingtalk", form, false);
@@ -519,12 +622,20 @@ export function BotConfigModal({
                       {platform.icon}
                     </div>
                     <span className="text-sm font-medium leading-none flex-1">{platform.name}</span>
-                    {(platform.id === "dingtalk"
+                    {(platform.id === "telegram"
+                      ? telegramStatus === "connected"
+                      : platform.id === "dingtalk"
                       ? dingtalkStatus === "connected"
                       : platform.id === "feishu"
                       ? feishuStatus === "connected"
                       : connected) && (
                       <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                    )}
+                    {platform.id === "telegram" && telegramStatus === "connecting" && (
+                      <div className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
+                    )}
+                    {platform.id === "telegram" && telegramStatus === "error" && (
+                      <div className="h-1.5 w-1.5 rounded-full bg-red-500 flex-shrink-0" />
                     )}
                     {platform.id === "dingtalk" && dingtalkStatus === "connecting" && (
                       <div className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
@@ -609,6 +720,54 @@ export function BotConfigModal({
                           <input className={INPUT_CLASS} placeholder="http://127.0.0.1:7890"
                             value={form.telegram.proxy} onChange={(e) => updateTelegram({ proxy: e.target.value })} />
                         </FormField>
+
+                        {/* Advanced settings toggle */}
+                        <button
+                          type="button"
+                          onClick={() => setTelegramAdvanced((v) => !v)}
+                          className="flex items-center gap-1.5 text-xs text-muted hover:text-ink-700 transition-colors mt-1"
+                        >
+                          <svg viewBox="0 0 24 24" className={`h-3.5 w-3.5 transition-transform ${telegramAdvanced ? "rotate-90" : ""}`} fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M9 18l6-6-6-6" />
+                          </svg>
+                          高级设置（访问控制 / 群组行为）
+                        </button>
+
+                        {telegramAdvanced && (
+                          <div className="flex flex-col gap-3 pl-3 border-l-2 border-ink-900/8">
+                            <FormField label="群组中需要 @提及">
+                              <select className={INPUT_CLASS} value={form.telegram.requireMention ? "true" : "false"}
+                                onChange={(e) => updateTelegram({ requireMention: e.target.value === "true" })}>
+                                <option value="true">是 — 在群组中需要 @机器人 或回复才响应</option>
+                                <option value="false">否 — 响应群组中的所有消息</option>
+                              </select>
+                            </FormField>
+                            <FormField label="私聊策略 (dmPolicy)">
+                              <select className={INPUT_CLASS} value={form.telegram.dmPolicy}
+                                onChange={(e) => updateTelegram({ dmPolicy: e.target.value as "open" | "allowlist" })}>
+                                <option value="open">open — 任何人可私聊</option>
+                                <option value="allowlist">allowlist — 仅白名单用户</option>
+                              </select>
+                            </FormField>
+                            <FormField label="群聊策略 (groupPolicy)">
+                              <select className={INPUT_CLASS} value={form.telegram.groupPolicy}
+                                onChange={(e) => updateTelegram({ groupPolicy: e.target.value as "open" | "allowlist" })}>
+                                <option value="open">open — 任何群可使用</option>
+                                <option value="allowlist">allowlist — 仅白名单群</option>
+                              </select>
+                            </FormField>
+                            {(form.telegram.dmPolicy === "allowlist" || form.telegram.groupPolicy === "allowlist") && (
+                              <FormField label="白名单 ID" hint="（逗号分隔，Telegram User ID 或 Group Chat ID）">
+                                <input className={INPUT_CLASS} placeholder="123456789,-1001234567890,..."
+                                  value={form.telegram.allowFrom} onChange={(e) => updateTelegram({ allowFrom: e.target.value })} />
+                              </FormField>
+                            )}
+                            <FormField label="我的 User ID（主动推送）" hint="填入你的 Telegram User ID，机器人才能主动发消息给你。发 /myid 给机器人可获取。逗号分隔多人。">
+                              <input className={INPUT_CLASS} placeholder="123456789"
+                                value={form.telegram.ownerUserIds} onChange={(e) => updateTelegram({ ownerUserIds: e.target.value })} />
+                            </FormField>
+                          </div>
+                        )}
                       </>
                     )}
 

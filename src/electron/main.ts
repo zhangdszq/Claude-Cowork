@@ -6,11 +6,12 @@ import { handleClientEvent, sessions } from "./ipc-handlers.js";
 // Inject the shared SessionStore into bot modules so they use the same DB connection
 setSessionStore(sessions);
 setFeishuSessionStore(sessions);
+setTelegramSessionStore(sessions);
 import type { ClientEvent } from "./types.js";
 import "./libs/claude-settings.js";
 import { loadUserSettings, saveUserSettings, type UserSettings } from "./libs/user-settings.js";
 import { loadAssistantsConfig, saveAssistantsConfig, type AssistantsConfig } from "./libs/assistants-config.js";
-import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig, type DingtalkBotConfig } from "./libs/bot-config.js";
+import { loadBotConfig, saveBotConfig, testBotConnection, type BotPlatformConfig, type DingtalkBotConfig, type TelegramBotConfig } from "./libs/bot-config.js";
 import {
   startDingtalkBot,
   stopDingtalkBot,
@@ -32,6 +33,17 @@ import {
   setFeishuSessionStore,
   type FeishuBotOptions,
 } from "./libs/feishu-bot.js";
+import {
+  startTelegramBot,
+  stopTelegramBot,
+  getTelegramBotStatus,
+  updateTelegramBotConfig,
+  onTelegramBotStatusChange,
+  onTelegramSessionUpdate,
+  setTelegramSessionStore,
+  sendProactiveTelegramMessage,
+  type TelegramBotOptions,
+} from "./libs/telegram-bot.js";
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { runEnvironmentChecks, validateApiConfig } from "./libs/env-check.js";
 import { openAILogin, openAILogout, getOpenAIAuthStatus, ensureCodexAuthSync } from "./libs/openai-auth.js";
@@ -120,6 +132,42 @@ async function autoConnectBots(win: BrowserWindow): Promise<void> {
             } catch (err) {
                 console.error(`[AutoConnect] Failed to connect DingTalk bot for ${assistant.name}:`, err);
                 win.webContents.send("dingtalk-bot-status", {
+                    assistantId: assistant.id,
+                    status: "error",
+                    detail: err instanceof Error ? err.message : String(err),
+                });
+            }
+        }
+
+        // Telegram
+        const telegram = assistant.bots?.telegram as TelegramBotConfig | undefined;
+        if (telegram?.connected && telegram.token) {
+            console.log(`[AutoConnect] Starting Telegram bot for assistant: ${assistant.name}`);
+            try {
+                await startTelegramBot({
+                    token: telegram.token,
+                    proxy: telegram.proxy,
+                    assistantId: assistant.id,
+                    assistantName: assistant.name,
+                    persona: assistant.persona,
+                    coreValues: assistant.coreValues,
+                    relationship: assistant.relationship,
+                    cognitiveStyle: assistant.cognitiveStyle,
+                    operatingGuidelines: assistant.operatingGuidelines,
+                    userContext: config.userContext,
+                    provider: assistant.provider,
+                    model: assistant.model,
+                    defaultCwd: assistant.defaultCwd,
+                    dmPolicy: telegram.dmPolicy,
+                    groupPolicy: telegram.groupPolicy,
+                    allowFrom: telegram.allowFrom,
+                    requireMention: telegram.requireMention,
+                    ownerUserIds: telegram.ownerUserIds,
+                });
+                console.log(`[AutoConnect] Telegram bot connected for: ${assistant.name}`);
+            } catch (err) {
+                console.error(`[AutoConnect] Failed to connect Telegram bot for ${assistant.name}:`, err);
+                win.webContents.send("telegram-bot-status", {
                     assistantId: assistant.id,
                     status: "error",
                     detail: err instanceof Error ? err.message : String(err),
@@ -548,8 +596,21 @@ app.on("ready", async () => {
 
     ipcMainHandle("save-assistants-config", (_: any, config: AssistantsConfig) => {
         const result = saveAssistantsConfig(config);
+        const configUpdates = {
+            provider: undefined as "claude" | "codex" | undefined,
+            model: undefined as string | undefined,
+            persona: undefined as string | undefined,
+            coreValues: undefined as string | undefined,
+            relationship: undefined as string | undefined,
+            cognitiveStyle: undefined as string | undefined,
+            operatingGuidelines: undefined as string | undefined,
+            userContext: config.userContext,
+            assistantName: undefined as string | undefined,
+            defaultCwd: undefined as string | undefined,
+        };
         for (const assistant of config.assistants) {
-            updateDingtalkBotConfig(assistant.id, {
+            const updates = {
+                ...configUpdates,
                 provider: assistant.provider,
                 model: assistant.model,
                 persona: assistant.persona,
@@ -557,10 +618,11 @@ app.on("ready", async () => {
                 relationship: assistant.relationship,
                 cognitiveStyle: assistant.cognitiveStyle,
                 operatingGuidelines: assistant.operatingGuidelines,
-                userContext: config.userContext,
                 assistantName: assistant.name,
                 defaultCwd: assistant.defaultCwd,
-            });
+            };
+            updateDingtalkBotConfig(assistant.id, updates);
+            updateTelegramBotConfig(assistant.id, updates);
         }
         return result;
     });
@@ -652,6 +714,51 @@ app.on("ready", async () => {
 
     ipcMainHandle("get-feishu-bot-status", (_: any, assistantId: string) => {
         return { status: getFeishuBotStatus(assistantId) as FeishuBotStatus };
+    });
+
+    // Telegram bot lifecycle handlers
+    ipcMainHandle("start-telegram-bot", async (_: any, input: TelegramBotOptions) => {
+        try {
+            await startTelegramBot(input);
+            return { status: getTelegramBotStatus(input.assistantId) as TelegramBotStatus };
+        } catch (err) {
+            const detail = err instanceof Error ? err.message : String(err);
+            return { status: "error" as TelegramBotStatus, detail };
+        }
+    });
+
+    ipcMainHandle("stop-telegram-bot", (_: any, assistantId: string) => {
+        stopTelegramBot(assistantId);
+    });
+
+    ipcMainHandle("get-telegram-bot-status", (_: any, assistantId: string) => {
+        return { status: getTelegramBotStatus(assistantId) as TelegramBotStatus };
+    });
+
+    ipcMainHandle("send-proactive-telegram", async (_: any, input: { assistantId: string; text: string; targets?: string[] }) => {
+        return await sendProactiveTelegramMessage(input.assistantId, input.text, {
+            targets: input.targets,
+        });
+    });
+
+    // Forward Telegram bot status changes to renderer
+    onTelegramBotStatusChange((assistantId, status, detail) => {
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+            win.webContents.send("telegram-bot-status", { assistantId, status, detail });
+        }
+    });
+
+    // Forward Telegram session title/status updates to renderer
+    onTelegramSessionUpdate((sessionId, updates) => {
+        const event = JSON.stringify({
+            type: "session.status",
+            payload: { sessionId, status: updates.status ?? "idle", title: updates.title },
+        });
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+            win.webContents.send("server-event", event);
+        }
     });
 
     // Forward Feishu bot status changes to renderer

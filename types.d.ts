@@ -235,6 +235,16 @@ type TelegramBotConfig = {
     platform: "telegram";
     token: string;
     proxy?: string;
+    /** Private chat policy */
+    dmPolicy?: "open" | "allowlist";
+    /** Group chat policy */
+    groupPolicy?: "open" | "allowlist";
+    /** Allowlisted Telegram user IDs or group chat IDs */
+    allowFrom?: string[];
+    /** Require @mention in groups before responding (default: true) */
+    requireMention?: boolean;
+    /** Owner Telegram user IDs for proactive messaging */
+    ownerUserIds?: string[];
     connected: boolean;
 };
 
@@ -364,6 +374,40 @@ type DingtalkBotStatusResult = {
     detail?: string;
 };
 
+type TelegramBotStatus = "disconnected" | "connecting" | "connected" | "error";
+
+type StartTelegramBotInput = {
+    token: string;
+    proxy?: string;
+    assistantId: string;
+    assistantName: string;
+    persona?: string;
+    provider?: "claude" | "codex";
+    model?: string;
+    defaultCwd?: string;
+    dmPolicy?: "open" | "allowlist";
+    groupPolicy?: "open" | "allowlist";
+    allowFrom?: string[];
+    requireMention?: boolean;
+    ownerUserIds?: string[];
+};
+
+type TelegramBotStatusResult = {
+    status: TelegramBotStatus;
+    detail?: string;
+};
+
+type SendProactiveTelegramInput = {
+    assistantId: string;
+    text: string;
+    targets?: string[];
+};
+
+type SendProactiveTelegramResult = {
+    ok: boolean;
+    error?: string;
+};
+
 type FeishuBotStatus = "disconnected" | "connecting" | "connected" | "error";
 
 type StartFeishuBotInput = {
@@ -424,6 +468,10 @@ type EventPayloadMapping = {
     "send-proactive-dingtalk": SendProactiveDingtalkResult;
     "send-proactive-dingtalk-media": SendProactiveDingtalkResult;
     "get-dingtalk-last-seen": Array<{ target: string; isGroup: boolean; lastSeenAt: number }>;
+    "start-telegram-bot": TelegramBotStatusResult;
+    "stop-telegram-bot": void;
+    "get-telegram-bot-status": TelegramBotStatusResult;
+    "send-proactive-telegram": SendProactiveTelegramResult;
     "start-feishu-bot": FeishuBotStatusResult;
     "stop-feishu-bot": void;
     "get-feishu-bot-status": FeishuBotStatusResult;
@@ -504,6 +552,12 @@ interface Window {
         sendProactiveDingtalk: (input: SendProactiveDingtalkInput) => Promise<SendProactiveDingtalkResult>;
         sendProactiveMediaDingtalk: (input: SendProactiveMediaDingtalkInput) => Promise<SendProactiveDingtalkResult>;
         getDingtalkLastSeen: (assistantId: string) => Promise<Array<{ target: string; isGroup: boolean; lastSeenAt: number }>>;
+        // Telegram bot lifecycle
+        startTelegramBot: (input: StartTelegramBotInput) => Promise<TelegramBotStatusResult>;
+        stopTelegramBot: (assistantId: string) => Promise<void>;
+        getTelegramBotStatus: (assistantId: string) => Promise<TelegramBotStatusResult>;
+        onTelegramBotStatus: (cb: (assistantId: string, status: TelegramBotStatus, detail?: string) => void) => UnsubscribeFunction;
+        sendProactiveTelegram: (input: SendProactiveTelegramInput) => Promise<SendProactiveTelegramResult>;
         // Feishu bot lifecycle
         startFeishuBot: (input: StartFeishuBotInput) => Promise<FeishuBotStatusResult>;
         stopFeishuBot: (assistantId: string) => Promise<void>;

@@ -107,6 +107,22 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("send-proactive-dingtalk-media", input),
     getDingtalkLastSeen: (assistantId: string) =>
         ipcInvoke("get-dingtalk-last-seen", assistantId),
+    // Telegram bot lifecycle
+    startTelegramBot: (input: StartTelegramBotInput) =>
+        ipcInvoke("start-telegram-bot", input),
+    stopTelegramBot: (assistantId: string) =>
+        ipcInvoke("stop-telegram-bot", assistantId),
+    getTelegramBotStatus: (assistantId: string) =>
+        ipcInvoke("get-telegram-bot-status", assistantId),
+    sendProactiveTelegram: (input: SendProactiveTelegramInput) =>
+        ipcInvoke("send-proactive-telegram", input),
+    onTelegramBotStatus: (cb: (assistantId: string, status: TelegramBotStatus, detail?: string) => void) => {
+        const handler = (_: Electron.IpcRendererEvent, payload: { assistantId: string; status: TelegramBotStatus; detail?: string }) => {
+            cb(payload.assistantId, payload.status, payload.detail);
+        };
+        electron.ipcRenderer.on("telegram-bot-status", handler);
+        return () => electron.ipcRenderer.off("telegram-bot-status", handler);
+    },
     // Feishu bot lifecycle
     startFeishuBot: (input: StartFeishuBotInput) =>
         ipcInvoke("start-feishu-bot", input),

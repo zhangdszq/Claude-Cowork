@@ -8,6 +8,16 @@ export type TelegramBotConfig = {
   platform: "telegram";
   token: string;
   proxy?: string;
+  /** Private chat policy */
+  dmPolicy?: "open" | "allowlist";
+  /** Group chat policy */
+  groupPolicy?: "open" | "allowlist";
+  /** Allowlisted Telegram user IDs or group chat IDs */
+  allowFrom?: string[];
+  /** Require @mention in groups before responding (default: true) */
+  requireMention?: boolean;
+  /** Owner Telegram user IDs for proactive messaging */
+  ownerUserIds?: string[];
   connected: boolean;
 };
 
