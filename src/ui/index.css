@@ -117,3 +117,9 @@ code, pre, textarea.mono, input.mono {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
   30% { transform: translateY(-3px); opacity: 1; }
 }
+
+/* Splash screen progress ring */
+@keyframes splash-progress {
+  from { stroke-dashoffset: 50.265; }
+  to   { stroke-dashoffset: 0; }
+}

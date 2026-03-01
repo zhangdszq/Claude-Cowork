@@ -10,6 +10,7 @@ import { MessageCard, ProcessGroup } from "./components/EventCard";
 import { MessageSkeleton } from "./components/MessageSkeleton";
 import { McpSkillModal } from "./components/McpSkillModal";
 import { OnboardingWizard } from "./components/OnboardingWizard";
+import { SplashScreen } from "./components/SplashScreen";
 import { DecisionPanel } from "./components/DecisionPanel";
 import { ChapterSelector, parseChapters, isChapterSelectionText } from "./components/ChapterSelector";
 import { WorkspacePicker } from "./components/WorkspacePicker";
@@ -18,6 +19,7 @@ import MDContent from "./render/markdown";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 
 const ONBOARDING_COMPLETE_KEY = "vk-cowork-onboarding-complete";
+const SPLASH_SEEN_KEY = "vk-cowork-splash-seen";
 const ASSISTANT_CWDS_KEY = "vk-cowork-assistant-cwds";
 
 function ThinkingDots() {
@@ -202,6 +204,11 @@ function App() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isUserScrolledUpRef = useRef(false);
   
+  // Splash screen state — shown once per fresh install, after onboarding
+  const [showSplash, setShowSplash] = useState(() => {
+    return !localStorage.getItem(SPLASH_SEEN_KEY);
+  });
+
   // Onboarding state
   const [showOnboarding, setShowOnboarding] = useState(() => {
     return !localStorage.getItem(ONBOARDING_COMPLETE_KEY);
@@ -228,6 +235,11 @@ function App() {
   const handleOnboardingComplete = useCallback(() => {
     localStorage.setItem(ONBOARDING_COMPLETE_KEY, "true");
     setShowOnboarding(false);
+  }, []);
+
+  const handleSplashComplete = useCallback(() => {
+    localStorage.setItem(SPLASH_SEEN_KEY, "true");
+    setShowSplash(false);
   }, []);
   
   // 使用 Map 按 sessionId 存储每个 session 的 partial message 状态
@@ -826,6 +838,11 @@ function App() {
     return <OnboardingWizard onComplete={handleOnboardingComplete} initialStep={onboardingInitialStep} />;
   }
 
+  // Show splash screen on first launch (after onboarding)
+  if (showSplash) {
+    return <SplashScreen onComplete={handleSplashComplete} />;
+  }
+
   return (
     <div className="flex h-screen bg-surface-cream">
       <Sidebar
@@ -840,6 +857,7 @@ function App() {
         taskPanelVisible={taskPanelVisible}
         onToggleTaskPanel={handleToggleTaskPanel}
         onEffectiveWidthChange={setEffectiveSidebarWidth}
+        onShowSplash={() => setShowSplash(true)}
       />
 
       <main

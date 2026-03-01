@@ -28,6 +28,7 @@ interface SidebarProps {
   taskPanelVisible: boolean;
   onToggleTaskPanel: () => void;
   onEffectiveWidthChange?: (width: number) => void;
+  onShowSplash?: () => void;
 }
 
 export function Sidebar({
@@ -41,6 +42,7 @@ export function Sidebar({
   taskPanelVisible,
   onToggleTaskPanel,
   onEffectiveWidthChange,
+  onShowSplash,
 }: SidebarProps) {
   const sessions = useAppStore((state) => state.sessions);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
@@ -375,7 +377,7 @@ export function Sidebar({
         )}
       </div>
 
-      <SettingsModal open={showSettings} onOpenChange={setShowSettings} />
+      <SettingsModal open={showSettings} onOpenChange={setShowSettings} onShowSplash={onShowSplash} />
 
       <AssistantManagerModal
         open={showAssistantManager}

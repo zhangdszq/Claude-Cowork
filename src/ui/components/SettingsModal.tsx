@@ -4,9 +4,10 @@ import * as Dialog from "@radix-ui/react-dialog";
 interface SettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onShowSplash?: () => void;
 }
 
-type SectionId = "personalize" | "api" | "proxy" | "openai" | "memory" | "shortcut";
+type SectionId = "personalize" | "api" | "proxy" | "openai" | "memory" | "shortcut" | "debug";
 
 interface NavItem {
   id: SectionId;
@@ -74,9 +75,19 @@ const NAV_ITEMS: NavItem[] = [
       </svg>
     ),
   },
+  {
+    id: "debug",
+    label: "调试",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v8a6 6 0 0 0 12 0v-8a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z" />
+        <path d="M9 14h6M9 18h6M2 10h4M18 10h4M2 14h4M18 14h4" />
+      </svg>
+    ),
+  },
 ];
 
-export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
+export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<SectionId>("personalize");
 
   // Personalization
@@ -812,6 +823,51 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                       修改后请点击"保存配置"生效。
                     </p>
                   </div>
+                </div>
+              )}
+
+              {/* Debug */}
+              {activeSection === "debug" && (
+                <div className="grid gap-4">
+                  <p className="text-[13px] text-muted">开发调试工具</p>
+
+                  <div className="rounded-xl border border-ink-900/10 bg-white/70 p-4">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent/10 flex-shrink-0">
+                        <svg viewBox="0 0 24 24" className="h-5 w-5 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
+                          <rect x="2" y="3" width="20" height="14" rx="2" />
+                          <path d="M8 21h8M12 17v4" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-ink-800">开屏页预览</p>
+                        <p className="text-[11px] text-muted-light">重新展示冷启动开屏引导页</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenChange(false);
+                        setTimeout(() => onShowSplash?.(), 300);
+                      }}
+                      className="w-full rounded-xl px-4 py-2.5 text-[13px] font-medium text-white shadow-soft transition-colors"
+                      style={{ background: '#2C5F2F' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#3A7A3D'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#2C5F2F'; }}
+                    >
+                      显示开屏页
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      localStorage.removeItem("vk-cowork-splash-seen");
+                    }}
+                    className="text-left text-xs text-muted hover:text-ink-700 transition-colors"
+                  >
+                    重置开屏页状态（下次启动时重新显示）
+                  </button>
                 </div>
               )}
 
