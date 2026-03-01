@@ -900,7 +900,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
       {/* Attachments Preview */}
       {attachments.length > 0 && (
         <div className="mx-3 mt-3">
-          <div className="flex flex-wrap gap-2 max-h-44 overflow-y-auto pr-1">
+          <div className="flex flex-wrap gap-2 max-h-44 overflow-y-auto pt-2 pr-2">
             {attachments.map((att) => (
               att.isImage ? (
                 /* Image: thumbnail card */
@@ -1144,7 +1144,7 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
           </div>
 
           {/* Greeting */}
-          <h1 className="text-[26px] font-medium text-ink-900 tracking-[-0.01em] text-center">
+          <h1 className="text-2xl font-normal text-ink-900 tracking-[-0.01em] text-center">
             {getGreeting()}
           </h1>
 

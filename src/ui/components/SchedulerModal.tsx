@@ -335,7 +335,7 @@ export function SchedulerModal({ open, onOpenChange }: SchedulerModalProps) {
                 </button>
               )}
               <Dialog.Title className="text-base font-semibold text-ink-800">
-                {mode === "calendar" ? "定时任务" : mode === "create" ? "新建任务" : "编辑任务"}
+                {mode === "calendar" ? "日历" : mode === "create" ? "新建任务" : "编辑任务"}
               </Dialog.Title>
             </div>
             <div className="flex items-center gap-2">

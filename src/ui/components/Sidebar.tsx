@@ -29,6 +29,7 @@ interface SidebarProps {
   onToggleTaskPanel: () => void;
   onEffectiveWidthChange?: (width: number) => void;
   onShowSplash?: () => void;
+  titleBarHeight?: number;
 }
 
 export function Sidebar({
@@ -43,6 +44,7 @@ export function Sidebar({
   onToggleTaskPanel,
   onEffectiveWidthChange,
   onShowSplash,
+  titleBarHeight = 0,
 }: SidebarProps) {
   const sessions = useAppStore((state) => state.sessions);
   const activeSessionId = useAppStore((state) => state.activeSessionId);
@@ -119,8 +121,8 @@ export function Sidebar({
     // 切换助理时从 localStorage 恢复该助理的工作区（没有则清空）
     const savedCwd = loadAssistantCwdLocal(assistant.id);
     setCwd(savedCwd);
-    // 自动定位到该助理最新的一个会话（sessionList 已按 updatedAt 降序排列）
-    const latestSession = sessionList.find((s) => s.assistantId === assistant.id);
+    // 自动定位到该助理最新的一个非后台会话（sessionList 已按 updatedAt 降序排列）
+    const latestSession = sessionList.find((s) => s.assistantId === assistant.id && !s.background);
     setActiveSessionId(latestSession?.id ?? null);
     // 切换助理时自动折叠历史任务面板
     if (taskPanelVisible) {
@@ -140,21 +142,23 @@ export function Sidebar({
 
   return (
     <aside
-      className="fixed inset-y-0 left-0 flex h-full flex-col border-r border-ink-900/5 bg-[#FAF9F6] pb-4 pt-12 overflow-hidden"
-      style={{ width: `${effectiveWidth}px`, transition: "width 0.2s ease" }}
+      className={`fixed left-0 bottom-0 flex flex-col border-r border-ink-900/5 bg-[#FAF9F6] pb-4 overflow-hidden ${titleBarHeight > 0 ? "pt-2" : "pt-8"}`}
+      style={{ top: `${titleBarHeight}px`, width: `${effectiveWidth}px`, transition: "width 0.2s ease, top 0.15s ease" }}
     >
-      <div
-        className="absolute top-0 left-0 right-0 h-12"
-        style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
-      />
+      {titleBarHeight === 0 && (
+        <div
+          className="absolute top-0 left-0 right-0 h-8"
+          style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
+        />
+      )}
 
       <div className="flex min-h-0 flex-1">
         <div
-          className="flex shrink-0 flex-col border-r border-ink-900/5 py-3 overflow-hidden"
+          className="flex shrink-0 flex-col border-r border-ink-900/5 pb-3 overflow-hidden"
           style={{ width: `${ASSISTANT_PANEL_WIDTH}px` }}
         >
           {/* Assistant list */}
-          <div className="flex flex-col gap-1 px-2 pt-3">
+          <div className="flex flex-col gap-1 px-2">
             {assistants.length === 0 && (
               <div className="mt-3 text-[10px] text-muted text-center">No AI</div>
             )}
@@ -170,13 +174,23 @@ export function Sidebar({
                   }`}
                   onClick={() => handleSelectAssistant(assistant)}
                 >
-                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold ${
-                    selected
-                      ? "border-accent/30 bg-accent/15 text-accent"
-                      : "border-ink-900/10 bg-surface text-ink-600"
-                  }`}>
-                    {getAssistantInitial(assistant.name)}
-                  </span>
+                  {assistant.avatar ? (
+                    <img
+                      src={assistant.avatar}
+                      alt={assistant.name}
+                      className={`h-8 w-8 shrink-0 rounded-full object-cover border ${
+                        selected ? "border-accent/30" : "border-ink-900/10"
+                      }`}
+                    />
+                  ) : (
+                    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold ${
+                      selected
+                        ? "border-accent/30 bg-accent/15 text-accent"
+                        : "border-ink-900/10 bg-surface text-ink-600"
+                    }`}>
+                      {getAssistantInitial(assistant.name)}
+                    </span>
+                  )}
                   <span className="truncate text-[12px] font-medium leading-snug flex-1 min-w-0">
                     {assistant.name}
                   </span>
@@ -223,34 +237,11 @@ export function Sidebar({
               className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
             >
               <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 6v6l4 2" />
+                <rect x="3" y="4" width="18" height="18" rx="2" />
+                <path d="M16 2v4M8 2v4M3 10h18" />
               </svg>
-              <span className="text-[11px] font-medium">定时任务</span>
+              <span className="text-[11px] font-medium">日历</span>
             </button>
-            {onOpenSkill && (
-              <button
-                onClick={onOpenSkill}
-                className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-              >
-                <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                </svg>
-                <span className="text-[11px] font-medium">Skills</span>
-              </button>
-            )}
-            {onOpenMcp && (
-              <button
-                onClick={onOpenMcp}
-                className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
-              >
-                <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M12 1v6m0 6v10M1 12h6m6 0h10" />
-                </svg>
-                <span className="text-[11px] font-medium">MCP</span>
-              </button>
-            )}
             <button
               onClick={() => setShowSettings(true)}
               className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-ink-700"
@@ -266,7 +257,7 @@ export function Sidebar({
 
         {taskPanelVisible && (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-2.5 min-w-[200px]">
-          <div className="pb-2 pt-3">
+          <div className="pb-2 pt-0.5">
             <div className="truncate px-1 text-[11px] font-semibold uppercase tracking-wider text-muted-light">
               历史任务
             </div>
@@ -295,7 +286,7 @@ export function Sidebar({
                 key={session.id}
                 className={`group relative cursor-pointer rounded-xl px-3 py-2.5 text-left transition-all ${
                   isActive
-                    ? "bg-accent/8 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.06)]"
+                    ? "bg-accent/8 shadow-[inset_0_0_0_1px_rgba(44,95,47,0.12)]"
                     : "hover:bg-ink-900/4"
                 }`}
                 onClick={() => setActiveSessionId(session.id)}
@@ -383,6 +374,8 @@ export function Sidebar({
         open={showAssistantManager}
         onOpenChange={setShowAssistantManager}
         onAssistantsChanged={loadAssistants}
+        onOpenSkill={onOpenSkill}
+        onOpenMcp={onOpenMcp}
       />
 
       <SchedulerModal open={showScheduler} onOpenChange={setShowScheduler} />

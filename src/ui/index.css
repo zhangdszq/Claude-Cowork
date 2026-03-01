@@ -20,11 +20,16 @@
   --color-muted: #6B6B66;
   --color-muted-light: #9B9B96;
   
-  /* Accent colors (Claude orange) */
-  --color-accent: #D97757;
-  --color-accent-hover: #CC785C;
-  --color-accent-light: #F5D0C5;
-  --color-accent-subtle: #FDF4F1;
+  /* Accent colors (forest green) */
+  --color-accent: #2C5F2F;
+  --color-accent-hover: #3A7A3D;
+  --color-accent-light: #D4E8D5;
+  --color-accent-subtle: #F0F7F0;
+  
+  /* Alias for sidebar (same as accent) */
+  --color-green: #2C5F2F;
+  --color-green-hover: #3A7A3D;
+  --color-green-light: #D4E8D5;
   
   /* Status colors */
   --color-error: #DC2626;
@@ -122,4 +127,10 @@ code, pre, textarea.mono, input.mono {
 @keyframes splash-progress {
   from { stroke-dashoffset: 50.265; }
   to   { stroke-dashoffset: 0; }
+}
+
+/* Login screen slide-in animation */
+@keyframes login-slide-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }

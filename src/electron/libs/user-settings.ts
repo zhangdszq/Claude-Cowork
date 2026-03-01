@@ -9,6 +9,19 @@ export interface OpenAITokens {
   expiresAt: number; // timestamp in ms
 }
 
+export interface GoogleTokens {
+  accessToken: string;
+  refreshToken: string;
+  idToken?: string;
+  expiresAt: number;
+}
+
+export interface GoogleUser {
+  email: string;
+  name?: string;
+  picture?: string;
+}
+
 export interface UserSettings {
   anthropicBaseUrl?: string;
   anthropicAuthToken?: string;
@@ -26,6 +39,9 @@ export interface UserSettings {
   globalPrompt?: string;
   // Quick window global shortcut (Electron accelerator format, e.g. "Alt+Space")
   quickWindowShortcut?: string;
+  // Google OAuth
+  googleTokens?: GoogleTokens;
+  googleUser?: GoogleUser;
 }
 
 const SETTINGS_FILE = join(app.getPath("userData"), "user-settings.json");

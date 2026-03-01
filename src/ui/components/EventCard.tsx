@@ -176,7 +176,7 @@ const ToolResult = ({ messageContent }: { messageContent: ToolResultContent }) =
 
   return (
     <div className="flex flex-col mt-4">
-      <div className="header text-accent">Output</div>
+      <div className="text-[13px] font-semibold text-accent">Output</div>
       <div className="mt-2 rounded-xl bg-surface-tertiary p-3">
         <pre className={`text-sm whitespace-pre-wrap break-words font-mono ${isError ? "text-red-500" : "text-ink-700"}`}>
           {isMarkdownContent ? <MDContent text={visibleContent} /> : visibleContent}
@@ -315,7 +315,7 @@ const AssistantBlockCard = ({
 
   return (
     <div className="flex flex-col mt-4">
-      <div className="header text-accent flex items-center gap-2">
+      <div className="text-[13px] font-semibold text-accent flex items-center gap-2">
         <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
         {title}
       </div>
@@ -541,7 +541,7 @@ const UserMessageCard = ({ message, showIndicator = false, userName = "User" }: 
   const { attachments, text } = parseUserPrompt(message.prompt);
   return (
     <div className="flex flex-col mt-4">
-      <div className="header text-accent flex items-center gap-2">
+      <div className="text-[13px] font-semibold text-accent flex items-center gap-2">
         <StatusDot variant="success" isActive={showIndicator} isVisible={showIndicator} />
         {userName}
       </div>

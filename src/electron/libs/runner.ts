@@ -134,7 +134,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
           permissionMode: "bypassPermissions",
           includePartialMessages: true,
           allowDangerouslySkipPermissions: true,
-          maxTurns: 30,
+          maxTurns: 300,
           // Load user settings to enable skills from ~/.claude/skills/
           settingSources: ["user", "project", "local"],
           mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd }) },

@@ -2,6 +2,12 @@
   "mcpServers": {
     "exa": {
       "baseUrl": "https://mcp.exa.ai/mcp"
+    },
+    "dingtalk-ai-table": {
+      "baseUrl": "https://mcp-gw.dingtalk.com/server/cb6d380f4881069aeb9c8edef95e410b379067e697ef4eeb01bfec42c3dedfb5?key=7a58fa86685753abd2e7a7d80ba9b63f"
+    },
+    "dingtalk-contacts": {
+      "baseUrl": "https://mcp-gw.dingtalk.com/server/8f465f410ec2ca08fc18913e8b07c0fb03d4f88ad97ddd7b5a5f16d376a8f6f8?key=fcb270548ac6536e81116e934ec2bcd1"
     }
   },
   "imports": []

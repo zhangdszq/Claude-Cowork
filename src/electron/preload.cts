@@ -135,6 +135,13 @@ electron.contextBridge.exposeInMainWorld("electron", {
         ipcInvoke("openai-logout"),
     openaiAuthStatus: () => 
         ipcInvoke("openai-auth-status"),
+    // Google OAuth
+    googleLogin: () =>
+        ipcInvoke("google-login"),
+    googleLogout: () =>
+        ipcInvoke("google-logout"),
+    googleAuthStatus: () =>
+        ipcInvoke("google-auth-status"),
     // Memory
     memoryRead: (target: string, date?: string) => 
         ipcInvoke("memory-read", target, date),
@@ -187,6 +194,17 @@ electron.contextBridge.exposeInMainWorld("electron", {
         electron.ipcRenderer.on("quick-window-session", cb);
         return () => electron.ipcRenderer.off("quick-window-session", cb);
     },
+    // Window controls (custom title bar)
+    windowMinimize: () => electron.ipcRenderer.send("window-minimize"),
+    windowMaximize: () => electron.ipcRenderer.send("window-maximize"),
+    windowClose: () => electron.ipcRenderer.send("window-close"),
+    windowIsMaximized: () => electron.ipcRenderer.invoke("window-is-maximized") as Promise<boolean>,
+    onWindowMaximizedChange: (callback: (isMaximized: boolean) => void) => {
+        const cb = (_: Electron.IpcRendererEvent, val: boolean) => callback(val);
+        electron.ipcRenderer.on("window-maximized-change", cb);
+        return () => electron.ipcRenderer.off("window-maximized-change", cb);
+    },
+    getPlatform: () => process.platform,
 } satisfies Window['electron'])
 
 function ipcInvoke<Key extends keyof EventPayloadMapping>(key: Key, ...args: any[]): Promise<EventPayloadMapping[Key]> {

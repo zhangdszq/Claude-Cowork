@@ -28,6 +28,34 @@ type OpenAILoginResult = {
     error?: string;
 }
 
+type GoogleTokens = {
+    accessToken: string;
+    refreshToken: string;
+    idToken?: string;
+    expiresAt: number;
+}
+
+type GoogleUser = {
+    email: string;
+    name?: string;
+    picture?: string;
+}
+
+type GoogleAuthStatus = {
+    loggedIn: boolean;
+    email?: string;
+    name?: string;
+    picture?: string;
+    expiresAt?: number;
+}
+
+type GoogleLoginResult = {
+    success: boolean;
+    email?: string;
+    name?: string;
+    error?: string;
+}
+
 type UserSettings = {
     anthropicBaseUrl?: string;
     anthropicAuthToken?: string;
@@ -40,6 +68,8 @@ type UserSettings = {
     workDescription?: string;
     globalPrompt?: string;
     quickWindowShortcut?: string;
+    googleTokens?: GoogleTokens;
+    googleUser?: GoogleUser;
 }
 
 type ScheduledTaskHookFilter = {
@@ -133,6 +163,7 @@ type SkillInfo = {
 type AssistantConfig = {
     id: string;
     name: string;
+    avatar?: string;
     provider: "claude" | "codex";
     model?: string;
     skillNames?: string[];
@@ -401,6 +432,10 @@ type EventPayloadMapping = {
     "openai-login": OpenAILoginResult;
     "openai-logout": { success: boolean };
     "openai-auth-status": OpenAIAuthStatus;
+    // Google OAuth
+    "google-login": GoogleLoginResult;
+    "google-logout": { success: boolean };
+    "google-auth-status": GoogleAuthStatus;
     // Memory
     "memory-read": MemoryReadResult;
     "memory-write": MemoryWriteResult;
@@ -478,6 +513,10 @@ interface Window {
         openaiLogin: () => Promise<OpenAILoginResult>;
         openaiLogout: () => Promise<{ success: boolean }>;
         openaiAuthStatus: () => Promise<OpenAIAuthStatus>;
+        // Google OAuth
+        googleLogin: () => Promise<GoogleLoginResult>;
+        googleLogout: () => Promise<{ success: boolean }>;
+        googleAuthStatus: () => Promise<GoogleAuthStatus>;
         // Memory
         memoryRead: (target: string, date?: string) => Promise<MemoryReadResult>;
         memoryWrite: (target: string, content: string, date?: string) => Promise<MemoryWriteResult>;
@@ -499,5 +538,12 @@ interface Window {
         showMainWindow: () => void;
         onQuickWindowShow: (callback: () => void) => UnsubscribeFunction;
         onQuickWindowSession: (callback: (data: { assistantId?: string }) => void) => UnsubscribeFunction;
+        // Window controls (custom title bar)
+        windowMinimize: () => void;
+        windowMaximize: () => void;
+        windowClose: () => void;
+        windowIsMaximized: () => Promise<boolean>;
+        onWindowMaximizedChange: (callback: (isMaximized: boolean) => void) => UnsubscribeFunction;
+        getPlatform: () => string;
     }
 }

@@ -7,7 +7,7 @@ interface SettingsModalProps {
   onShowSplash?: () => void;
 }
 
-type SectionId = "personalize" | "api" | "proxy" | "openai" | "memory" | "shortcut" | "debug";
+type SectionId = "personalize" | "api" | "proxy" | "openai" | "google" | "memory" | "shortcut" | "debug";
 
 interface NavItem {
   id: SectionId;
@@ -23,6 +23,15 @@ const NAV_ITEMS: NavItem[] = [
       <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
         <circle cx="12" cy="7" r="4" />
+      </svg>
+    ),
+  },
+  {
+    id: "memory",
+    label: "记忆",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
       </svg>
     ),
   },
@@ -57,21 +66,23 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
-    id: "memory",
-    label: "记忆",
-    icon: (
-      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-      </svg>
-    ),
-  },
-  {
     id: "shortcut",
     label: "快捷键",
     icon: (
       <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
         <rect x="2" y="4" width="20" height="16" rx="2" />
         <path d="M6 8h4M14 8h4M8 12h8M10 16h4" />
+      </svg>
+    ),
+  },
+  {
+    id: "google",
+    label: "账号",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+        <polyline points="10 17 15 12 10 7" />
+        <line x1="15" y1="12" x2="3" y2="12" />
       </svg>
     ),
   },
@@ -113,6 +124,15 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
   const [openaiLoggingIn, setOpenaiLoggingIn] = useState(false);
   const [openaiError, setOpenaiError] = useState<string | null>(null);
 
+  // Google auth state
+  const [googleLoggedIn, setGoogleLoggedIn] = useState(false);
+  const [googleEmail, setGoogleEmail] = useState<string | undefined>();
+  const [googleName, setGoogleName] = useState<string | undefined>();
+  const [googlePicture, setGooglePicture] = useState<string | undefined>();
+  const [avatarError, setAvatarError] = useState(false);
+  const [googleLoggingIn, setGoogleLoggingIn] = useState(false);
+  const [googleLoginError, setGoogleLoginError] = useState<string | null>(null);
+
   // Memory state
   const [memoryDir, setMemoryDir] = useState("");
 
@@ -133,6 +153,19 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
       setOpenaiLoggedIn(status.loggedIn);
       setOpenaiEmail(status.email);
       setOpenaiExpiresAt(status.expiresAt);
+    } catch {
+      // Ignore
+    }
+  };
+
+  const loadGoogleStatus = async () => {
+    try {
+      const status = await window.electron.googleAuthStatus();
+      setGoogleLoggedIn(status.loggedIn);
+      setGoogleEmail(status.email);
+      setGoogleName(status.name);
+      setGooglePicture(status.picture);
+      setAvatarError(false);
     } catch {
       // Ignore
     }
@@ -165,6 +198,7 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
         setUserContext(config.userContext ?? "");
       });
       loadOpenAIStatus();
+      loadGoogleStatus();
       loadMemoryDir();
       setOpenaiError(null);
       window.electron.getQuickWindowShortcut().then(setQuickShortcut).catch(() => {});
@@ -647,6 +681,122 @@ export function SettingsModal({ open, onOpenChange, onShowSplash }: SettingsModa
                         </p>
                       </div>
                     </>
+                  )}
+                </div>
+              )}
+
+              {/* Google Account */}
+              {activeSection === "google" && (
+                <div>
+                  {googleLoggedIn ? (
+                    <div>
+                      {/* Profile card */}
+                      <div className="flex items-center gap-4 rounded-xl bg-white border border-ink-900/6 p-4 mb-5">
+                        {googlePicture && !avatarError ? (
+                          <img
+                            src={googlePicture}
+                            alt=""
+                            className="h-14 w-14 rounded-full object-cover ring-2 ring-white shadow-soft shrink-0"
+                            referrerPolicy="no-referrer"
+                            onError={() => setAvatarError(true)}
+                          />
+                        ) : (
+                          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent/10 ring-2 ring-white shadow-soft shrink-0">
+                            <span className="text-xl font-semibold text-accent">
+                              {(googleName || googleEmail || "U").charAt(0).toUpperCase()}
+                            </span>
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[15px] font-semibold text-ink-900 truncate">{googleName || "—"}</p>
+                          <p className="text-[13px] text-ink-500 mt-0.5 truncate">{googleEmail || "—"}</p>
+                        </div>
+                      </div>
+
+                      {/* Info rows */}
+                      <div className="rounded-xl bg-white border border-ink-900/6 divide-y divide-ink-900/5 mb-5">
+                        <div className="flex items-center justify-between px-4 py-3">
+                          <span className="text-[13px] text-ink-500">昵称</span>
+                          <span className="text-[13px] font-medium text-ink-800">{googleName || "—"}</span>
+                        </div>
+                        <div className="flex items-center justify-between px-4 py-3">
+                          <span className="text-[13px] text-ink-500">邮箱</span>
+                          <span className="text-[13px] text-ink-600">{googleEmail || "—"}</span>
+                        </div>
+                        <div className="flex items-center justify-between px-4 py-3">
+                          <span className="text-[13px] text-ink-500">登录方式</span>
+                          <div className="flex items-center gap-1.5">
+                            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5">
+                              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
+                              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                            </svg>
+                            <span className="text-[13px] text-ink-600">Google</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Logout */}
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await window.electron.googleLogout();
+                          setGoogleLoggedIn(false);
+                          setGoogleEmail(undefined);
+                          setGoogleName(undefined);
+                          setGooglePicture(undefined);
+                        }}
+                        className="rounded-xl border border-error/20 bg-white px-4 py-2 text-[13px] font-medium text-error/80 hover:bg-error/5 hover:text-error transition-colors"
+                      >
+                        退出登录
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="py-12 flex flex-col items-center gap-5">
+                      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-surface-tertiary">
+                        <svg viewBox="0 0 24 24" className="h-6 w-6 text-ink-400" fill="none" stroke="currentColor" strokeWidth="1.5">
+                          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                          <circle cx="12" cy="7" r="4" />
+                        </svg>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-[13px] font-medium text-ink-700">未登录</p>
+                        <p className="text-[12px] text-ink-400 mt-1">登录后可同步你的偏好设置</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setGoogleLoggingIn(true);
+                          setGoogleLoginError(null);
+                          try {
+                            const result = await window.electron.googleLogin();
+                            if (result.success) {
+                              await loadGoogleStatus();
+                            } else {
+                              setGoogleLoginError(result.error || "登录失败");
+                            }
+                          } catch {
+                            setGoogleLoginError("登录出错");
+                          } finally {
+                            setGoogleLoggingIn(false);
+                          }
+                        }}
+                        disabled={googleLoggingIn}
+                        className="flex items-center gap-2.5 rounded-xl border border-ink-900/10 bg-white px-5 py-2.5 text-[13px] font-medium text-ink-800 shadow-soft hover:shadow-card hover:border-ink-900/15 transition-all disabled:opacity-50"
+                      >
+                        <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0">
+                          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
+                          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                        </svg>
+                        {googleLoggingIn ? "正在登录…" : "使用 Google 登录"}
+                      </button>
+                      {googleLoginError && (
+                        <p className="text-xs text-error">{googleLoginError}</p>
+                      )}
+                    </div>
                   )}
                 </div>
               )}

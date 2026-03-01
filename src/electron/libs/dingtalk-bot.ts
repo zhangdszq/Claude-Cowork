@@ -1627,7 +1627,7 @@ class DingtalkConnection {
         permissionMode: "bypassPermissions",
         includePartialMessages: true,
         allowDangerouslySkipPermissions: true,
-        maxTurns: 30,
+        maxTurns: 300,
         settingSources: ["user", "project", "local"],
         pathToClaudeCodeExecutable: claudeCodePath,
         env: buildQueryEnv(),

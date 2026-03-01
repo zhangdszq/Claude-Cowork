@@ -6,6 +6,7 @@ import { loadUserSettings } from "./user-settings.js";
 export type AssistantConfig = {
   id: string;
   name: string;
+  avatar?: string;
   provider: "claude" | "codex";
   model?: string;
   skillNames?: string[];
@@ -143,6 +144,7 @@ function normalizeConfig(input?: Partial<AssistantsConfig> | null): AssistantsCo
     .map<AssistantConfig>((item) => ({
       id: String(item.id),
       name: String(item.name),
+      avatar: optStr(item.avatar),
       provider: item.provider === "codex" ? "codex" : "claude",
       model: optStr(item.model),
       skillNames: Array.isArray(item.skillNames)

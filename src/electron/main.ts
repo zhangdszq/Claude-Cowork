@@ -35,6 +35,7 @@ import {
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { runEnvironmentChecks, validateApiConfig } from "./libs/env-check.js";
 import { openAILogin, openAILogout, getOpenAIAuthStatus, ensureCodexAuthSync } from "./libs/openai-auth.js";
+import { googleLogin, googleLogout, getGoogleAuthStatus } from "./libs/google-auth.js";
 import { startEmbeddedApi, stopEmbeddedApi, isEmbeddedApiRunning, setWebhookSessionRunner } from "./api/server.js";
 import {
   readLongTermMemory, readDailyMemory, buildMemoryContext,
@@ -216,6 +217,7 @@ app.on("ready", async () => {
         console.error("Failed to start embedded API server");
     }
     function createMainWindow(): BrowserWindow {
+        const isMac = process.platform === "darwin";
         const win = new BrowserWindow({
             width: 1200,
             height: 800,
@@ -225,9 +227,10 @@ app.on("ready", async () => {
                 preload: getPreloadPath(),
             },
             icon: getIconPath(),
-            titleBarStyle: "hiddenInset",
+            ...(isMac
+                ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 15, y: 18 } }
+                : { frame: false }),
             backgroundColor: "#FAF9F6",
-            trafficLightPosition: { x: 15, y: 18 }
         });
 
         if (isDev()) {
@@ -249,6 +252,20 @@ app.on("ready", async () => {
     }
 
     let mainWindow = createMainWindow();
+
+    // ─── Window controls (for custom frameless title bar on Windows) ─
+    ipcMain.on("window-minimize", () => mainWindow?.minimize());
+    ipcMain.on("window-maximize", () => {
+        if (mainWindow?.isMaximized()) {
+            mainWindow.unmaximize();
+        } else {
+            mainWindow?.maximize();
+        }
+    });
+    ipcMain.on("window-close", () => mainWindow?.close());
+    ipcMain.handle("window-is-maximized", () => mainWindow?.isMaximized() ?? false);
+    mainWindow.on("maximize", () => mainWindow?.webContents.send("window-maximized-change", true));
+    mainWindow.on("unmaximize", () => mainWindow?.webContents.send("window-maximized-change", false));
 
     // ─── Quick Window ────────────────────────────────────────────────
     const DEFAULT_QUICK_SHORTCUT = "Alt+Space";
@@ -684,6 +701,20 @@ app.on("ready", async () => {
 
     ipcMainHandle("openai-auth-status", () => {
         return getOpenAIAuthStatus();
+    });
+
+    // Google OAuth handlers
+    ipcMainHandle("google-login", async () => {
+        return await googleLogin();
+    });
+
+    ipcMainHandle("google-logout", () => {
+        googleLogout();
+        return { success: true };
+    });
+
+    ipcMainHandle("google-auth-status", () => {
+        return getGoogleAuthStatus();
     });
 
     // Memory system

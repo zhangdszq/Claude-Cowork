@@ -182,11 +182,16 @@ export const useAppStore = create<AppState>((set, get) => ({
             get().setActiveSessionId(latestSession.id);
           }
         } else if (state.activeSessionId) {
-          const stillExists = event.payload.sessions.some(
+          const activeSession = event.payload.sessions.find(
             (session) => session.id === state.activeSessionId
           );
-          if (!stillExists) {
-            get().setActiveSessionId(null);
+          if (!activeSession || activeSession.background) {
+            const fallback = visibleSessions.sort((a, b) => {
+              const aTime = a.updatedAt ?? a.createdAt ?? 0;
+              const bTime = b.updatedAt ?? b.createdAt ?? 0;
+              return bTime - aTime;
+            })[0];
+            get().setActiveSessionId(fallback?.id ?? null);
           }
         }
         break;
@@ -258,15 +263,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (!state.sessions[sessionId]) break;
         const nextSessions = { ...state.sessions };
         delete nextSessions[sessionId];
+        const visibleRemaining = Object.values(nextSessions).filter(s => !s.background);
         set({
           sessions: nextSessions,
-          showStartModal: Object.keys(nextSessions).length === 0
+          showStartModal: visibleRemaining.length === 0
         });
         if (state.activeSessionId === sessionId) {
-          const remaining = Object.values(nextSessions).sort(
+          const sorted = visibleRemaining.sort(
             (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)
           );
-          get().setActiveSessionId(remaining[0]?.id ?? null);
+          get().setActiveSessionId(sorted[0]?.id ?? null);
         }
         break;
       }

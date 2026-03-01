@@ -15,8 +15,12 @@ import { DecisionPanel } from "./components/DecisionPanel";
 import { ChapterSelector, parseChapters, isChapterSelectionText } from "./components/ChapterSelector";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { WorkspacePanel } from "./components/WorkspacePanel";
+import { TitleBar, usePlatform } from "./components/TitleBar";
 import MDContent from "./render/markdown";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
+
+import appIconUrl from "./assets/app-icon.png";
+import splash1 from "../../assets/splash-1.jpg";
 
 const ONBOARDING_COMPLETE_KEY = "vk-cowork-onboarding-complete";
 const SPLASH_SEEN_KEY = "vk-cowork-splash-seen";
@@ -199,12 +203,121 @@ function groupMessages(messages: StreamMessage[]): MessageGroup[] {
   return result;
 }
 
+// ─── Google Login Screen ─────────────────────────────────────────────────────
+
+function GoogleLoginScreen({ onLoggedIn, onSkip }: { onLoggedIn: () => void; onSkip: () => void }) {
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleLogin = async () => {
+    setLoggingIn(true);
+    setError(null);
+    try {
+      const result = await window.electron.googleLogin();
+      if (result.success) {
+        onLoggedIn();
+      } else {
+        setError(result.error || "登录失败");
+      }
+    } catch (err) {
+      setError("登录过程出错: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-screen">
+      <TitleBar />
+      <div className="relative flex-1 overflow-hidden">
+        {/* Background image */}
+        <img
+          src={splash1}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+        {/* Frosted overlay */}
+        <div className="absolute inset-0 bg-white/30 backdrop-blur-[2px]" />
+
+        {/* Centered login card */}
+        <div className="relative z-10 flex h-full items-center justify-center p-8">
+          <div className="w-full max-w-[380px] rounded-3xl bg-white/90 backdrop-blur-md border border-white/60 px-10 py-12" style={{ boxShadow: "0 0 40px 20px rgba(255,255,255,0.5), 0 8px 32px rgba(0,0,0,0.1)" }}>
+            <div className="text-center mb-9">
+              <img
+                src={appIconUrl}
+                alt="AI Team"
+                className="w-[68px] h-[68px] mx-auto mb-5 rounded-2xl shadow-card"
+              />
+              <h1 className="text-2xl font-bold tracking-tight text-ink-800">AI Team</h1>
+              <p className="text-sm text-muted mt-2 leading-relaxed">
+                请使用 Google 账号登录以继续
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={handleLogin}
+                disabled={loggingIn}
+                className="w-full flex items-center justify-center gap-3 rounded-2xl border border-ink-900/8 bg-white px-5 py-3.5 text-[15px] font-medium text-ink-800 shadow-card hover:shadow-elevated hover:border-ink-900/15 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loggingIn ? (
+                  <>
+                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
+                      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                    <span>正在等待浏览器授权...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg viewBox="0 0 24 24" className="h-5 w-5 shrink-0">
+                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
+                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                    </svg>
+                    <span>使用 Google 登录</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={onSkip}
+                className="w-full text-center text-[13px] text-muted hover:text-ink-700 transition-colors py-2"
+              >
+                跳过登录
+              </button>
+
+              {error && (
+                <div className="rounded-xl border border-error/20 bg-error/5 p-3.5">
+                  <p className="text-xs text-error flex items-start gap-2 leading-relaxed">
+                    <svg viewBox="0 0 24 24" className="h-4 w-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="15" y1="9" x2="9" y2="15" />
+                      <line x1="9" y1="9" x2="15" y2="15" />
+                    </svg>
+                    <span>{error}</span>
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <p className="text-center text-[11px] text-ink-400/50 mt-8">
+              AI Team · 你的智能协作伙伴
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isUserScrolledUpRef = useRef(false);
   
-  // Splash screen state — shown once per fresh install, after onboarding
+  // Splash screen state — shown once per cold start (flag cleared in main.tsx on boot)
   const [showSplash, setShowSplash] = useState(() => {
     return !localStorage.getItem(SPLASH_SEEN_KEY);
   });
@@ -241,6 +354,14 @@ function App() {
     localStorage.setItem(SPLASH_SEEN_KEY, "true");
     setShowSplash(false);
   }, []);
+
+  // Google login gate — null = still checking, true = logged in, false = needs login
+  const [googleAuthed, setGoogleAuthed] = useState<boolean | null>(null);
+  useEffect(() => {
+    window.electron.googleAuthStatus()
+      .then((status) => setGoogleAuthed(status.loggedIn))
+      .catch(() => setGoogleAuthed(false));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   
   // 使用 Map 按 sessionId 存储每个 session 的 partial message 状态
   const partialMessagesRef = useRef<Map<string, string>>(new Map());
@@ -833,6 +954,10 @@ function App() {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
   }, [sidebarWidth]);
 
+  // Must be called before any conditional return to satisfy React hooks rules
+  const platform = usePlatform();
+  const titleBarH = platform !== "darwin" ? 32 : 0;
+
   // Show onboarding wizard for new users
   if (showOnboarding) {
     return <OnboardingWizard onComplete={handleOnboardingComplete} initialStep={onboardingInitialStep} />;
@@ -843,8 +968,28 @@ function App() {
     return <SplashScreen onComplete={handleSplashComplete} />;
   }
 
+  // Google login gate
+  if (googleAuthed === null) {
+    return (
+      <div className="flex flex-col h-screen bg-surface-cream">
+        <TitleBar />
+        <div className="flex-1 flex items-center justify-center">
+          <svg className="h-6 w-6 animate-spin text-muted" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.3" />
+            <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </div>
+      </div>
+    );
+  }
+  if (googleAuthed === false) {
+    return <GoogleLoginScreen onLoggedIn={() => setGoogleAuthed(true)} onSkip={() => setGoogleAuthed(true)} />;
+  }
+
   return (
-    <div className="flex h-screen bg-surface-cream">
+    <div className="flex flex-col h-screen bg-surface-cream">
+      <TitleBar />
+      <div className="flex flex-1 min-h-0 relative">
       <Sidebar
         connected={connected}
         onNewSession={handleNewSession}
@@ -858,6 +1003,7 @@ function App() {
         onToggleTaskPanel={handleToggleTaskPanel}
         onEffectiveWidthChange={setEffectiveSidebarWidth}
         onShowSplash={() => setShowSplash(true)}
+        titleBarHeight={titleBarH}
       />
 
       <main
@@ -1105,14 +1251,15 @@ function App() {
       {/* Workspace Panel - right sidebar */}
       {showWorkspacePanel && (
         <div
-          className="fixed right-0 top-0 bottom-0 border-l border-ink-900/10 overflow-hidden"
-          style={{ width: `${WORKSPACE_PANEL_WIDTH}px`, zIndex: 20 }}
+          className="fixed right-0 bottom-0 border-l border-ink-900/10 overflow-hidden"
+          style={{ top: `${titleBarH}px`, width: `${WORKSPACE_PANEL_WIDTH}px`, zIndex: 20 }}
         >
           <WorkspacePanel
             onClose={() => setShowWorkspacePanel(false)}
           />
         </div>
       )}
+      </div>
     </div>
   );
 }

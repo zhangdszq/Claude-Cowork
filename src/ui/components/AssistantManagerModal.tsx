@@ -7,11 +7,14 @@ interface AssistantManagerModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAssistantsChanged?: () => void;
+  onOpenSkill?: () => void;
+  onOpenMcp?: () => void;
 }
 
 type EditingAssistant = {
   id: string;
   name: string;
+  avatar: string;
   provider: "claude" | "codex";
   model: string;
   skillNames: string[];
@@ -25,21 +28,61 @@ type EditingAssistant = {
   heartbeatRules: string;
 };
 
+const DEFAULT_PERSONA = `你是小助理，用户的私人 AI 伙伴。
+- 有温度但不啰嗦，像一个靠谱的老同事
+- 你有自己的判断力和性格，不是一个无条件顺从的工具
+- 你记得和用户之间发生过的事情，会基于共同经历调整自己的行为`;
+
+const DEFAULT_CORE_VALUES = `1. 有用比好听重要 — 不表演、不客套、不堆砌，直接给方案和结果
+2. 接手就负责 — 不回来说"我做不到因为…"，带着解决方案回来
+3. 提前想一步 — 最好的帮助是不需要开口要的
+4. 诚实沟通 — 不确定就说不确定，做错了就承认，不回避实质问题
+5. 尊重隐私 — 不主动探询用户不愿分享的信息，对已知隐私严格保密`;
+
+const DEFAULT_RELATIONSHIP = `我为你工作，但不卑不亢。更像一个值得信赖的幕僚：
+- 被问到时给出真实看法，不说"你说得对但是…"这类废话
+- 认为重要时主动提建议，而不是等着被问
+- 对明显有问题的事情会礼貌反驳一次，但不反复纠缠
+- 最终尊重你的决定，执行时全力以赴
+- 关系随时间成长 — 合作越久越了解你的偏好，不需要反复解释`;
+
+const DEFAULT_COGNITIVE_STYLE = `- 默认行动：明显有帮助就直接做，不为小事请示
+- 大事请示：对外沟通、重大决策、不可逆操作先确认
+- 记下来：可能以后有用的信息先记录到记忆
+- 从纠正中学习：你指出的问题我会更新认知，不犯同样的错
+- 结构化思维：复杂问题先拆解再逐步解决，不一股脑堆砌
+- 承认边界：超出能力范围的事坦诚说明，给出替代方案`;
+
+const DEFAULT_OPERATING_GUIDELINES = `- 直接给出结果，不要叙述思考过程或执行步骤
+- 调用工具时保持沉默，只在工具全部完成后给出结论
+- 禁止把工具调用的中间状态、路径、API 返回值写进最终回复
+- 遇到障碍时主动换方法重试，穷尽所有途径
+- 截图/发文件类任务：工具执行完只需回复"已完成"或简短说明
+- 多步骤任务先做完再汇报，不要边做边播报进度`;
+
+const DEFAULT_HEARTBEAT_RULES = `- 检查未处理的消息和待办事项
+- 重要/紧急事项立即汇报
+- 不重要的信息积累到日报
+- 没有值得汇报的事就输出 <no-action> 保持沉默
+- 晚 22 点至早 8 点只报紧急事项
+- 汇报时简明扼要，不重复已知信息`;
+
 function emptyAssistant(): EditingAssistant {
   return {
     id: "",
     name: "",
+    avatar: "",
     provider: "claude",
     model: "",
     skillNames: [],
     skillTags: [],
-    persona: "",
-    coreValues: "",
-    relationship: "",
-    cognitiveStyle: "",
-    operatingGuidelines: "",
+    persona: DEFAULT_PERSONA,
+    coreValues: DEFAULT_CORE_VALUES,
+    relationship: DEFAULT_RELATIONSHIP,
+    cognitiveStyle: DEFAULT_COGNITIVE_STYLE,
+    operatingGuidelines: DEFAULT_OPERATING_GUIDELINES,
     heartbeatInterval: 30,
-    heartbeatRules: "",
+    heartbeatRules: DEFAULT_HEARTBEAT_RULES,
   };
 }
 
@@ -66,6 +109,8 @@ export function AssistantManagerModal({
   open,
   onOpenChange,
   onAssistantsChanged,
+  onOpenSkill,
+  onOpenMcp,
 }: AssistantManagerModalProps) {
   const [assistants, setAssistants] = useState<AssistantConfig[]>([]);
   const [availableSkills, setAvailableSkills] = useState<SkillInfo[]>([]);
@@ -102,6 +147,7 @@ export function AssistantManagerModal({
       ...existing,
       id: editing.id || `assistant-${Date.now()}`,
       name: editing.name.trim(),
+      avatar: editing.avatar || undefined,
       provider: editing.provider,
       model: editing.model.trim() || undefined,
       skillNames: editing.skillNames,
@@ -200,6 +246,7 @@ export function AssistantManagerModal({
     setEditing({
       id: assistant.id,
       name: assistant.name,
+      avatar: assistant.avatar ?? "",
       provider: assistant.provider,
       model: assistant.model ?? "",
       skillNames: assistant.skillNames ?? [],
@@ -239,20 +286,62 @@ export function AssistantManagerModal({
         <Dialog.Overlay className="fixed inset-0 z-50 bg-ink-900/20 backdrop-blur-sm" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-full max-w-4xl max-h-[88vh] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-ink-900/5 bg-surface p-6 shadow-elevated flex flex-col">
           <div className="flex items-center justify-between">
-            <Dialog.Title className="text-base font-semibold text-ink-800">
-              助理管理
-            </Dialog.Title>
             <div className="flex items-center gap-2">
-              {!editing && (
+              {editing && (
                 <button
-                  onClick={startNew}
-                  className="flex items-center gap-1 rounded-lg border border-ink-900/10 bg-surface-secondary px-2.5 py-1 text-xs font-medium text-ink-700 hover:bg-surface-tertiary hover:border-ink-900/20 transition-colors"
+                  onClick={() => setEditing(null)}
+                  className="rounded-lg p-1.5 text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
                 >
-                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2">
-                    <path d="M12 5v14M5 12h14" />
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M19 12H5M12 19l-7-7 7-7" />
                   </svg>
-                  新建助理
                 </button>
+              )}
+              <Dialog.Title className="text-base font-semibold text-ink-800">
+                {editing
+                  ? (isNew ? "新建助理" : `编辑 · ${editing.name}`)
+                  : "助理管理"}
+              </Dialog.Title>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {!editing && (
+                <>
+                  {onOpenSkill && (
+                    <button
+                      onClick={() => { onOpenChange(false); onOpenSkill(); }}
+                      className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
+                      title="Skills"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                      </svg>
+                      Skills
+                    </button>
+                  )}
+                  {onOpenMcp && (
+                    <button
+                      onClick={() => { onOpenChange(false); onOpenMcp(); }}
+                      className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
+                      title="MCP"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M12 1v6m0 6v10M1 12h6m6 0h10" />
+                      </svg>
+                      MCP
+                    </button>
+                  )}
+                  <div className="h-4 w-px bg-ink-900/10" />
+                  <button
+                    onClick={startNew}
+                    className="flex items-center gap-1 rounded-lg border border-ink-900/10 bg-surface-secondary px-2.5 py-1 text-xs font-medium text-ink-700 hover:bg-surface-tertiary hover:border-ink-900/20 transition-colors"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.2">
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                    新建助理
+                  </button>
+                </>
               )}
               <Dialog.Close asChild>
                 <button
@@ -269,35 +358,58 @@ export function AssistantManagerModal({
 
           {editing ? (
             <div className="mt-4 flex flex-1 flex-col gap-0 min-h-0">
-              {/* 返回标题行 */}
-              <div className="flex items-center gap-2 pb-4">
-                <button
-                  onClick={() => setEditing(null)}
-                  className="rounded-lg p-1.5 text-muted hover:bg-surface-tertiary hover:text-ink-700 transition-colors"
-                >
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M19 12H5M12 19l-7-7 7-7" />
-                  </svg>
-                </button>
-                <span className="text-sm font-medium text-ink-800">
-                  {isNew ? "新建助理" : `编辑 · ${editing.name}`}
-                </span>
-              </div>
-
               {/* 左右两栏主体 */}
               <div className="flex flex-1 gap-5 min-h-0 overflow-hidden">
                 {/* 左栏：基本信息 + 人格 + 心跳 */}
                 <div className="flex flex-1 flex-col min-w-0 min-h-0 overflow-y-auto pr-1">
                   <div className="flex flex-col gap-3">
-                  {/* 名称 */}
-                  <div className="flex flex-col gap-1">
-                    <span className="text-xs font-medium text-muted">名称</span>
-                    <input
-                      className="rounded-xl border border-ink-900/10 bg-surface-secondary px-3.5 py-2 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
-                      placeholder="例如：市场助理"
-                      value={editing.name}
-                      onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                    />
+                  {/* 头像 + 名称 */}
+                  <div className="flex items-end gap-4">
+                    <div className="flex flex-col items-center gap-1.5 shrink-0">
+                      <span className="text-xs font-medium text-muted">头像</span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const path = await window.electron.selectImage();
+                          if (!path) return;
+                          const dataUrl = await window.electron.getImageThumbnail(path);
+                          if (dataUrl) setEditing((prev) => prev ? { ...prev, avatar: dataUrl } : prev);
+                        }}
+                        className="group/avatar relative flex h-16 w-16 items-center justify-center rounded-full border-2 border-dashed border-ink-900/15 bg-surface-secondary overflow-hidden transition-colors hover:border-accent/40"
+                        title="点击选择头像"
+                      >
+                        {editing.avatar ? (
+                          <img src={editing.avatar} alt="avatar" className="h-full w-full object-cover" />
+                        ) : (
+                          <span className="flex h-full w-full items-center justify-center text-xl font-bold text-ink-300">
+                            {editing.name.trim() ? editing.name.trim().slice(0, 1).toUpperCase() : "?"}
+                          </span>
+                        )}
+                        <div className="absolute inset-0 flex items-center justify-center rounded-full bg-ink-900/0 group-hover/avatar:bg-ink-900/40 transition-colors">
+                          <svg viewBox="0 0 24 24" className="h-5 w-5 text-white opacity-0 group-hover/avatar:opacity-100 transition-opacity" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" />
+                            <circle cx="12" cy="13" r="4" />
+                          </svg>
+                        </div>
+                      </button>
+                      {editing.avatar && (
+                        <button
+                          onClick={() => setEditing((prev) => prev ? { ...prev, avatar: "" } : prev)}
+                          className="text-[10px] text-muted hover:text-error transition-colors"
+                        >
+                          移除
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex flex-1 flex-col gap-1 min-w-0">
+                      <span className="text-xs font-medium text-muted">名称</span>
+                      <input
+                        className="rounded-xl border border-ink-900/10 bg-surface-secondary px-3.5 py-2 text-sm text-ink-800 placeholder:text-muted-light focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 transition-colors"
+                        placeholder="例如：市场助理"
+                        value={editing.name}
+                        onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                      />
+                    </div>
                   </div>
 
                   {/* Provider + Model */}
@@ -658,9 +770,17 @@ export function AssistantManagerModal({
                           className="group relative flex flex-col rounded-2xl border border-ink-900/8 bg-surface p-4 transition-all hover:shadow-soft hover:border-ink-900/12"
                         >
                           <div className="flex items-start justify-between">
-                            <div className={`flex h-11 w-11 items-center justify-center rounded-xl text-lg font-bold ${avatarColor}`}>
-                              {initial}
-                            </div>
+                            {assistant.avatar ? (
+                              <img
+                                src={assistant.avatar}
+                                alt={assistant.name}
+                                className="h-11 w-11 rounded-full object-cover shrink-0"
+                              />
+                            ) : (
+                              <div className={`flex h-11 w-11 items-center justify-center rounded-full text-lg font-bold ${avatarColor}`}>
+                                {initial}
+                              </div>
+                            )}
                             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
                                 onClick={() => setBotTargetAssistant(assistant)}

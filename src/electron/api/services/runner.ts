@@ -214,7 +214,7 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
         permissionMode: 'bypassPermissions',
         includePartialMessages: true,
         allowDangerouslySkipPermissions: true,
-        maxTurns: 30,
+        maxTurns: 300,
         settingSources: ['user', 'project', 'local'],
         mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd }) },
         canUseTool: async (toolName, input, { signal, toolUseID }) => {
