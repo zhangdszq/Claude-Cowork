@@ -1192,8 +1192,12 @@ function getBotClaudeSessionId(assistantId: string): string | undefined {
   return botClaudeSessionIds.get(assistantId);
 }
 
-function setBotClaudeSessionId(assistantId: string, sessionId: string): void {
-  botClaudeSessionIds.set(assistantId, sessionId);
+function setBotClaudeSessionId(assistantId: string, claudeSessionId: string): void {
+  botClaudeSessionIds.set(assistantId, claudeSessionId);
+  const appSessionId = botSessionIds.get(assistantId);
+  if (appSessionId && sessionStore) {
+    sessionStore.updateSession(appSessionId, { claudeSessionId });
+  }
 }
 
 /** Build env vars for query() — includes user's API key from settings */

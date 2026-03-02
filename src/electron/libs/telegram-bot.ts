@@ -491,8 +491,12 @@ function getBotClaudeSessionId(key: string): string | undefined {
   return botClaudeSessionIds.get(key);
 }
 
-function setBotClaudeSessionId(key: string, sessionId: string): void {
-  botClaudeSessionIds.set(key, sessionId);
+function setBotClaudeSessionId(key: string, claudeSessionId: string): void {
+  botClaudeSessionIds.set(key, claudeSessionId);
+  const appSessionId = botSessionIds.get(key);
+  if (appSessionId && sessionStore) {
+    sessionStore.updateSession(appSessionId, { claudeSessionId });
+  }
 }
 
 function buildQueryEnv(): Record<string, string | undefined> {
