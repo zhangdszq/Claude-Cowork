@@ -47,6 +47,15 @@ import {
 } from "./libs/telegram-bot.js";
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
 import { ensureBuiltinMcpServers } from "./libs/builtin-mcps.js";
+import {
+    loadGoals,
+    addGoal,
+    updateGoal,
+    deleteGoal,
+    triggerGoalRun,
+    setGoalCompleteNotifier,
+    type LongTermGoal,
+} from "./libs/goals-manager.js";
 import { runEnvironmentChecks, validateApiConfig } from "./libs/env-check.js";
 import { openAILogin, openAILogout, getOpenAIAuthStatus, ensureCodexAuthSync } from "./libs/openai-auth.js";
 import { googleLogin, googleLogout, getGoogleAuthStatus } from "./libs/google-auth.js";
@@ -1352,6 +1361,32 @@ app.on("ready", async () => {
     // Check if embedded API is running
     ipcMainHandle("is-sidecar-running", () => {
         return isEmbeddedApiRunning();
+    });
+
+    // Goals IPC handlers
+    ipcMainHandle("goals-list", () => loadGoals());
+
+    ipcMainHandle("goals-add", (_: any, input: Omit<LongTermGoal, "id" | "status" | "totalRuns" | "progressLog" | "createdAt" | "updatedAt" | "completedAt" | "nextRunAt" | "consecutiveErrors">) => {
+        const goal = addGoal(input);
+        triggerGoalRun(goal);
+        return goal;
+    });
+
+    ipcMainHandle("goals-update", (_: any, id: string, updates: Partial<LongTermGoal>) => updateGoal(id, updates));
+
+    ipcMainHandle("goals-delete", (_: any, id: string) => deleteGoal(id));
+
+    ipcMainHandle("goals-run-now", (_: any, id: string) => {
+        const goals = loadGoals();
+        const goal = goals.find((g) => g.id === id);
+        if (goal) triggerGoalRun(goal);
+    });
+
+    setGoalCompleteNotifier(() => {
+        const windows = BrowserWindow.getAllWindows();
+        for (const win of windows) {
+            win.webContents.send("goal-completed");
+        }
     });
 
     // Read directory contents (one level deep)

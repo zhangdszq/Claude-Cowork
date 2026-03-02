@@ -221,6 +221,22 @@ electron.contextBridge.exposeInMainWorld("electron", {
         return () => electron.ipcRenderer.off("window-maximized-change", cb);
     },
     getPlatform: () => process.platform,
+    // Goals
+    goalsList: () =>
+        ipcInvoke("goals-list"),
+    goalsAdd: (input: GoalAddInput) =>
+        ipcInvoke("goals-add", input),
+    goalsUpdate: (id: string, updates: Partial<LongTermGoal>) =>
+        ipcInvoke("goals-update", id, updates),
+    goalsDelete: (id: string) =>
+        ipcInvoke("goals-delete", id),
+    goalsRunNow: (id: string) =>
+        ipcInvoke("goals-run-now", id),
+    onGoalCompleted: (callback: () => void) => {
+        const cb = () => callback();
+        electron.ipcRenderer.on("goal-completed", cb);
+        return () => electron.ipcRenderer.off("goal-completed", cb);
+    },
 } satisfies Window['electron'])
 
 function ipcInvoke<Key extends keyof EventPayloadMapping>(key: Key, ...args: any[]): Promise<EventPayloadMapping[Key]> {

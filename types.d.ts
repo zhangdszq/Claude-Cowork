@@ -70,6 +70,7 @@ type UserSettings = {
     quickWindowShortcut?: string;
     googleTokens?: GoogleTokens;
     googleUser?: GoogleUser;
+    splashSeen?: boolean;
 }
 
 type ScheduledTaskHookFilter = {
@@ -333,6 +334,7 @@ type StartDingtalkBotInput = {
     assistantId: string;
     assistantName: string;
     persona?: string;
+    coreValues?: string;
     provider?: "claude" | "codex";
     model?: string;
     defaultCwd?: string;
@@ -383,6 +385,7 @@ type StartTelegramBotInput = {
     assistantName: string;
     skillNames?: string[];
     persona?: string;
+    coreValues?: string;
     provider?: "claude" | "codex";
     model?: string;
     defaultCwd?: string;
@@ -418,6 +421,7 @@ type StartFeishuBotInput = {
     assistantId: string;
     assistantName: string;
     persona?: string;
+    coreValues?: string;
     provider?: "claude" | "codex";
     model?: string;
     defaultCwd?: string;
@@ -428,6 +432,41 @@ type FeishuBotStatusResult = {
     status: FeishuBotStatus;
     detail?: string;
 };
+
+type GoalProgressEntry = {
+    sessionId: string;
+    runAt: string;
+    summary: string;
+    isComplete: boolean;
+    nextSteps?: string;
+}
+
+type LongTermGoal = {
+    id: string;
+    name: string;
+    description: string;
+    status: "active" | "paused" | "completed" | "abandoned";
+    assistantId?: string;
+    cwd?: string;
+    retryInterval: number;
+    maxRuns: number;
+    totalRuns: number;
+    progressLog: GoalProgressEntry[];
+    nextRunAt?: string;
+    consecutiveErrors?: number;
+    createdAt: string;
+    updatedAt: string;
+    completedAt?: string;
+}
+
+type GoalAddInput = {
+    name: string;
+    description: string;
+    cwd?: string;
+    assistantId?: string;
+    retryInterval: number;
+    maxRuns: number;
+}
 
 type UnsubscribeFunction = () => void;
 
@@ -498,6 +537,12 @@ type EventPayloadMapping = {
     "generate-skill-tags": string[];
     "get-quick-window-shortcut": string;
     "save-quick-window-shortcut": boolean;
+    // Goals
+    "goals-list": LongTermGoal[];
+    "goals-add": LongTermGoal;
+    "goals-update": LongTermGoal | null;
+    "goals-delete": boolean;
+    "goals-run-now": void;
 }
 
 interface Window {
@@ -600,5 +645,12 @@ interface Window {
         windowIsMaximized: () => Promise<boolean>;
         onWindowMaximizedChange: (callback: (isMaximized: boolean) => void) => UnsubscribeFunction;
         getPlatform: () => string;
+        // Goals
+        goalsList: () => Promise<LongTermGoal[]>;
+        goalsAdd: (input: GoalAddInput) => Promise<LongTermGoal>;
+        goalsUpdate: (id: string, updates: Partial<LongTermGoal>) => Promise<LongTermGoal | null>;
+        goalsDelete: (id: string) => Promise<boolean>;
+        goalsRunNow: (id: string) => Promise<void>;
+        onGoalCompleted: (callback: () => void) => UnsubscribeFunction;
     }
 }
