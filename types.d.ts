@@ -336,6 +336,8 @@ type StartDingtalkBotInput = {
     persona?: string;
     coreValues?: string;
     relationship?: string;
+    cognitiveStyle?: string;
+    operatingGuidelines?: string;
     provider?: "claude" | "codex";
     model?: string;
     defaultCwd?: string;
@@ -388,6 +390,8 @@ type StartTelegramBotInput = {
     persona?: string;
     coreValues?: string;
     relationship?: string;
+    cognitiveStyle?: string;
+    operatingGuidelines?: string;
     provider?: "claude" | "codex";
     model?: string;
     defaultCwd?: string;
@@ -425,6 +429,8 @@ type StartFeishuBotInput = {
     persona?: string;
     coreValues?: string;
     relationship?: string;
+    cognitiveStyle?: string;
+    operatingGuidelines?: string;
     provider?: "claude" | "codex";
     model?: string;
     defaultCwd?: string;
