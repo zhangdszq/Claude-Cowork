@@ -218,8 +218,8 @@ const newsLatestTool = tool(
       const body: Record<string, unknown> = { limit, page: 1 };
       if (input.coin) body.coins = [String(input.coin).toUpperCase()];
 
-      const data = await api6551<{ list?: unknown[] }>("POST", "/open/news_search", body);
-      let items = (data?.list ?? []) as Array<{
+      const data = await api6551<{ data?: unknown[] }>("POST", "/open/news_search", body);
+      let items = (data?.data ?? []) as Array<{
         text?: string; ts?: number; newsType?: string; engineType?: string;
         aiRating?: { score?: number; signal?: string; summary?: string; enSummary?: string };
         link?: string; coins?: Array<{ symbol?: string }>;
@@ -262,8 +262,8 @@ const newsSearchTool = tool(
       const body: Record<string, unknown> = { q: query, limit, page: 1 };
       if (input.coin) body.coins = [String(input.coin).toUpperCase()];
 
-      const data = await api6551<{ list?: unknown[] }>("POST", "/open/news_search", body);
-      const items = (data?.list ?? []) as Array<{
+      const data = await api6551<{ data?: unknown[] }>("POST", "/open/news_search", body);
+      const items = (data?.data ?? []) as Array<{
         text?: string; ts?: number; newsType?: string;
         aiRating?: { score?: number; signal?: string; summary?: string };
         link?: string; coins?: Array<{ symbol?: string }>;
@@ -301,14 +301,14 @@ const twitterUserTweetsTool = tool(
       if (!username) return ok("用户名不能为空");
       const limit = Math.min(Number(input.limit ?? 10), 50);
 
-      const data = await api6551<{ list?: unknown[] }>("POST", "/open/twitter_user_tweets", {
+      const data = await api6551<{ data?: unknown[] }>("POST", "/open/twitter_user_tweets", {
         username,
         maxResults: limit,
         product: "Latest",
         includeReplies: false,
         includeRetweets: input.include_retweets ?? false,
       });
-      const tweets = (data?.list ?? []) as Array<{
+      const tweets = (data?.data ?? []) as Array<{
         id?: string; text?: string; createdAt?: string;
         retweetCount?: number; favoriteCount?: number; replyCount?: number;
       }>;
@@ -344,8 +344,6 @@ const twitterSearchTool = tool(
       const body: Record<string, unknown> = {
         maxResults: limit,
         product: input.product ?? "Top",
-        excludeReplies: true,
-        excludeRetweets: true,
       };
       if (input.keywords) body.keywords = String(input.keywords);
       if (input.from_user) body.fromUser = String(input.from_user).replace(/^@/, "");
@@ -356,8 +354,8 @@ const twitterSearchTool = tool(
         return ok("请至少提供 keywords、from_user 或 hashtag 之一");
       }
 
-      const data = await api6551<{ list?: unknown[] }>("POST", "/open/twitter_search", body);
-      const tweets = (data?.list ?? []) as Array<{
+      const data = await api6551<{ data?: unknown[] }>("POST", "/open/twitter_search", body);
+      const tweets = (data?.data ?? []) as Array<{
         id?: string; text?: string; createdAt?: string; userScreenName?: string;
         retweetCount?: number; favoriteCount?: number; replyCount?: number;
       }>;
