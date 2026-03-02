@@ -1,0 +1,5 @@
+{
+  "_comment": "6551.io API credentials used by the built-in news_latest, news_search, twitter_user_tweets, twitter_search tools in shared-mcp.ts. Update token here to refresh credentials — no restart needed after rebuild.",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiMkhUUE1ack0ySHlucEVoc24yTjd0YWRiallrQ21OZWRxc2V0NENqV1dNcHgiLCJub25jZSI6IjcyYTg2ZDk4LTU3YmItNDRmYy1hYWIwLTIxYjc0NTJlMTQ1YSIsImlhdCI6MTc3MjQ0MzI1NSwianRpIjoiNjBhMTRkNzctZmE5Zi00NjVkLTljMTAtMTEwYTljYzM5ZjNlIn0.uiCQeDhZX0FATbo3WbXdBDNIF7fQJsRdVZ0AzbxLCsE",
+  "mcpServers": {}
+}

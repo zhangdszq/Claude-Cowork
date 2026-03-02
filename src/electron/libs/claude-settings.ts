@@ -69,14 +69,11 @@ export let claudeCodeEnv = loadClaudeSettingsEnv();
 
 /**
  * Determine which settingSources to pass to the Claude Agent SDK query().
- * When the user has configured custom API settings in VK-Cowork, we exclude
- * "user" to prevent ~/.claude/settings.json env section from overriding
- * the correct ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY we pass via env.
+ * Always includes "user" (~/.claude/settings.json) so that MCP servers
+ * configured there (including built-in ones seeded by ensureBuiltinMcpServers)
+ * are always available. The explicit `env` passed to query() takes priority
+ * over any env vars in settings files, so the custom API key is safe.
  */
 export function getSettingSources(): ("user" | "project" | "local")[] {
-  const s = loadUserSettings();
-  if (s.anthropicBaseUrl || s.anthropicAuthToken) {
-    return ["project", "local"];
-  }
   return ["user", "project", "local"];
 }

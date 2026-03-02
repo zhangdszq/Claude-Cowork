@@ -235,6 +235,26 @@ export function usePromptActions(
 
   // Handle pasted image
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
+    // Priority 1: files/folders pasted from Finder (Cmd+C → Cmd+V)
+    const pastedFiles = e.clipboardData ? Array.from(e.clipboardData.files) : [];
+    const filePaths: Array<{ path: string; isDir: boolean }> = [];
+
+    for (const file of pastedFiles) {
+      let filePath = "";
+      try { filePath = window.electron.getPathForFile(file); } catch { filePath = ""; }
+      if (filePath) {
+        const isDir = file.type === "" && file.size === 0;
+        filePaths.push({ path: filePath, isDir });
+      }
+    }
+
+    if (filePaths.length > 0) {
+      e.preventDefault();
+      filePaths.forEach(({ path, isDir }) => addAttachment(path, isDir));
+      return;
+    }
+
+    // Priority 2: inline image data (screenshots, copied images)
     const items = e.clipboardData?.items;
     if (!items) return;
 

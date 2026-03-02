@@ -1,6 +1,8 @@
 /**
  * Shared MCP server for all agent contexts (main window, DingTalk, Feishu).
- * Exposes common tools: scheduler, web_search, web_fetch, take_screenshot.
+ * Exposes common tools: scheduler, web_search, web_fetch, take_screenshot,
+ * news_search, news_latest (6551 OpenNews), twitter_user_tweets, twitter_search
+ * (6551 OpenTwitter).
  *
  * Claude provider: injected via mcpServers option in query().
  * Codex provider: tools are accessible via bash directly (no MCP needed).
@@ -8,6 +10,9 @@
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
+import { app } from "electron";
 import {
   addScheduledTask,
   loadScheduledTasks,
@@ -25,6 +30,47 @@ import {
 } from "./memory-store.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+// ── 6551 API (OpenNews + OpenTwitter) ───────────────────────────────────────
+
+const API_BASE = "https://ai.6551.io";
+let _cached6551Token: string | null = null;
+
+function get6551Token(): string {
+  if (_cached6551Token) return _cached6551Token;
+  try {
+    const configPath = app.isPackaged
+      ? join(process.resourcesPath, "config", "builtin-mcp-servers.json")
+      : join(app.getAppPath(), "config", "builtin-mcp-servers.json");
+    if (existsSync(configPath)) {
+      const cfg = JSON.parse(readFileSync(configPath, "utf8")) as { token?: string };
+      if (cfg.token) {
+        _cached6551Token = cfg.token;
+        return cfg.token;
+      }
+    }
+  } catch { /* ignore */ }
+  return "";
+}
+
+async function api6551<T = unknown>(
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const token = get6551Token();
+  const resp = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!resp.ok) throw new Error(`6551 API ${method} ${path} → HTTP ${resp.status}`);
+  return resp.json() as Promise<T>;
+}
 
 function stripHtml(html: string): string {
   return html
@@ -153,6 +199,185 @@ function ok(text: string) {
 }
 
 // ── Tool definitions ────────────────────────────────────────────────────────
+
+// ── OpenNews tools ──────────────────────────────────────────────────────────
+
+const newsLatestTool = tool(
+  "news_latest",
+  "获取最新加密货币/财经资讯（来自 6551 OpenNews）。返回文章标题、AI 评分、交易信号（多/空/中性）和摘要。" +
+  "适合场景：了解市场最新动态、查看重要新闻、获取 AI 评级的高影响力资讯。",
+  {
+    limit: z.number().optional().describe("返回条数，默认 10，最大 50"),
+    coin: z.string().optional().describe("按代币筛选，如 BTC、ETH、SOL（可选）"),
+    signal: z.enum(["long", "short", "neutral"]).optional().describe("按交易信号筛选（可选）"),
+    min_score: z.number().optional().describe("最低 AI 评分（0-100），只返回高于此分的资讯（可选）"),
+  },
+  async (input) => {
+    try {
+      const limit = Math.min(Number(input.limit ?? 10), 50);
+      const body: Record<string, unknown> = { limit, page: 1 };
+      if (input.coin) body.coins = [String(input.coin).toUpperCase()];
+
+      const data = await api6551<{ list?: unknown[] }>("POST", "/open/news_search", body);
+      let items = (data?.list ?? []) as Array<{
+        text?: string; ts?: number; newsType?: string; engineType?: string;
+        aiRating?: { score?: number; signal?: string; summary?: string; enSummary?: string };
+        link?: string; coins?: Array<{ symbol?: string }>;
+      }>;
+
+      if (input.signal) items = items.filter(i => i.aiRating?.signal === input.signal);
+      if (input.min_score != null) items = items.filter(i => (i.aiRating?.score ?? 0) >= Number(input.min_score));
+
+      if (items.length === 0) return ok("暂无符合条件的资讯。");
+
+      const lines = items.slice(0, limit).map((item, idx) => {
+        const time = item.ts ? new Date(item.ts).toLocaleString("zh-CN", { hour12: false }) : "";
+        const score = item.aiRating?.score != null ? `评分:${item.aiRating.score}` : "";
+        const signal = item.aiRating?.signal ? `信号:${item.aiRating.signal}` : "";
+        const coins = item.coins?.map(c => c.symbol).filter(Boolean).join("/") ?? "";
+        const summary = item.aiRating?.summary || item.aiRating?.enSummary || "";
+        const meta = [score, signal, coins, item.newsType, time].filter(Boolean).join(" | ");
+        return `**${idx + 1}. ${item.text ?? ""}**\n${meta}${summary ? `\n${summary}` : ""}${item.link ? `\n${item.link}` : ""}`;
+      });
+      return ok(`📰 最新资讯（${lines.length} 条）\n\n${lines.join("\n\n")}`);
+    } catch (err) {
+      return ok(`获取资讯失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const newsSearchTool = tool(
+  "news_search",
+  "按关键词搜索加密货币/财经资讯（来自 6551 OpenNews）。支持关键词、代币、评分过滤。",
+  {
+    query: z.string().describe("搜索关键词"),
+    coin: z.string().optional().describe("按代币筛选，如 BTC、ETH（可选）"),
+    limit: z.number().optional().describe("返回条数，默认 10，最大 30"),
+  },
+  async (input) => {
+    try {
+      const query = String(input.query ?? "").trim();
+      if (!query) return ok("搜索词不能为空");
+      const limit = Math.min(Number(input.limit ?? 10), 30);
+      const body: Record<string, unknown> = { q: query, limit, page: 1 };
+      if (input.coin) body.coins = [String(input.coin).toUpperCase()];
+
+      const data = await api6551<{ list?: unknown[] }>("POST", "/open/news_search", body);
+      const items = (data?.list ?? []) as Array<{
+        text?: string; ts?: number; newsType?: string;
+        aiRating?: { score?: number; signal?: string; summary?: string };
+        link?: string; coins?: Array<{ symbol?: string }>;
+      }>;
+
+      if (items.length === 0) return ok(`未找到"${query}"相关资讯。`);
+
+      const lines = items.map((item, idx) => {
+        const score = item.aiRating?.score != null ? `评分:${item.aiRating.score}` : "";
+        const signal = item.aiRating?.signal ? `信号:${item.aiRating.signal}` : "";
+        const coins = item.coins?.map(c => c.symbol).filter(Boolean).join("/") ?? "";
+        const meta = [score, signal, coins, item.newsType].filter(Boolean).join(" | ");
+        return `**${idx + 1}. ${item.text ?? ""}**\n${meta}${item.aiRating?.summary ? `\n${item.aiRating.summary}` : ""}`;
+      });
+      return ok(`🔍 "${query}" 相关资讯（${lines.length} 条）\n\n${lines.join("\n\n")}`);
+    } catch (err) {
+      return ok(`搜索资讯失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+// ── OpenTwitter tools ────────────────────────────────────────────────────────
+
+const twitterUserTweetsTool = tool(
+  "twitter_user_tweets",
+  "获取指定 Twitter/X 用户的最近推文（来自 6551 OpenTwitter）。",
+  {
+    username: z.string().describe("Twitter 用户名，不带 @ 符号，如 elonmusk"),
+    limit: z.number().optional().describe("返回条数，默认 10，最大 50"),
+    include_retweets: z.boolean().optional().describe("是否包含转推，默认 false"),
+  },
+  async (input) => {
+    try {
+      const username = String(input.username ?? "").replace(/^@/, "").trim();
+      if (!username) return ok("用户名不能为空");
+      const limit = Math.min(Number(input.limit ?? 10), 50);
+
+      const data = await api6551<{ list?: unknown[] }>("POST", "/open/twitter_user_tweets", {
+        username,
+        maxResults: limit,
+        product: "Latest",
+        includeReplies: false,
+        includeRetweets: input.include_retweets ?? false,
+      });
+      const tweets = (data?.list ?? []) as Array<{
+        id?: string; text?: string; createdAt?: string;
+        retweetCount?: number; favoriteCount?: number; replyCount?: number;
+      }>;
+
+      if (tweets.length === 0) return ok(`@${username} 暂无推文。`);
+
+      const lines = tweets.map((t, idx) => {
+        const time = t.createdAt ? new Date(t.createdAt).toLocaleString("zh-CN", { hour12: false }) : "";
+        const stats = [`❤️ ${t.favoriteCount ?? 0}`, `🔁 ${t.retweetCount ?? 0}`, `💬 ${t.replyCount ?? 0}`].join("  ");
+        return `**${idx + 1}.** ${t.text ?? ""}\n${stats}  ${time}`;
+      });
+      return ok(`🐦 @${username} 最近 ${lines.length} 条推文\n\n${lines.join("\n\n")}`);
+    } catch (err) {
+      return ok(`获取推文失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
+
+const twitterSearchTool = tool(
+  "twitter_search",
+  "搜索 Twitter/X 推文（来自 6551 OpenTwitter）。支持关键词、用户、话题标签、互动量过滤。",
+  {
+    keywords: z.string().optional().describe("搜索关键词（可选）"),
+    from_user: z.string().optional().describe("指定发推用户，不带 @（可选）"),
+    hashtag: z.string().optional().describe("话题标签，不带 #（可选）"),
+    min_likes: z.number().optional().describe("最低点赞数，用于筛选热门推文（可选）"),
+    limit: z.number().optional().describe("返回条数，默认 10，最大 50"),
+    product: z.enum(["Top", "Latest"]).optional().describe("排序方式：Top=热门，Latest=最新，默认 Top"),
+  },
+  async (input) => {
+    try {
+      const limit = Math.min(Number(input.limit ?? 10), 50);
+      const body: Record<string, unknown> = {
+        maxResults: limit,
+        product: input.product ?? "Top",
+        excludeReplies: true,
+        excludeRetweets: true,
+      };
+      if (input.keywords) body.keywords = String(input.keywords);
+      if (input.from_user) body.fromUser = String(input.from_user).replace(/^@/, "");
+      if (input.hashtag) body.hashtag = String(input.hashtag).replace(/^#/, "");
+      if (input.min_likes) body.minLikes = Number(input.min_likes);
+
+      if (!body.keywords && !body.fromUser && !body.hashtag) {
+        return ok("请至少提供 keywords、from_user 或 hashtag 之一");
+      }
+
+      const data = await api6551<{ list?: unknown[] }>("POST", "/open/twitter_search", body);
+      const tweets = (data?.list ?? []) as Array<{
+        id?: string; text?: string; createdAt?: string; userScreenName?: string;
+        retweetCount?: number; favoriteCount?: number; replyCount?: number;
+      }>;
+
+      if (tweets.length === 0) return ok("未找到相关推文。");
+
+      const lines = tweets.map((t, idx) => {
+        const user = t.userScreenName ? `@${t.userScreenName}` : "";
+        const time = t.createdAt ? new Date(t.createdAt).toLocaleString("zh-CN", { hour12: false }) : "";
+        const stats = [`❤️ ${t.favoriteCount ?? 0}`, `🔁 ${t.retweetCount ?? 0}`].join("  ");
+        return `**${idx + 1}.** ${t.text ?? ""}\n${user}  ${stats}  ${time}`;
+      });
+
+      const desc = [input.keywords, input.from_user ? `@${input.from_user}` : "", input.hashtag ? `#${input.hashtag}` : ""].filter(Boolean).join(" + ");
+      return ok(`🔍 "${desc}" 推文（${lines.length} 条）\n\n${lines.join("\n\n")}`);
+    } catch (err) {
+      return ok(`搜索推文失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  },
+);
 
 const createScheduledTaskTool = tool(
   "create_scheduled_task",
@@ -1197,6 +1422,12 @@ export function createSharedMcpServer(opts?: { assistantId?: string; sessionCwd?
       processControlTool,
       clipboardTool,
       systemInfoTool,
+      // 6551 OpenNews — crypto/financial news with AI ratings
+      newsLatestTool,
+      newsSearchTool,
+      // 6551 OpenTwitter — Twitter/X data
+      twitterUserTweetsTool,
+      twitterSearchTool,
     ],
   });
 }

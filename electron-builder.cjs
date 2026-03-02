@@ -10,7 +10,11 @@ module.exports = {
   appId: 'com.aiteam.app',
   productName: 'AI Team',
   files: ['dist-electron', 'dist-react'],
-  extraResources: ['dist-electron/preload.cjs', 'app-icon.png'],
+  extraResources: [
+    'dist-electron/preload.cjs',
+    'app-icon.png',
+    { from: 'config', to: 'config' },
+  ],
   asarUnpack: [
     'node_modules/@openai/codex-sdk/vendor/**/*',
     'node_modules/@anthropic-ai/claude-agent-sdk/vendor/**/*',

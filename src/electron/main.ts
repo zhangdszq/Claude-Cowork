@@ -46,6 +46,7 @@ import {
   type TelegramBotOptions,
 } from "./libs/telegram-bot.js";
 import { reloadClaudeSettings } from "./libs/claude-settings.js";
+import { ensureBuiltinMcpServers } from "./libs/builtin-mcps.js";
 import { runEnvironmentChecks, validateApiConfig } from "./libs/env-check.js";
 import { openAILogin, openAILogout, getOpenAIAuthStatus, ensureCodexAuthSync } from "./libs/openai-auth.js";
 import { googleLogin, googleLogout, getGoogleAuthStatus } from "./libs/google-auth.js";
@@ -255,6 +256,9 @@ app.on("ready", async () => {
 
     // Ensure Codex auth.json is in sync with stored tokens
     ensureCodexAuthSync();
+
+    // Seed built-in MCP servers (opennews, opentwitter) into ~/.claude/settings.json
+    ensureBuiltinMcpServers();
 
     // Start the embedded API server
     console.log("Starting embedded API server...");
