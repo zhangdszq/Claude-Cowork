@@ -25,7 +25,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
-import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
+import { buildSmartMemoryContext, recordConversation, getRecentConversationBlocks } from "./memory-store.js";
 import { getEnhancedEnv, getClaudeCodePath } from "./util.js";
 import { getSettingSources } from "./claude-settings.js";
 import type { SessionStore } from "./session-store.js";
@@ -173,6 +173,36 @@ function loadSkillContent(skillName: string): string | null {
   return null;
 }
 
+// ─── Conversation history context (for fresh sessions) ───────────────────────
+
+// Regex to detect absolute file paths that indicate file-analysis assistant replies.
+const FILE_PATH_RE = /\/(?:tmp|var\/folders|private\/var|home|Users)\/\S+\.\w{2,6}/i;
+
+function buildHistoryContext(history: ConvMessage[], assistantId?: string): string {
+  // Primary: parse today's daily log for full Q&A pairs (persists across restarts).
+  if (assistantId) {
+    const fromLog = getRecentConversationBlocks(assistantId, 4);
+    if (fromLog) return fromLog;
+  }
+
+  // Fallback: in-memory history — include both roles, filter file-analysis replies.
+  if (!history.length) return "";
+  const lines = history.slice(-8).map((m) => {
+    const label = m.role === "user" ? "用户" : "助手";
+    if (m.role === "assistant" && FILE_PATH_RE.test(m.content)) {
+      return `${label}: [对某文件进行了分析，内容已省略]`;
+    }
+    const content = m.content.length > 400 ? m.content.slice(0, 400) + "…" : m.content;
+    return `${label}: ${content}`;
+  });
+  if (!lines.length) return "";
+  return [
+    "## 近期对话上下文（仅供参考）",
+    "⚠️ 如历史中出现文件路径，那是以前的文件，与当前任务无关。",
+    lines.join("\n"),
+  ].join("\n");
+}
+
 // ─── Structured persona builder ──────────────────────────────────────────────
 
 function buildStructuredPersona(
@@ -271,17 +301,48 @@ function isMentioned(ctx: Context, botUsername: string): boolean {
 // ─── Markdown to Telegram HTML conversion ─────────────────────────────────────
 
 function markdownToTelegramHtml(text: string): string {
+  // Phase 1: stash code blocks and inline code before HTML-escaping plain text,
+  // so their content is escaped once and the tags themselves aren't double-escaped.
+  const blocks: string[] = [];
+  const inlines: string[] = [];
+
   let result = text;
-  // Code blocks: ```...``` → <pre>...</pre>
-  result = result.replace(/```(\w+)?\n([\s\S]*?)```/g, (_m, _lang, code) => `<pre>${escapeHtml(code.trimEnd())}</pre>`);
-  // Inline code: `...` → <code>...</code>
-  result = result.replace(/`([^`]+)`/g, (_m, code) => `<code>${escapeHtml(code)}</code>`);
-  // Bold: **...** → <b>...</b>
-  result = result.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
-  // Italic: *...* → <i>...</i>
+
+  result = result.replace(/```(\w+)?\n?([\s\S]*?)```/gs, (_m, _lang, code) => {
+    const idx = blocks.length;
+    blocks.push(`<pre>${escapeHtml(code.trimEnd())}</pre>`);
+    return `\x02B${idx}\x03`;
+  });
+
+  result = result.replace(/`([^`\n]+)`/g, (_m, code) => {
+    const idx = inlines.length;
+    inlines.push(`<code>${escapeHtml(code)}</code>`);
+    return `\x02I${idx}\x03`;
+  });
+
+  // Phase 2: escape remaining plain text so raw < > & don't break parse_mode HTML.
+  result = escapeHtml(result);
+
+  // Phase 3: apply Markdown → Telegram HTML conversions on now-safe text.
+  // Headings → bold (Telegram has no heading tags)
+  result = result.replace(/^#{1,2} (.+)$/gm, "<b>$1</b>");
+  result = result.replace(/^### (.+)$/gm, "<b>$1</b>");
+  // Bold
+  result = result.replace(/\*\*(.+?)\*\*/gs, "<b>$1</b>");
+  // Italic (avoid matching bold **)
   result = result.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<i>$1</i>");
-  // Links: [text](url) → <a href="url">text</a>
+  result = result.replace(/(?<!_)_(?!_)([^_\n]+?)(?<!_)_(?!_)/g, "<i>$1</i>");
+  // Strikethrough
+  result = result.replace(/~~(.+?)~~/g, "<s>$1</s>");
+  // Links
   result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  // Horizontal rule → Unicode line
+  result = result.replace(/^---+$/gm, "──────────────");
+
+  // Phase 4: restore stashed code blocks and inline code.
+  result = result.replace(/\x02B(\d+)\x03/g, (_m, i) => blocks[parseInt(i)]);
+  result = result.replace(/\x02I(\d+)\x03/g, (_m, i) => inlines[parseInt(i)]);
+
   return result;
 }
 
@@ -520,6 +581,8 @@ function buildQueryEnv(): Record<string, string | undefined> {
 async function downloadTelegramFile(
   bot: Bot,
   fileId: string,
+  proxyUrl?: string,
+  originalName?: string,
 ): Promise<string | null> {
   try {
     const file = await bot.api.getFile(fileId);
@@ -527,16 +590,34 @@ async function downloadTelegramFile(
 
     const token = bot.token;
     const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-    const resp = await fetch(url);
+
+    let resp: Response;
+    if (proxyUrl) {
+      const undici = await import("undici");
+      const dispatcher = new undici.ProxyAgent(proxyUrl);
+      resp = await undici.fetch(url, { dispatcher }) as unknown as Response;
+    } else {
+      resp = await fetch(url);
+    }
     if (!resp.ok) return null;
 
     const buffer = Buffer.from(await resp.arrayBuffer());
-    const ext = file.file_path.split(".").pop() ?? "bin";
 
     const os = await import("os");
     const path = await import("path");
     const fs = await import("fs");
-    const tmpPath = path.join(os.tmpdir(), `vk-tg-${Date.now()}.${ext}`);
+
+    // Prefer original filename to preserve context; fall back to Telegram's ext
+    let fileName: string;
+    if (originalName) {
+      const safeName = originalName.replace(/[^\w.\-\u4e00-\u9fff]/g, "_");
+      fileName = `vk-tg-${Date.now()}-${safeName}`;
+    } else {
+      const ext = file.file_path.split(".").pop() ?? "bin";
+      fileName = `vk-tg-${Date.now()}.${ext}`;
+    }
+
+    const tmpPath = path.join(os.tmpdir(), fileName);
     fs.writeFileSync(tmpPath, buffer);
     console.log(`[Telegram] File saved: ${tmpPath} (${(buffer.length / 1024).toFixed(1)}KB)`);
     return tmpPath;
@@ -558,6 +639,7 @@ class TelegramConnection {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private effectiveProxyUrl: string | undefined = undefined;
 
   constructor(opts: TelegramBotOptions) {
     this.opts = opts;
@@ -577,6 +659,8 @@ class TelegramConnection {
         || process.env.http_proxy || process.env.HTTP_PROXY
         || process.env.all_proxy || process.env.ALL_PROXY
         || undefined;
+
+      this.effectiveProxyUrl = proxyUrl;
 
       let proxyDispatcher: import("undici").Dispatcher | undefined;
       if (proxyUrl) {
@@ -928,11 +1012,11 @@ class TelegramConnection {
       // Skill command detection: /skillname [args]
       const skillContext = this.resolveSkillCommand(cmdText);
 
-      // Append file paths
+      // Append file paths with explicit read instruction
       let fullText = skillContext?.userText ?? extracted.text;
       if (extracted.filePaths?.length) {
         const pathsNote = extracted.filePaths.map((p: string) => `文件路径: ${p}`).join("\n");
-        fullText = `${fullText}\n\n${pathsNote}`;
+        fullText = `${fullText}\n\n${pathsNote}\n⚠️ 这是一个新文件，请直接读取上述路径的文件内容，不要参考任何历史对话中出现过的文件内容。`;
       }
 
       console.log(`[Telegram] Message from ${msg.from?.username ?? msg.from?.id}: ${fullText.slice(0, 100)}`);
@@ -944,9 +1028,10 @@ class TelegramConnection {
       await ctx.replyWithChatAction("typing").catch(() => {});
 
       // Generate and deliver reply
+      const hasFiles = (extracted.filePaths?.length ?? 0) > 0;
       let ok = false;
       try {
-        await this.generateAndDeliver(ctx, fullText, chatId, skillContext?.skillContent);
+        await this.generateAndDeliver(ctx, fullText, chatId, skillContext?.skillContent, hasFiles);
         ok = true;
       } finally {
         await this.setReaction(chatId, userMsgId, ok ? "👍" : "😢");
@@ -975,7 +1060,7 @@ class TelegramConnection {
     // Photo
     if (msg.photo && msg.photo.length > 0) {
       const photo = msg.photo[msg.photo.length - 1];
-      const tmpPath = this.bot ? await downloadTelegramFile(this.bot, photo.file_id) : null;
+      const tmpPath = this.bot ? await downloadTelegramFile(this.bot, photo.file_id, this.effectiveProxyUrl) : null;
       const caption = msg.caption ?? "";
       if (tmpPath) {
         return { text: caption || "用户发来了一张图片", filePaths: [tmpPath] };
@@ -987,7 +1072,7 @@ class TelegramConnection {
     if (msg.voice || msg.audio) {
       const fileId = msg.voice?.file_id ?? msg.audio?.file_id;
       if (fileId && this.bot) {
-        const tmpPath = await downloadTelegramFile(this.bot, fileId);
+        const tmpPath = await downloadTelegramFile(this.bot, fileId, this.effectiveProxyUrl);
         if (tmpPath) {
           return { text: "用户发来了一条语音消息", filePaths: [tmpPath] };
         }
@@ -999,9 +1084,10 @@ class TelegramConnection {
     if (msg.document) {
       const fileName = msg.document.file_name ?? "未知文件";
       if (this.bot) {
-        const tmpPath = await downloadTelegramFile(this.bot, msg.document.file_id);
+        const tmpPath = await downloadTelegramFile(this.bot, msg.document.file_id, this.effectiveProxyUrl, fileName);
         if (tmpPath) {
-          return { text: msg.caption || `用户发来了一个文件：${fileName}`, filePaths: [tmpPath] };
+          const caption = msg.caption ? `${msg.caption}\n\n` : "";
+          return { text: `${caption}用户发来了一个文件：${fileName}`, filePaths: [tmpPath] };
         }
       }
       return { text: `[文件: ${fileName}]` };
@@ -1010,7 +1096,7 @@ class TelegramConnection {
     // Video
     if (msg.video) {
       if (this.bot) {
-        const tmpPath = await downloadTelegramFile(this.bot, msg.video.file_id);
+        const tmpPath = await downloadTelegramFile(this.bot, msg.video.file_id, this.effectiveProxyUrl);
         if (tmpPath) {
           return { text: msg.caption || "用户发来了一段视频", filePaths: [tmpPath] };
         }
@@ -1071,6 +1157,7 @@ class TelegramConnection {
     userText: string,
     chatId: string,
     skillContent?: string,
+    hasFiles?: boolean,
   ): Promise<void> {
     const historyKey = `${this.opts.assistantId}:${chatId}`;
     const history = getHistory(historyKey);
@@ -1100,7 +1187,13 @@ class TelegramConnection {
       ? `## 当前激活技能\n请严格按照以下技能说明执行用户请求：\n\n${skillContent}`
       : undefined;
 
-    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, skillSection);
+    // When starting a fresh session for file messages, inject recent history so
+    // Claude knows what was discussed before, even without a resumed session.
+    const historySection = (hasFiles && history.length > 1)
+      ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
+      : undefined;
+
+    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, skillSection, historySection);
 
     // Set thinking reaction
     await this.setReaction(chatId, ctx.message!.message_id, "🤔");
@@ -1111,7 +1204,7 @@ class TelegramConnection {
       if (provider === "codex") {
         result = await this.runCodexSession(system, history, userText, ctx);
       } else {
-        result = await this.runClaudeQuery(system, userText, ctx, chatId);
+        result = await this.runClaudeQuery(system, userText, ctx, chatId, hasFiles);
       }
     } catch (err) {
       console.error("[Telegram] AI error:", err);
@@ -1217,11 +1310,14 @@ class TelegramConnection {
     userText: string,
     ctx: Context,
     chatId: string,
+    hasFiles?: boolean,
   ): Promise<StreamResult> {
     const sessionKey = `${this.opts.assistantId}:${chatId}`;
     const sessionMcp = this.createSessionMcp(ctx);
     const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
-    const claudeSessionId = getBotClaudeSessionId(sessionKey);
+    // File messages must not resume previous session — the old session context
+    // may contain content from a previously read file, causing Claude to mix up files.
+    const claudeSessionId = hasFiles ? undefined : getBotClaudeSessionId(sessionKey);
     const claudeCodePath = getClaudeCodePath();
 
     const typingInterval = setInterval(() => {

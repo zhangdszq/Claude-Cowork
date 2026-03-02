@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientEvent } from "../types";
 
-const COLLAPSED_HEIGHT = 140;
-const EXPANDED_HEIGHT = 392;
+const COLLAPSED_HEIGHT = 152;
+const EXPANDED_HEIGHT = 404;
 
 export function QuickWindow() {
   const [prompt, setPrompt] = useState("");
@@ -239,11 +239,19 @@ export function QuickWindow() {
         style={{
           background: "#FAFAF8",
           border: "1px solid rgba(0,0,0,0.08)",
-          boxShadow: "0 4px 24px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.08)",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.03), 0 8px 32px rgba(0,0,0,0.04), 0 24px 64px rgba(0,0,0,0.03)",
           // @ts-ignore
           WebkitAppRegion: "drag",
         }}
       >
+      {/* Drag handle */}
+      <div
+        className="flex items-center justify-center h-[12px] w-full flex-shrink-0 cursor-grab active:cursor-grabbing"
+        style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
+      >
+        <div className="w-7 h-[3px] rounded-full bg-ink-900/10" />
+      </div>
+
       {/* Input row */}
       <div className="flex items-center gap-3 px-4 pt-3.5 pb-2.5" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
         <div

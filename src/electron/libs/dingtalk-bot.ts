@@ -21,7 +21,7 @@ import { networkInterfaces, homedir } from "os";
 import { randomUUID } from "crypto";
 import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
-import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
+import { buildSmartMemoryContext, recordConversation, getRecentConversationBlocks } from "./memory-store.js";
 import { getEnhancedEnv, getClaudeCodePath } from "./util.js";
 import { getSettingSources } from "./claude-settings.js";
 import type { SessionStore } from "./session-store.js";
@@ -346,6 +346,7 @@ async function downloadMediaToTempFile(
   appSecret: string,
   robotCode: string,
   downloadCode: string,
+  originalName?: string,
 ): Promise<string | null> {
   try {
     const token = await getAccessToken(appKey, appSecret);
@@ -380,15 +381,24 @@ async function downloadMediaToTempFile(
     }
 
     const buffer = Buffer.from(await fileResp.arrayBuffer());
-    const contentType = fileResp.headers.get("content-type") ?? "image/jpeg";
-    const ext = contentType.split(";")[0].trim().split("/")[1]?.replace("jpeg", "jpg") ?? "jpg";
 
     const os = await import("os");
     const path = await import("path");
     const fs = await import("fs");
-    const tmpPath = path.join(os.tmpdir(), `vk-dingtalk-img-${Date.now()}.${ext}`);
+
+    let fileName: string;
+    if (originalName) {
+      const safeName = originalName.replace(/[^\w.\-\u4e00-\u9fff]/g, "_");
+      fileName = `vk-dt-${Date.now()}-${safeName}`;
+    } else {
+      const contentType = fileResp.headers.get("content-type") ?? "image/jpeg";
+      const ext = contentType.split(";")[0].trim().split("/")[1]?.replace("jpeg", "jpg") ?? "jpg";
+      fileName = `vk-dt-${Date.now()}.${ext}`;
+    }
+
+    const tmpPath = path.join(os.tmpdir(), fileName);
     fs.writeFileSync(tmpPath, buffer);
-    console.log(`[DingTalk] Image saved to temp file: ${tmpPath} (${(buffer.length / 1024).toFixed(1)}KB)`);
+    console.log(`[DingTalk] File saved to temp file: ${tmpPath} (${(buffer.length / 1024).toFixed(1)}KB)`);
     return tmpPath;
   } catch (err) {
     console.error(`[DingTalk] Image download exception:`, err);
@@ -397,6 +407,37 @@ async function downloadMediaToTempFile(
 }
 
 // ─── Structured persona builder ──────────────────────────────────────────────
+
+// Regex to detect absolute file paths that indicate file-analysis assistant replies.
+const FILE_PATH_RE = /\/(?:tmp|var\/folders|private\/var|home|Users)\/\S+\.\w{2,6}/i;
+
+function buildHistoryContext(
+  history: { role: string; content: string }[],
+  assistantId?: string,
+): string {
+  // Primary: parse today's daily log for full Q&A pairs (persists across restarts).
+  if (assistantId) {
+    const fromLog = getRecentConversationBlocks(assistantId, 4);
+    if (fromLog) return fromLog;
+  }
+
+  // Fallback: in-memory history — include both roles, filter file-analysis replies.
+  if (!history.length) return "";
+  const lines = history.slice(-8).map((m) => {
+    const label = m.role === "user" ? "用户" : "助手";
+    if (m.role === "assistant" && FILE_PATH_RE.test(m.content)) {
+      return `${label}: [对某文件进行了分析，内容已省略]`;
+    }
+    const content = m.content.length > 400 ? m.content.slice(0, 400) + "…" : m.content;
+    return `${label}: ${content}`;
+  });
+  if (!lines.length) return "";
+  return [
+    "## 近期对话上下文（仅供参考）",
+    "⚠️ 如历史中出现文件路径，那是以前的文件，与当前任务无关。",
+    lines.join("\n"),
+  ].join("\n");
+}
 
 function buildStructuredPersona(
   opts: DingtalkBotOptions,
@@ -626,7 +667,10 @@ async function extractContent(
 
   if (msg.msgtype === "file") {
     const fileName = msg.content?.fileName ?? "未知文件";
-    const tmpPath = await tryDownload(msg.content?.downloadCode, `file(${fileName})`);
+    const dc = msg.content?.downloadCode;
+    const tmpPath = dc && rc
+      ? await downloadMediaToTempFile(opts.appKey, opts.appSecret, rc, dc, fileName)
+      : null;
     if (tmpPath) {
       return { text: `用户发来了一个文件：${fileName}`, filePaths: [tmpPath] };
     }
@@ -1498,7 +1542,7 @@ class DingtalkConnection {
     // Append file paths to the text so Agent SDK can read/view them
     if (extracted.filePaths && extracted.filePaths.length > 0) {
       const pathsNote = extracted.filePaths.map((p: string) => `文件路径: ${p}`).join("\n");
-      extracted = { ...extracted, text: `${extracted.text}\n\n${pathsNote}` };
+      extracted = { ...extracted, text: `${extracted.text}\n\n${pathsNote}\n⚠️ 这是一个新文件，请直接读取上述路径的文件内容，不要参考任何历史对话中出现过的文件内容。` };
     }
 
     console.log(`[DingTalk] Message (${msg.msgtype}): ${extracted.text.slice(0, 100)}`);
@@ -1528,8 +1572,9 @@ class DingtalkConnection {
     console.log(
       `[DingTalk][${this.opts.assistantName}] Processing (rcv=${this.inboundStats.received} proc=${this.inboundStats.processed} skip=${this.inboundStats.skipped})`,
     );
+    const hasFiles = (extracted.filePaths?.length ?? 0) > 0;
     try {
-      await this.generateAndDeliver(msg, extracted.text);
+      await this.generateAndDeliver(msg, extracted.text, hasFiles);
     } catch (err) {
       console.error("[DingTalk] Reply generation error:", err);
       if (!msg.sessionWebhookExpiredTime || Date.now() <= msg.sessionWebhookExpiredTime) {
@@ -1560,6 +1605,7 @@ class DingtalkConnection {
   private async generateAndDeliver(
     msg: DingtalkMessage,
     userText: string,
+    hasFiles?: boolean,
   ): Promise<void> {
     const history = getHistory(this.opts.assistantId);
     const provider = this.opts.provider ?? "claude";
@@ -1584,7 +1630,13 @@ class DingtalkConnection {
     const nowStr = new Date(msgNow).toLocaleString("zh-CN", { timeZone: tz, hour12: false });
     const currentTimeContext = `## 当前时间\n消息发送时间：${nowStr}（时区：${tz}）\n创建定时任务时，若需要相对时间（如"X分钟后"），请使用 delay_minutes 参数，服务器会自动计算。`;
 
-    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext);
+    // When starting a fresh session for file messages, inject recent history so
+    // Claude knows what was discussed before, even without a resumed session.
+    const historySection = (hasFiles && history.length > 1)
+      ? buildHistoryContext(history.slice(0, -1), this.opts.assistantId)
+      : undefined;
+
+    const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, historySection);
 
     let replyText: string;
 
@@ -1598,7 +1650,7 @@ class DingtalkConnection {
         replyText = cardResult;
       } else {
         // Agent SDK query() path — shared MCP (tools) + per-session MCP (send_message/send_file)
-        replyText = await this.runClaudeQuery(system, userText, msg);
+        replyText = await this.runClaudeQuery(system, userText, msg, hasFiles);
       }
     }
 
@@ -1615,10 +1667,13 @@ class DingtalkConnection {
     system: string,
     userText: string,
     msg: DingtalkMessage,
+    hasFiles?: boolean,
   ): Promise<string> {
     const sessionMcp = this.createSessionMcp(msg);
     const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
-    const claudeSessionId = getBotClaudeSessionId(this.opts.assistantId);
+    // File messages must not resume previous session — the old session context
+    // may contain content from a previously read file, causing Claude to mix up files.
+    const claudeSessionId = hasFiles ? undefined : getBotClaudeSessionId(this.opts.assistantId);
     const claudeCodePath = getClaudeCodePath();
 
     let finalText = "";

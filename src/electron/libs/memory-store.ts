@@ -927,3 +927,29 @@ export function buildSmartMemoryContext(prompt: string, assistantId?: string, se
 export function buildMemoryContext(): string {
   return buildSmartMemoryContext("");
 }
+
+/**
+ * Parse today's assistant daily log and return the last `n` conversation blocks
+ * (each block starts with `## HH:MM:SS`). Returns a formatted string ready to
+ * be injected as a system-prompt section, or an empty string when unavailable.
+ */
+export function getRecentConversationBlocks(assistantId: string, n = 4): string {
+  try {
+    const scoped = new ScopedMemory(assistantId);
+    const raw = scoped.readDaily(localDateStr()).trim();
+    if (!raw) return "";
+
+    // Split on lines that start a new time-stamped block
+    const blocks = raw.split(/\n(?=## \d{2}:\d{2}(:\d{2})?)/).filter((b) => b.trim());
+    const recent = blocks.slice(-n);
+    if (!recent.length) return "";
+
+    return [
+      "## 近期对话记录（来自今日日志）",
+      "⚠️ 以下是之前的对话，仅供了解背景。如有提及文件内容，均属过去任务，请勿参考历史文件内容。",
+      recent.join("\n").trim(),
+    ].join("\n");
+  } catch {
+    return "";
+  }
+}

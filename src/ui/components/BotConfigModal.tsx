@@ -9,6 +9,12 @@ interface BotConfigModalProps {
   provider?: "claude" | "codex";
   model?: string;
   defaultCwd?: string;
+  persona?: string;
+  coreValues?: string;
+  relationship?: string;
+  cognitiveStyle?: string;
+  operatingGuidelines?: string;
+  userContext?: string;
   initialBots: Partial<Record<BotPlatformType, BotPlatformConfig>>;
   onSave: (bots: Partial<Record<BotPlatformType, BotPlatformConfig>>) => void;
 }
@@ -266,6 +272,12 @@ export function BotConfigModal({
   provider,
   model,
   defaultCwd,
+  persona,
+  coreValues,
+  relationship,
+  cognitiveStyle,
+  operatingGuidelines,
+  userContext,
   initialBots,
   onSave,
 }: BotConfigModalProps & { assistantId: string }) {
@@ -433,6 +445,12 @@ export function BotConfigModal({
             provider,
             model,
             defaultCwd,
+            persona,
+            coreValues,
+            relationship,
+            cognitiveStyle,
+            operatingGuidelines,
+            userContext,
             dmPolicy: tg.dmPolicy,
             groupPolicy: tg.groupPolicy,
             allowFrom: tg.allowFrom
@@ -482,6 +500,12 @@ export function BotConfigModal({
             provider,
             model,
             defaultCwd,
+            persona,
+            coreValues,
+            relationship,
+            cognitiveStyle,
+            operatingGuidelines,
+            userContext,
             messageType: dt.messageType,
             cardTemplateId: dt.cardTemplateId || undefined,
             cardTemplateKey: dt.cardTemplateKey || undefined,
@@ -532,6 +556,12 @@ export function BotConfigModal({
             provider,
             model,
             defaultCwd,
+            persona,
+            coreValues,
+            relationship,
+            cognitiveStyle,
+            operatingGuidelines,
+            userContext,
           });
           if (result.status === "error") {
             setTestResult({ success: false, message: result.detail ?? "连接失败" });

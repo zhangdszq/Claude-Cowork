@@ -1,6 +1,7 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, protocol, globalShortcut, screen } from "electron"
+import { app, BrowserWindow, ipcMain, dialog, shell, protocol, globalShortcut, screen, Tray, Menu, nativeImage } from "electron"
+import fs from "fs"
 import { ipcMainHandle, isDev, DEV_PORT } from "./util.js";
-import { getPreloadPath, getUIPath, getIconPath } from "./pathResolver.js";
+import { getPreloadPath, getUIPath, getIconPath, getTrayIconPath } from "./pathResolver.js";
 import { getStaticData, pollResources } from "./test.js";
 import { handleClientEvent, sessions } from "./ipc-handlers.js";
 // Inject the shared SessionStore into bot modules so they use the same DB connection
@@ -302,6 +303,28 @@ app.on("ready", async () => {
 
     let mainWindow = createMainWindow();
 
+    // ─── System tray ─────────────────────────────────────────────────
+    // 88x44px @2x = 44x22pt on Retina; not template — preserves white pill background
+    const trayIcon = nativeImage.createFromBuffer(
+        fs.readFileSync(getTrayIconPath()),
+        { scaleFactor: 2.0 }
+    );
+    const tray = new Tray(trayIcon);
+    tray.setToolTip("VK Cowork");
+    tray.on("click", () => {
+        if (mainWindow.isDestroyed()) {
+            mainWindow = createMainWindow();
+        }
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        if (!mainWindow.isVisible()) mainWindow.show();
+        mainWindow.focus();
+    });
+    tray.setContextMenu(Menu.buildFromTemplate([
+        { label: "打开主窗口", click: () => tray.emit("click") },
+        { type: "separator" },
+        { label: "退出", click: () => app.quit() },
+    ]));
+
     // ─── Window controls (for custom frameless title bar on Windows) ─
     ipcMain.on("window-minimize", () => mainWindow?.minimize());
     ipcMain.on("window-maximize", () => {
@@ -326,7 +349,7 @@ app.on("ready", async () => {
         const display = screen.getDisplayNearestPoint(cursor);
         const { width: screenW } = display.workAreaSize;
         const winWidth = 640;
-        const winHeight = 140;
+        const winHeight = 152;
         const x = display.workArea.x + Math.round((screenW - winWidth) / 2);
         const y = display.workArea.y + Math.round(display.workAreaSize.height * 0.28);
 
@@ -373,6 +396,16 @@ app.on("ready", async () => {
         });
     }
 
+    function getQuickWindowPosition(): { x: number; y: number } {
+        const cursor = screen.getCursorScreenPoint();
+        const display = screen.getDisplayNearestPoint(cursor);
+        const { width: screenW } = display.workAreaSize;
+        const winWidth = 640;
+        const x = display.workArea.x + Math.round((screenW - winWidth) / 2);
+        const y = display.workArea.y + Math.round(display.workAreaSize.height * 0.28);
+        return { x, y };
+    }
+
     function toggleQuickWindow() {
         if (!quickWindow || quickWindow.isDestroyed()) {
             createQuickWindow();
@@ -380,12 +413,21 @@ app.on("ready", async () => {
         if (quickWindow!.isVisible()) {
             quickWindow!.hide();
         } else {
-            // Always reset to collapsed height before showing
-            const b = quickWindow!.getBounds();
-            quickWindow!.setBounds({ x: b.x, y: b.y, width: b.width, height: 140 });
+            // Reposition to current display on every show
+            const { x, y } = getQuickWindowPosition();
+            quickWindow!.setBounds({ x, y, width: 640, height: 152 });
+            // true → show → focus, then lock to current Space after a frame.
+            // Must be async: macOS needs at least one runloop pass to actually
+            // move the window into the active Space before we restrict it.
+            quickWindow!.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
             quickWindow!.show();
             quickWindow!.focus();
             quickWindow!.webContents.send("quick-window-show");
+            setTimeout(() => {
+                if (quickWindow && !quickWindow.isDestroyed()) {
+                    quickWindow.setVisibleOnAllWorkspaces(false, { visibleOnFullScreen: true });
+                }
+            }, 100);
         }
     }
 

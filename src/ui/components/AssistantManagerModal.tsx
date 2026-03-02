@@ -122,6 +122,8 @@ export function AssistantManagerModal({
   const [generatingTags, setGeneratingTags] = useState(false);
   const [newTagInput, setNewTagInput] = useState("");
 
+  const [globalUserContext, setGlobalUserContext] = useState<string | undefined>(undefined);
+
   const loadData = useCallback(async () => {
     try {
       const [config, claudeConfig] = await Promise.all([
@@ -130,6 +132,7 @@ export function AssistantManagerModal({
       ]);
       setAssistants(config.assistants ?? []);
       setAvailableSkills(claudeConfig.skills ?? []);
+      setGlobalUserContext(config.userContext);
     } catch (err) {
       console.error("Failed to load assistants config:", err);
     }
@@ -919,6 +922,12 @@ export function AssistantManagerModal({
         provider={botTargetAssistant.provider}
         model={botTargetAssistant.model}
         defaultCwd={botTargetAssistant.defaultCwd}
+        persona={botTargetAssistant.persona}
+        coreValues={botTargetAssistant.coreValues}
+        relationship={botTargetAssistant.relationship}
+        cognitiveStyle={botTargetAssistant.cognitiveStyle}
+        operatingGuidelines={botTargetAssistant.operatingGuidelines}
+        userContext={globalUserContext}
         initialBots={(botTargetAssistant.bots ?? {}) as Partial<Record<BotPlatformType, BotPlatformConfig>>}
         onSave={async (bots) => {
           const updated: AssistantConfig = { ...botTargetAssistant, bots: bots as any };

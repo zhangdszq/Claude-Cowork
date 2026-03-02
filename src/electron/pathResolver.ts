@@ -21,3 +21,11 @@ export function getIconPath() {
         '/app-icon.png'
     )
 }
+
+export function getTrayIconPath() {
+    return path.join(
+        app.getAppPath(),
+        isDev() ? './' : '../',
+        '/trayIconTemplate.png'
+    )
+}

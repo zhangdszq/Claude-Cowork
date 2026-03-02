@@ -42,6 +42,8 @@ export interface UserSettings {
   // Google OAuth
   googleTokens?: GoogleTokens;
   googleUser?: GoogleUser;
+  // Whether the splash screen has been seen (set true after first launch)
+  splashSeen?: boolean;
 }
 
 const SETTINGS_FILE = join(app.getPath("userData"), "user-settings.json");

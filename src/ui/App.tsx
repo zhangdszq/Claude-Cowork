@@ -23,7 +23,6 @@ import appIconUrl from "./assets/app-icon.png";
 import splash1 from "../../assets/splash-1.jpg";
 
 const ONBOARDING_COMPLETE_KEY = "vk-cowork-onboarding-complete";
-const SPLASH_SEEN_KEY = "vk-cowork-splash-seen";
 const ASSISTANT_CWDS_KEY = "vk-cowork-assistant-cwds";
 
 function ThinkingDots() {
@@ -317,10 +316,9 @@ function App() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isUserScrolledUpRef = useRef(false);
   
-  // Splash screen state — shown once per cold start (flag cleared in main.tsx on boot)
-  const [showSplash, setShowSplash] = useState(() => {
-    return !localStorage.getItem(SPLASH_SEEN_KEY);
-  });
+  // Splash screen state — null = loading, true = show, false = skip
+  // Persisted in user-settings.json so it only shows on the very first install
+  const [showSplash, setShowSplash] = useState<boolean | null>(null);
 
   // Onboarding state
   const [showOnboarding, setShowOnboarding] = useState(() => {
@@ -351,8 +349,10 @@ function App() {
   }, []);
 
   const handleSplashComplete = useCallback(() => {
-    localStorage.setItem(SPLASH_SEEN_KEY, "true");
     setShowSplash(false);
+    window.electron.getUserSettings().then((s) => {
+      window.electron.saveUserSettings({ ...s, splashSeen: true });
+    }).catch(console.error);
   }, []);
 
   // Google login gate — null = still checking, true = logged in, false = needs login
@@ -420,12 +420,15 @@ function App() {
   const setCwd = useAppStore((s) => s.setCwd);
   const showSystemInfo = useAppStore((s) => s.showSystemInfo);
 
-  // User display name from personalization settings
+  // User display name from personalization settings + splash seen check
   const [userName, setUserName] = useState("User");
   useEffect(() => {
     window.electron.getUserSettings().then((s) => {
       if (s.userName?.trim()) setUserName(s.userName.trim());
-    }).catch(() => {});
+      setShowSplash(!s.splashSeen);
+    }).catch(() => {
+      setShowSplash(false);
+    });
   }, []);
 
   // Assistants list for resolving assistant names
@@ -963,7 +966,12 @@ function App() {
     return <OnboardingWizard onComplete={handleOnboardingComplete} initialStep={onboardingInitialStep} />;
   }
 
-  // Show splash screen on first launch (after onboarding)
+  // Still loading splash state from user-settings.json
+  if (showSplash === null) {
+    return null;
+  }
+
+  // Show splash screen on first install only (splashSeen not set in user-settings.json)
   if (showSplash) {
     return <SplashScreen onComplete={handleSplashComplete} />;
   }
