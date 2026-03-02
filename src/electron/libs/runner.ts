@@ -5,7 +5,7 @@
 import { query, type SDKMessage, type PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { ServerEvent } from "../types.js";
 import type { Session } from "./session-store.js";
-import { claudeCodeEnv } from "./claude-settings.js";
+import { claudeCodeEnv, getSettingSources } from "./claude-settings.js";
 import { buildSmartMemoryContext } from "./memory-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
 import { app } from "electron";
@@ -136,7 +136,7 @@ export async function runClaude(options: RunnerOptions): Promise<RunnerHandle> {
           allowDangerouslySkipPermissions: true,
           maxTurns: 300,
           // Load user settings to enable skills from ~/.claude/skills/
-          settingSources: ["user", "project", "local"],
+          settingSources: getSettingSources(),
           mcpServers: { "vk-shared": createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd }) },
           canUseTool: async (toolName, input, { signal, toolUseID }) => {
             // For AskUserQuestion, we need to wait for user response

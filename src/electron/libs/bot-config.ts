@@ -131,11 +131,21 @@ export async function testBotConnection(
       if (!token) return { success: false, message: "Bot Token 不能为空" };
 
       const url = `https://api.telegram.org/bot${token}/getMe`;
-      const fetchOptions: RequestInit = {};
-      if (proxy) {
-        // Node.js native fetch doesn't support proxy, use env proxy or skip
+
+      const proxyUrl = proxy
+        || process.env.https_proxy || process.env.HTTPS_PROXY
+        || process.env.http_proxy || process.env.HTTP_PROXY
+        || process.env.all_proxy || process.env.ALL_PROXY
+        || undefined;
+
+      let resp: Response;
+      if (proxyUrl) {
+        const undici = await import("undici");
+        const dispatcher = new undici.ProxyAgent(proxyUrl);
+        resp = await undici.fetch(url, { dispatcher }) as unknown as Response;
+      } else {
+        resp = await fetch(url);
       }
-      const resp = await fetch(url, fetchOptions);
       const data = (await resp.json()) as { ok: boolean; result?: { username: string } };
       if (data.ok) {
         return { success: true, message: `连接成功：@${data.result?.username}` };

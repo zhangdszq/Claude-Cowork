@@ -142,12 +142,12 @@ export function Sidebar({
 
   return (
     <aside
-      className={`fixed left-0 bottom-0 flex flex-col border-r border-ink-900/5 bg-[#FAF9F6] pb-4 overflow-hidden ${titleBarHeight > 0 ? "pt-2" : "pt-8"}`}
+      className={`fixed left-0 bottom-0 flex flex-col border-r border-ink-900/5 bg-[#FAF9F6] pb-4 overflow-hidden ${titleBarHeight > 0 ? "pt-2" : "pt-12"}`}
       style={{ top: `${titleBarHeight}px`, width: `${effectiveWidth}px`, transition: "width 0.2s ease, top 0.15s ease" }}
     >
       {titleBarHeight === 0 && (
         <div
-          className="absolute top-0 left-0 right-0 h-8"
+          className="absolute top-0 left-0 right-0 h-12"
           style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
         />
       )}
@@ -265,7 +265,7 @@ export function Sidebar({
 
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2 gap-0.5 pt-1 pr-1">
             {filteredSessions.length === 0 && (
-              <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
                 <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-ink-900/5">
                   <svg viewBox="0 0 24 24" className="h-4 w-4 text-muted" fill="none" stroke="currentColor" strokeWidth="1.8">
                     <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2" />

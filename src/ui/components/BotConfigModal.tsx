@@ -451,6 +451,8 @@ export function BotConfigModal({
             setBots(nextBots);
             onSave(nextBots);
           }
+        } catch (err) {
+          setTestResult({ success: false, message: `连接异常: ${err instanceof Error ? err.message : String(err)}` });
         } finally {
           setConnecting(false);
         }

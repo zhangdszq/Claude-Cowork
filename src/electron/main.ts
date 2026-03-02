@@ -725,6 +725,7 @@ app.on("ready", async () => {
             return { status: getTelegramBotStatus(input.assistantId) as TelegramBotStatus };
         } catch (err) {
             const detail = err instanceof Error ? err.message : String(err);
+            console.error("[Telegram] startTelegramBot failed:", detail);
             return { status: "error" as TelegramBotStatus, detail };
         }
     });

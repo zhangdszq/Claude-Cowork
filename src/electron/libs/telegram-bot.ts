@@ -27,6 +27,7 @@ import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
 import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
 import { getEnhancedEnv, getClaudeCodePath } from "./util.js";
+import { getSettingSources } from "./claude-settings.js";
 import type { SessionStore } from "./session-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
 
@@ -63,6 +64,28 @@ interface ConvMessage {
   role: "user" | "assistant";
   content: string;
 }
+
+interface StreamResult {
+  text: string;
+  draftMessageId: number | null;
+}
+
+// ─── Streaming helpers ───────────────────────────────────────────────────────
+
+function extractPartialText(message: Record<string, unknown>): string | null {
+  const msg = message?.message as Record<string, unknown> | undefined;
+  if (!msg?.content || !Array.isArray(msg.content)) return null;
+  const texts = (msg.content as Array<{ type?: string; text?: string }>)
+    .filter((b) => b.type === "text" && b.text)
+    .map((b) => b.text!);
+  return texts.length > 0 ? texts.join("") : null;
+}
+
+const DRAFT_THROTTLE_MS = 1500;
+const DRAFT_SUFFIX = "\n\n⏳ ...";
+const HEARTBEAT_INTERVAL_MS = 60_000;
+const RECONNECT_BASE_MS = 2_000;
+const RECONNECT_MAX_MS = 30_000;
 
 // ─── Skill info loader ───────────────────────────────────────────────────────
 
@@ -528,6 +551,9 @@ class TelegramConnection {
   private stopped = false;
   private inflight = new Set<string>();
   private botUsername = "";
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts = 0;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: TelegramBotOptions) {
     this.opts = opts;
@@ -535,24 +561,69 @@ class TelegramConnection {
 
   async start(): Promise<void> {
     this.stopped = false;
+    this.clearTimers();
     this.status = "connecting";
     emitStatus(this.opts.assistantId, "connecting");
 
     try {
       const botConfig: ConstructorParameters<typeof Bot>[1] = {};
 
-      if (this.opts.proxy) {
-        const { HttpsProxyAgent } = await import("https-proxy-agent");
-        const agent = new HttpsProxyAgent(this.opts.proxy);
-        botConfig.client = {
-          baseFetchConfig: {
-            // @ts-expect-error - Node fetch supports agent via dispatcher
-            agent,
-          },
-        };
+      const proxyUrl = this.opts.proxy
+        || process.env.https_proxy || process.env.HTTPS_PROXY
+        || process.env.http_proxy || process.env.HTTP_PROXY
+        || process.env.all_proxy || process.env.ALL_PROXY
+        || undefined;
+
+      let proxyDispatcher: import("undici").Dispatcher | undefined;
+      if (proxyUrl) {
+        const undici = await import("undici");
+        proxyDispatcher = new undici.ProxyAgent(proxyUrl);
+        console.log(`[Telegram] Using proxy: ${proxyUrl}`);
       }
 
       this.bot = new Bot(this.opts.token, botConfig);
+
+      // Electron's built-in fetch ignores undici dispatcher, so we intercept
+      // all grammY API calls and route them through undici.fetch + ProxyAgent.
+      if (proxyDispatcher) {
+        const dispatcher = proxyDispatcher;
+        const undiciModule = await import("undici");
+        this.bot.api.config.use(async (_prev, method, payload, signal) => {
+          const url = `https://api.telegram.org/bot${this.bot!.token}/${method}`;
+          const body = payload !== undefined ? JSON.stringify(payload) : undefined;
+          if (method !== "getUpdates") {
+            console.log(`[Telegram] API call: ${method}`);
+          }
+          // Bridge AbortSignal: Electron's AbortSignal is incompatible with undici's,
+          // so create a fresh controller and wire up the abort event.
+          let fetchSignal: AbortSignal | undefined;
+          if (signal) {
+            if (signal.aborted) {
+              throw new DOMException("The operation was aborted.", "AbortError");
+            }
+            const ac = new AbortController();
+            signal.addEventListener("abort", () => ac.abort((signal as any).reason), { once: true });
+            fetchSignal = ac.signal;
+          }
+          try {
+            const resp = await undiciModule.fetch(url, {
+              method: "POST",
+              headers: body ? { "Content-Type": "application/json" } : undefined,
+              body,
+              dispatcher,
+              signal: fetchSignal,
+            });
+            const json = await resp.json() as any;
+            if (!json.ok && method !== "getUpdates") {
+              console.error(`[Telegram] API error ${method}:`, json.description);
+            }
+            return json;
+          } catch (err) {
+            console.error(`[Telegram] API fetch error ${method}:`, err instanceof Error ? err.message : err);
+            throw err;
+          }
+        });
+      }
 
       const me = await this.bot.api.getMe();
       this.botUsername = me.username ?? "";
@@ -563,6 +634,7 @@ class TelegramConnection {
 
       this.bot.start({
         onStart: () => {
+          this.reconnectAttempts = 0;
           this.status = "connected";
           emitStatus(this.opts.assistantId, "connected");
           console.log(`[Telegram] Connected: assistant=${this.opts.assistantId} bot=@${this.botUsername}`);
@@ -571,6 +643,7 @@ class TelegramConnection {
 
       this.status = "connected";
       emitStatus(this.opts.assistantId, "connected");
+      this.startHeartbeat();
     } catch (err) {
       this.status = "error";
       const detail = err instanceof Error ? err.message : String(err);
@@ -581,11 +654,57 @@ class TelegramConnection {
 
   stop(): void {
     this.stopped = true;
+    this.clearTimers();
     if (this.bot) {
       try { this.bot.stop(); } catch { /* ignore */ }
       this.bot = null;
     }
     this.status = "disconnected";
+  }
+
+  // ── Auto-reconnect ─────────────────────────────────────────────────────────
+
+  private clearTimers(): void {
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
+  }
+
+  private startHeartbeat(): void {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = setInterval(async () => {
+      if (this.stopped || !this.bot) return;
+      try {
+        await this.bot.api.getMe();
+      } catch (err) {
+        console.warn("[Telegram] Heartbeat failed:", err instanceof Error ? err.message : err);
+        if (!this.stopped) this.scheduleReconnect();
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private scheduleReconnect(): void {
+    if (this.stopped || this.reconnectTimer) return;
+    this.clearTimers();
+
+    const jitter = Math.random() * 0.25;
+    const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempts) * (1 + jitter), RECONNECT_MAX_MS);
+    this.reconnectAttempts++;
+
+    console.log(`[Telegram] Scheduling reconnect in ${Math.round(delay)}ms (attempt ${this.reconnectAttempts})`);
+    this.status = "connecting";
+    emitStatus(this.opts.assistantId, "connecting", `重连中 (${this.reconnectAttempts})...`);
+
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      if (this.stopped) return;
+      try {
+        if (this.bot) { try { this.bot.stop(); } catch { /* ignore */ } this.bot = null; }
+        await this.start();
+      } catch (err) {
+        console.error("[Telegram] Reconnect failed:", err instanceof Error ? err.message : err);
+        if (!this.stopped) this.scheduleReconnect();
+      }
+    }, delay);
   }
 
   async refreshCommands(): Promise<void> {
@@ -619,6 +738,24 @@ class TelegramConnection {
       console.log(`[Telegram] Commands registered: ${builtinCmds.length} builtin + ${skillCmds.length} skills`);
     } catch (err) {
       console.warn(`[Telegram] Failed to register commands:`, err);
+    }
+  }
+
+  // ── Status reactions ─────────────────────────────────────────────────────────
+
+  private async setReaction(chatId: number | string, messageId: number, emoji: string | null): Promise<void> {
+    if (!this.bot) return;
+    try {
+      if (emoji) {
+        await this.bot.api.setMessageReaction(
+          Number(chatId), messageId,
+          [{ type: "emoji", emoji: emoji as any }],  // eslint-disable-line @typescript-eslint/no-explicit-any
+        );
+      } else {
+        await this.bot.api.setMessageReaction(Number(chatId), messageId, []);
+      }
+    } catch {
+      // Silently ignore — reactions may not be supported in this chat
     }
   }
 
@@ -796,11 +933,20 @@ class TelegramConnection {
 
       console.log(`[Telegram] Message from ${msg.from?.username ?? msg.from?.id}: ${fullText.slice(0, 100)}`);
 
-      // Send typing indicator
+      const userMsgId = msg.message_id;
+
+      // Ack reaction + typing indicator
+      await this.setReaction(chatId, userMsgId, "👀");
       await ctx.replyWithChatAction("typing").catch(() => {});
 
       // Generate and deliver reply
-      await this.generateAndDeliver(ctx, fullText, chatId, skillContext?.skillContent);
+      let ok = false;
+      try {
+        await this.generateAndDeliver(ctx, fullText, chatId, skillContext?.skillContent);
+        ok = true;
+      } finally {
+        await this.setReaction(chatId, userMsgId, ok ? "👍" : "😢");
+      }
     } finally {
       this.inflight.delete(dedupKey);
     }
@@ -952,26 +1098,60 @@ class TelegramConnection {
 
     const system = buildStructuredPersona(this.opts, currentTimeContext, memoryContext, skillSection);
 
-    let replyText: string;
+    // Set thinking reaction
+    await this.setReaction(chatId, ctx.message!.message_id, "🤔");
+
+    let result: StreamResult;
 
     try {
       if (provider === "codex") {
-        replyText = await this.runCodexSession(system, history, userText);
+        result = await this.runCodexSession(system, history, userText, ctx);
       } else {
-        replyText = await this.runClaudeQuery(system, userText, ctx, chatId);
+        result = await this.runClaudeQuery(system, userText, ctx, chatId);
       }
     } catch (err) {
       console.error("[Telegram] AI error:", err);
-      replyText = "抱歉，处理您的消息时遇到了问题，请稍后再试。";
+      result = { text: "抱歉，处理您的消息时遇到了问题，请稍后再试。", draftMessageId: null };
     }
 
+    const replyText = result.text;
     history.push({ role: "assistant", content: replyText });
     this.persistReply(sessionId, replyText, userText);
-
     updateBotSessionTitle(sessionId, history, "[Telegram]").catch(() => {});
 
-    // Send reply in chunks
+    // Finalize: deliver the response
+    await this.finalizeResponse(ctx, chatId, replyText, result.draftMessageId);
+  }
+
+  /** Edit the draft or send chunked final response */
+  private async finalizeResponse(
+    ctx: Context,
+    chatId: string,
+    replyText: string,
+    draftMessageId: number | null,
+  ): Promise<void> {
     const chunks = chunkMessage(replyText);
+    const chatIdNum = Number(chatId);
+
+    if (draftMessageId && chunks.length === 1) {
+      // Single chunk — edit the streaming draft to its final version
+      const html = markdownToTelegramHtml(chunks[0]);
+      try {
+        await this.bot!.api.editMessageText(chatIdNum, draftMessageId, html, { parse_mode: "HTML" });
+        return;
+      } catch {
+        try {
+          await this.bot!.api.editMessageText(chatIdNum, draftMessageId, chunks[0]);
+          return;
+        } catch { /* fall through to chunked send */ }
+      }
+    }
+
+    // Delete the streaming draft — we'll send properly chunked messages
+    if (draftMessageId) {
+      await this.bot?.api.deleteMessage(chatIdNum, draftMessageId).catch(() => {});
+    }
+
     for (const chunk of chunks) {
       try {
         await ctx.reply(markdownToTelegramHtml(chunk), {
@@ -979,11 +1159,8 @@ class TelegramConnection {
           reply_to_message_id: ctx.message?.message_id,
         });
       } catch {
-        // Fallback: send as plain text if HTML parsing fails
         try {
-          await ctx.reply(chunk, {
-            reply_to_message_id: ctx.message?.message_id,
-          });
+          await ctx.reply(chunk, { reply_to_message_id: ctx.message?.message_id });
         } catch (err2) {
           console.error("[Telegram] Reply failed:", err2);
         }
@@ -991,25 +1168,67 @@ class TelegramConnection {
     }
   }
 
-  /** Claude query() path via Agent SDK with shared MCP + per-session MCP */
+  /** Send a new streaming draft or edit the existing one */
+  private async upsertDraft(
+    ctx: Context,
+    text: string,
+    draftMessageId: number | null,
+  ): Promise<number | null> {
+    const preview = text.length > TG_MESSAGE_LIMIT - 20
+      ? text.slice(0, TG_MESSAGE_LIMIT - 20) + DRAFT_SUFFIX
+      : text + DRAFT_SUFFIX;
+
+    if (!draftMessageId) {
+      try {
+        const sent = await ctx.reply(markdownToTelegramHtml(preview), {
+          parse_mode: "HTML",
+          reply_to_message_id: ctx.message?.message_id,
+        });
+        return sent.message_id;
+      } catch {
+        try {
+          const sent = await ctx.reply(preview, { reply_to_message_id: ctx.message?.message_id });
+          return sent.message_id;
+        } catch { return null; }
+      }
+    }
+
+    // Edit existing draft
+    const chatId = Number(ctx.chat!.id);
+    try {
+      await this.bot!.api.editMessageText(chatId, draftMessageId, markdownToTelegramHtml(preview), {
+        parse_mode: "HTML",
+      });
+    } catch {
+      try {
+        await this.bot!.api.editMessageText(chatId, draftMessageId, preview);
+      } catch { /* MESSAGE_NOT_MODIFIED or other — ignore */ }
+    }
+    return draftMessageId;
+  }
+
+  /** Claude query() path via Agent SDK with shared MCP + per-session MCP + streaming preview */
   private async runClaudeQuery(
     system: string,
     userText: string,
     ctx: Context,
     chatId: string,
-  ): Promise<string> {
+  ): Promise<StreamResult> {
     const sessionKey = `${this.opts.assistantId}:${chatId}`;
     const sessionMcp = this.createSessionMcp(ctx);
     const sharedMcp = createSharedMcpServer({ assistantId: this.opts.assistantId, sessionCwd: this.opts.defaultCwd });
     const claudeSessionId = getBotClaudeSessionId(sessionKey);
     const claudeCodePath = getClaudeCodePath();
 
-    // Keep sending typing indicators
     const typingInterval = setInterval(() => {
       ctx.replyWithChatAction("typing").catch(() => {});
     }, 4000);
 
     let finalText = "";
+    let accumulatedText = "";
+    let draftMessageId: number | null = null;
+    let lastEditTime = 0;
+
     try {
       const q = query({
         prompt: userText,
@@ -1022,23 +1241,38 @@ class TelegramConnection {
           includePartialMessages: true,
           allowDangerouslySkipPermissions: true,
           maxTurns: 300,
-          settingSources: ["user", "project", "local"],
+          settingSources: getSettingSources(),
           pathToClaudeCodeExecutable: claudeCodePath,
           env: buildQueryEnv(),
         },
       });
 
       for await (const message of q) {
-        if (message.type === "result" && message.subtype === "success") {
-          finalText = message.result;
-          setBotClaudeSessionId(sessionKey, message.session_id);
+        const msg = message as Record<string, unknown>;
+        if (msg.type === "result" && msg.subtype === "success") {
+          finalText = msg.result as string;
+          setBotClaudeSessionId(sessionKey, msg.session_id as string);
+          continue;
+        }
+
+        const partial = extractPartialText(msg);
+        if (partial && partial.length > accumulatedText.length) {
+          accumulatedText = partial;
+          const now = Date.now();
+          if (now - lastEditTime >= DRAFT_THROTTLE_MS) {
+            draftMessageId = await this.upsertDraft(ctx, accumulatedText, draftMessageId);
+            lastEditTime = now;
+          }
         }
       }
     } finally {
       clearInterval(typingInterval);
     }
 
-    return finalText || "抱歉，无法生成回复。";
+    return {
+      text: finalText || accumulatedText || "抱歉，无法生成回复。",
+      draftMessageId,
+    };
   }
 
   /** Per-session MCP server with send_message + send_file tools */
@@ -1075,12 +1309,13 @@ class TelegramConnection {
     return createSdkMcpServer({ name: "telegram-session", tools: [sendMessageTool, sendFileTool] });
   }
 
-  /** Codex provider session */
+  /** Codex provider session with streaming preview + typing indicator */
   private async runCodexSession(
     system: string,
     history: ConvMessage[],
     userText: string,
-  ): Promise<string> {
+    ctx: Context,
+  ): Promise<StreamResult> {
     const codexOpts: CodexOptions = {};
     const codexPath = getCodexBinaryPath();
     if (codexPath) codexOpts.codexPathOverride = codexPath;
@@ -1099,20 +1334,39 @@ class TelegramConnection {
       .join("\n");
     const fullPrompt = `${system}\n\n${historyLines}\n\nPlease reply to the latest user message above.`;
 
-    const thread = codex.startThread(threadOpts);
-    const { events } = await thread.runStreamed(fullPrompt, {});
+    const typingInterval = setInterval(() => {
+      ctx.replyWithChatAction("typing").catch(() => {});
+    }, 4000);
 
-    const textParts: string[] = [];
-    for await (const event of events) {
-      if (
-        event.type === "item.completed" &&
-        event.item.type === "agent_message" &&
-        event.item.text
-      ) {
-        textParts.push(event.item.text);
+    let draftMessageId: number | null = null;
+    let lastEditTime = 0;
+
+    try {
+      const thread = codex.startThread(threadOpts);
+      const { events } = await thread.runStreamed(fullPrompt, {});
+
+      const textParts: string[] = [];
+      for await (const event of events) {
+        if (
+          event.type === "item.completed" &&
+          event.item.type === "agent_message" &&
+          event.item.text
+        ) {
+          textParts.push(event.item.text);
+          const accumulated = textParts.join("").trim();
+          const now = Date.now();
+          if (now - lastEditTime >= DRAFT_THROTTLE_MS) {
+            draftMessageId = await this.upsertDraft(ctx, accumulated, draftMessageId);
+            lastEditTime = now;
+          }
+        }
       }
+
+      const text = textParts.join("").trim() || "抱歉，无法生成回复。";
+      return { text, draftMessageId };
+    } finally {
+      clearInterval(typingInterval);
     }
-    return textParts.join("").trim() || "抱歉，无法生成回复。";
   }
 
   /** Send a file to the current chat */

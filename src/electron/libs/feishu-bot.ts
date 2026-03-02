@@ -21,6 +21,7 @@ import { loadUserSettings } from "./user-settings.js";
 import { getCodexBinaryPath } from "./codex-runner.js";
 import { buildSmartMemoryContext, recordConversation } from "./memory-store.js";
 import { getEnhancedEnv, getClaudeCodePath } from "./util.js";
+import { getSettingSources } from "./claude-settings.js";
 import type { SessionStore } from "./session-store.js";
 import { createSharedMcpServer } from "./shared-mcp.js";
 
@@ -507,7 +508,7 @@ class FeishuConnection {
         includePartialMessages: true,
         allowDangerouslySkipPermissions: true,
         maxTurns: 300,
-        settingSources: ["user", "project", "local"],
+        settingSources: getSettingSources(),
         pathToClaudeCodeExecutable: claudeCodePath,
         env: buildQueryEnv(),
       },

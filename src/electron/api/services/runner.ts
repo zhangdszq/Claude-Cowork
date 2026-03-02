@@ -10,6 +10,7 @@ import {
 import type { Session } from '../types.js';
 import { recordMessage, updateSession, addPendingPermission } from './session.js';
 import { buildSmartMemoryContext } from '../../libs/memory-store.js';
+import { getSettingSources } from '../../libs/claude-settings.js';
 import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync } from 'fs';
@@ -215,7 +216,7 @@ export async function* runClaude(options: RunnerOptions): AsyncGenerator<ServerE
         includePartialMessages: true,
         allowDangerouslySkipPermissions: true,
         maxTurns: 300,
-        settingSources: ['user', 'project', 'local'],
+        settingSources: getSettingSources(),
         mcpServers: { 'vk-shared': createSharedMcpServer({ assistantId: session.assistantId, sessionCwd: session.cwd }) },
         canUseTool: async (toolName, input, { signal, toolUseID }) => {
           // For AskUserQuestion, we need to wait for user response
