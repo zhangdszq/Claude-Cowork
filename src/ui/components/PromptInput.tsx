@@ -739,81 +739,73 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
   }, [prompt]);
 
   const skillsDropdown = showSkills ? (
-    <div className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-ink-900/10 bg-surface shadow-elevated overflow-hidden z-50">
-      <div className="px-4 py-2.5 border-b border-ink-900/5 bg-surface-secondary/50">
-        <div className="flex items-center gap-2">
-          <svg viewBox="0 0 24 24" className="h-4 w-4 text-accent" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-          </svg>
-          <span className="text-sm font-medium text-ink-800">选择技能</span>
-          <span className="text-xs text-muted">输入 / 搜索技能</span>
-        </div>
-      </div>
+    <div className="absolute bottom-full left-0 right-0 mb-2 rounded-2xl border border-ink-900/[0.06] bg-surface/95 backdrop-blur-xl shadow-[0_8px_40px_-12px_rgba(0,0,0,0.15),0_0_0_1px_rgba(0,0,0,0.03)] overflow-hidden z-50">
       {filteredSkills.length === 0 ? (
-        <div className="px-4 py-8 text-center">
-          <svg viewBox="0 0 24 24" className="h-10 w-10 mx-auto text-muted-light" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-          </svg>
-          <p className="mt-2 text-sm text-muted">
-            {skills.length === 0 ? "暂无可用技能" : "没有找到匹配的技能"}
+        <div className="px-5 py-10 text-center">
+          <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-ink-900/[0.04] mb-3">
+            <svg viewBox="0 0 24 24" className="h-5 w-5 text-muted" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </div>
+          <p className="text-[13px] font-medium text-ink-600">
+            {skills.length === 0 ? "暂无可用技能" : "没有匹配的技能"}
           </p>
-          <p className="mt-1 text-xs text-muted-light">在 ~/.claude/skills/ 目录下添加技能</p>
+          <p className="mt-1 text-xs text-muted">输入关键词筛选，或按 Esc 取消</p>
         </div>
       ) : (
-        <div ref={skillListRef} className="max-h-72 overflow-y-auto py-1">
+        <div ref={skillListRef} className="max-h-[320px] overflow-y-auto overflow-x-hidden py-1.5 px-1.5">
           {filteredSkills.map((skill, index) => {
             const category = getSkillCategory(skill);
             const config = SKILL_CATEGORY_CONFIG[category] || SKILL_CATEGORY_CONFIG.other;
+            const isActive = index === selectedIndex;
             return (
               <button
                 key={skill.name}
-                className={`w-full px-4 py-3 text-left flex items-start gap-3 transition-colors ${
-                  index === selectedIndex ? "bg-accent/10" : "hover:bg-surface-secondary"
+                className={`group w-full px-3 py-2.5 text-left flex items-center gap-3 rounded-xl transition-all duration-150 ${
+                  isActive
+                    ? "bg-accent/[0.08] ring-1 ring-accent/20"
+                    : "hover:bg-ink-900/[0.04]"
                 }`}
                 onClick={() => handleSelectSkill(skill)}
                 onMouseEnter={() => setSelectedIndex(index)}
               >
-                <div className={`flex h-10 w-10 items-center justify-center rounded-xl flex-shrink-0 ${config.color}`}>
-                  <SkillIcon type={config.icon} className="h-5 w-5" />
+                <div className={`flex h-8 w-8 items-center justify-center rounded-[10px] flex-shrink-0 transition-colors ${
+                  isActive ? config.color.replace(/\/10/, "/15") : config.color
+                }`}>
+                  <SkillIcon type={config.icon} className="h-4 w-4" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className={`font-medium ${index === selectedIndex ? "text-accent" : "text-ink-800"}`}>
-                      {skill.name}
-                    </span>
-                    <span className="flex items-center gap-1 text-[10px] text-success">
-                      <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" fill="currentColor"><circle cx="12" cy="12" r="4" /></svg>
-                      已安装
-                    </span>
+                  <div className={`text-[13px] font-medium leading-tight truncate transition-colors ${
+                    isActive ? "text-accent" : "text-ink-800"
+                  }`}>
+                    {skill.name}
                   </div>
-                  <div className="text-xs text-muted mt-1 line-clamp-2">{skill.description || "暂无描述"}</div>
+                  {skill.description && (
+                    <div className="text-[11px] text-muted mt-0.5 truncate">{skill.description}</div>
+                  )}
+                </div>
+                <div className={`text-[10px] tabular-nums transition-opacity ${isActive ? "opacity-100 text-accent/60" : "opacity-0 group-hover:opacity-60 text-muted"}`}>
+                  /{skill.name.split("-")[0]}
                 </div>
               </button>
             );
           })}
         </div>
       )}
-      <div className="border-t border-ink-900/5 px-4 py-2 bg-surface-secondary/50">
-        <div className="flex items-center gap-4 text-xs text-muted">
-          <span className="flex items-center gap-1">
-            <kbd className="px-1.5 py-0.5 bg-surface rounded border border-ink-900/10 font-mono text-[10px]">↑↓</kbd>选择
-          </span>
-          <span className="flex items-center gap-1">
-            <kbd className="px-1.5 py-0.5 bg-surface rounded border border-ink-900/10 font-mono text-[10px]">Tab</kbd>确认
-          </span>
-          <span className="flex items-center gap-1">
-            <kbd className="px-1.5 py-0.5 bg-surface rounded border border-ink-900/10 font-mono text-[10px]">Esc</kbd>取消
-          </span>
-        </div>
+      <div className="border-t border-ink-900/[0.04] px-3.5 py-1.5 flex items-center gap-3 text-[11px] text-muted/70">
+        <span className="flex items-center gap-1"><kbd className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] bg-ink-900/[0.05] px-1 font-mono text-[10px] leading-none">↑↓</kbd>选择</span>
+        <span className="flex items-center gap-1"><kbd className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] bg-ink-900/[0.05] px-1 font-mono text-[10px] leading-none">Tab</kbd>确认</span>
+        <span className="flex items-center gap-1"><kbd className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] bg-ink-900/[0.05] px-1 font-mono text-[10px] leading-none">Esc</kbd>取消</span>
+        <span className="ml-auto text-muted/50">{filteredSkills.length} 项</span>
       </div>
     </div>
   ) : null;
 
   const toolbarSkillPickerDropdown = showToolbarSkillPicker ? (
-    <div ref={toolbarSkillPickerRef} className="absolute bottom-full left-0 mb-2 w-72 rounded-xl border border-ink-900/10 bg-surface shadow-elevated overflow-hidden z-50">
-      <div className="px-3 py-2.5 border-b border-ink-900/5 bg-surface-secondary/50">
-        <div className="flex items-center gap-2 rounded-lg bg-surface border border-ink-900/8 px-2.5 py-1.5">
-          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-muted flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+    <div ref={toolbarSkillPickerRef} className="absolute bottom-full left-0 mb-2 w-72 rounded-2xl border border-ink-900/[0.06] bg-surface/95 backdrop-blur-xl shadow-[0_8px_40px_-12px_rgba(0,0,0,0.15),0_0_0_1px_rgba(0,0,0,0.03)] overflow-hidden z-50">
+      <div className="px-2.5 pt-2.5 pb-2">
+        <div className="flex items-center gap-2 rounded-xl bg-ink-900/[0.04] px-2.5 py-2">
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-muted/60 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
           <input
@@ -844,24 +836,27 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
                 setToolbarSkillFilter("");
               }
             }}
-            className="flex-1 bg-transparent text-xs text-ink-800 placeholder:text-muted focus:outline-none"
+            className="flex-1 bg-transparent text-[13px] text-ink-800 placeholder:text-muted/50 focus:outline-none"
           />
         </div>
       </div>
       {toolbarFilteredSkills.length === 0 ? (
-        <div className="px-4 py-6 text-center">
-          <p className="text-sm text-muted">{skills.length === 0 ? "暂无可用技能" : "没有找到匹配的技能"}</p>
+        <div className="px-4 py-8 text-center">
+          <p className="text-[13px] text-muted">{skills.length === 0 ? "暂无可用技能" : "没有匹配的技能"}</p>
         </div>
       ) : (
-        <div ref={toolbarSkillListRef} className="max-h-56 overflow-y-auto py-1">
+        <div ref={toolbarSkillListRef} className="max-h-56 overflow-y-auto py-1 px-1.5">
           {toolbarFilteredSkills.map((skill, index) => {
             const category = getSkillCategory(skill);
             const config = SKILL_CATEGORY_CONFIG[category] || SKILL_CATEGORY_CONFIG.other;
+            const isActive = index === toolbarSkillSelectedIndex;
             return (
               <button
                 key={skill.name}
-                className={`w-full px-3 py-2.5 text-left flex items-center gap-2.5 transition-colors ${
-                  index === toolbarSkillSelectedIndex ? "bg-accent/10" : "hover:bg-surface-secondary"
+                className={`w-full px-2.5 py-2 text-left flex items-center gap-2.5 rounded-xl transition-all duration-150 ${
+                  isActive
+                    ? "bg-accent/[0.08] ring-1 ring-accent/20"
+                    : "hover:bg-ink-900/[0.04]"
                 }`}
                 onClick={() => {
                   handleSelectSkill(skill);
@@ -871,14 +866,16 @@ export function PromptInput({ sendEvent, sidebarWidth, rightPanelWidth = 0, onHe
                 }}
                 onMouseEnter={() => setToolbarSkillSelectedIndex(index)}
               >
-                <div className={`flex h-8 w-8 items-center justify-center rounded-lg flex-shrink-0 ${config.color}`}>
-                  <SkillIcon type={config.icon} className="h-4 w-4" />
+                <div className={`flex h-7 w-7 items-center justify-center rounded-lg flex-shrink-0 ${config.color}`}>
+                  <SkillIcon type={config.icon} className="h-3.5 w-3.5" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className={`text-xs font-medium truncate ${index === toolbarSkillSelectedIndex ? "text-accent" : "text-ink-800"}`}>
+                  <div className={`text-[12px] font-medium truncate transition-colors ${isActive ? "text-accent" : "text-ink-800"}`}>
                     {skill.name}
                   </div>
-                  <div className="text-[11px] text-muted truncate">{skill.description || "暂无描述"}</div>
+                  {skill.description && (
+                    <div className="text-[11px] text-muted mt-px truncate">{skill.description}</div>
+                  )}
                 </div>
               </button>
             );
